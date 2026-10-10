@@ -27,7 +27,7 @@ import {
 import { dmMono500, frauncesDisplay, frauncesItalic, schibsted400, schibsted600 } from '@/lib/brand/static-fonts'
 import { paper } from '@/lib/brand/tokens'
 import { anchorSvg, sunriseSvg } from '@/lib/brand/scene'
-import { KIND_BLOCKS, KINDS_CSS, LOCAL_IMG, renderKind, type KindBlock } from '@/lib/files/kinds'
+import { KIND_BLOCKS, KINDS_CSS, LOCAL_IMG, pageHero, renderKind, type KindBlock } from '@/lib/files/kinds'
 
 export type FileFormat = 'pdf' | 'docx' | 'html' | 'csv' | 'md'
 
@@ -472,7 +472,7 @@ th{background:var(--sand);color:var(--ink)}
 @media print{.band{display:none}.card{margin:0;box-shadow:none;width:100%;max-width:none}.card>*,.band svg{animation:none}.reply,.pa,.dl{display:none}}
 </style></head>
 <body>
-<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>
+${pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? `<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`}
 <main class="card">
 <div class="brand">${anchorSvg(BRAND.ink, 18)}<span>dinghy</span></div>
 <h1>${esc(doc.title)}</h1>
@@ -805,4 +805,4 @@ export async function renderFile(doc: DinghyDoc, format: FileFormat, html: HtmlO
                   ? Buffer.from(renderCsv(doc), 'utf8')
                   : Buffer.from(`# ${doc.title}\n\n${doc.subtitle ? `_${doc.subtitle}_\n\n` : ''}${doc.body.trim()}\n`, 'utf8')
     return { filename: `${base}.${format}`, mimeType: MIME[format], bytes }
-}
+                                }

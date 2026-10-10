@@ -2,8 +2,9 @@ import type { ReactElement } from 'react'
 import { ImageResponse } from 'next/og'
 import { MARK_PNG } from './card-art'
 import { dmMono500, frauncesDisplay, schibsted400, schibsted600 } from './static-fonts'
-import { cells, hue, num, skyIcon, skyOf } from '@/lib/files/kinds'
+import { cells, hue, num, routeSummary, skyIcon, skyOf } from '@/lib/files/kinds'
 import { splitBlocks } from '@/lib/files/render'
+export { routeSummary }
 
 /**
  * Phone-width preview cards for hosted pages, sent into the chat above the
@@ -235,20 +236,6 @@ function stayCard(segs: ReturnType<typeof splitBlocks>, photos: CardPhoto[]): { 
     return { el, h: H }
 }
 
-const mins = (t: string): number => {
-    const m = t.trim().match(/^(?:(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\s*)?(?:(\d+)\s*(?:m|min|mins|minute|minutes))?$/i)
-    if (!m || (!m[1] && !m[2])) return 0
-    return Math.round(Number(m[1] ?? 0) * 60) + Number(m[2] ?? 0)
-}
-
-export function routeSummary(lines: string[]): { legs: string[][]; eta: string; first: string[]; last: string[]; hidden: number } | null {
-    const all = lines.map(cells).filter((c) => c[0] && c[1])
-    if (!all.length) return null
-    const times = all.map((l) => mins(l[3] ?? ''))
-    const total = times.reduce((a, n) => a + n, 0)
-    const eta = times.every((n) => n > 0) ? (total >= 60 ? `${Math.floor(total / 60)} h ${total % 60 ? `${total % 60} min` : ''}`.trim() : `${total} min`) : `${all.length} ${all.length === 1 ? 'leg' : 'legs'}`
-    return { legs: all.slice(0, 4), eta, first: all[0], last: all[all.length - 1], hidden: Math.max(0, all.length - 4) }
-}
 
 function routeCard(lines: string[]): { el: ReactElement; h: number } | null {
     const summary = routeSummary(lines)

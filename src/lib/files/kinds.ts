@@ -219,6 +219,69 @@ function renderChecks(lines: string[]): string {
     return rows.length ? `<ul class="ck">${rows.join('')}</ul>` : ''
 }
 
+const mins = (t: string): number => {
+    const m = t.trim().match(/^(?:(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\s*)?(?:(\d+)\s*(?:m|min|mins|minute|minutes))?$/i)
+    if (!m || (!m[1] && !m[2])) return 0
+    return Math.round(Number(m[1] ?? 0) * 60) + Number(m[2] ?? 0)
+}
+
+export function routeSummary(lines: string[]): { legs: string[][]; eta: string; first: string[]; last: string[]; hidden: number } | null {
+    const all = lines.map(cells).filter((c) => c[0] && c[1])
+    if (!all.length) return null
+    const times = all.map((l) => mins(l[3] ?? ''))
+    const total = times.reduce((a, n) => a + n, 0)
+    const eta = times.every((n) => n > 0) ? (total >= 60 ? `${Math.floor(total / 60)} h ${total % 60 ? `${total % 60} min` : ''}`.trim() : `${total} min`) : `${all.length} ${all.length === 1 ? 'leg' : 'legs'}`
+    return { legs: all.slice(0, 4), eta, first: all[0], last: all[all.length - 1], hidden: Math.max(0, all.length - 4) }
+}
+
+type Seg = { name: string; lines: string[] }
+const hsl = (h: number, s: number, l: number) => `hsl(${h} ${s}% ${l}%)`
+const WX_SKY: Record<string, [string, string]> = {
+    clear: ['#2F6FC4', '#F2B56B'], part: ['#3F6AB5', '#9DB8DF'], cloud: ['#5E6B85', '#A3AEC2'], rain: ['#34476B', '#6D87AE'],
+    storm: ['#241F3D', '#5B4F86'], snow: ['#6F89B3', '#C9D8EC'], fog: ['#69758A', '#BCC5D2'],
+}
+
+/**
+ * The top band of a page, drawn from the answer: a stay photo (or its colour card), a route line with the
+ * total time, the two team colours with the score, or the sky with the temperature. Null means the page
+ * keeps the sunrise band. Decorative: the same numbers sit in the page below, so it is hidden from screen readers.
+ */
+export function pageHero(blocks: Seg[]): string | null {
+    const first = blocks.find((b) => ['stay', 'route', 'scores', 'weather'].includes(b.name))
+    if (!first) return null
+    const lead = blocks.find((b) => b.name === 'lead')
+    const leadPick = (lead?.lines.map(cells).find((c) => c[0]?.toLowerCase() === 'pick')?.[1] ?? '').toLowerCase()
+    if (first.name === 'weather') {
+        const [place, now, sky] = cells(first.lines[0] ?? '')
+        if (!place || !now) return null
+        const cls = skyOf(sky ?? '').cls
+        const [c1, c2] = WX_SKY[cls] ?? WX_SKY.part
+        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(160deg,${c1},${c2})"><div class="hero-in"><span class="hero-k">${esc(place)}</span><span class="hero-n">${esc(now)}</span><span class="hero-s">${esc(sky ?? '')}</span></div><span class="hero-ico">${skyIcon(cls, 150)}</span></div>`
+    }
+    if (first.name === 'scores') {
+        const g = first.lines.map(cells).find((c) => c[0] && c[2])
+        if (!g) return null
+        const [a, as, h, hs, status] = g
+        const played = num(as) !== null && num(hs) !== null
+        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(115deg,${hsl(hue(a), 45, 30)} 0 50%,${hsl(hue(h), 45, 30)} 50% 100%)"><div class="hero-in hero-mid">${played ? `<span class="hero-vs"><b>${esc(as)}</b><i>vs</i><b>${esc(hs)}</b></span>` : `<span class="hero-n hero-title">${esc(a)} vs ${esc(h)}</span>`}<span class="hero-s">${played ? `${esc(a)} · ${esc(h)}${status ? ` · ${esc(status)}` : ''}` : esc(status ?? '')}</span></div></div>`
+    }
+    if (first.name === 'route') {
+        const r = routeSummary(first.lines)
+        if (!r) return null
+        const path = 'M60 250C180 235 240 150 330 144S470 175 540 90 640 52 670 46'
+        const svg = `<svg viewBox="0 0 720 340" preserveAspectRatio="xMidYMid slice"><path d="${path}" stroke="rgba(240,138,104,.3)" stroke-width="16" fill="none" stroke-linecap="round"/><path d="${path}" stroke="#F08A68" stroke-width="5" fill="none" stroke-linecap="round" stroke-dasharray="1 13"/><circle cx="60" cy="250" r="12" fill="#fff"/><circle cx="60" cy="250" r="5" fill="#0E1A33"/><circle cx="670" cy="46" r="14" fill="#F08A68"/><circle cx="670" cy="46" r="5" fill="#fff"/></svg>`
+        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(160deg,#16305A,#0E1A33)">${svg}<div class="hero-in"><span class="hero-k">${esc([...new Set(r.legs.map((l) => l[2]).filter(Boolean))].join(' + ') || 'Route')}</span><span class="hero-n">${esc(r.eta)}</span></div></div>`
+    }
+    const rows = first.lines.map(cells).filter((c) => c[0])
+    const picked = rows.find((c) => leadPick && c[0].toLowerCase() === leadPick)
+    const row = picked ?? rows[0]
+    if (!row) return null
+    const [name, price, , , , photo] = row
+    const p = img(photo)
+    const bg = `linear-gradient(160deg,${hsl(hue(name), 40, 30)},${hsl((hue(name) + 40) % 360, 45, 50)})`
+    return `<div class="band hero hero-stay" style="background:${bg}">${p ? `<img src="${esc(p)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${picked ? 'Pick' : 'Stay'}</span><span class="hero-n${price ? '' : ' hero-title'}">${esc(price || name)}</span></div></div>`
+}
+
 export function renderKind(name: KindBlock, lines: string[]): string {
     switch (name) {
         case 'weather': return renderWeather(lines)
@@ -297,5 +360,16 @@ h4{margin:0;font:500 21px/1.2 Fraunces,Georgia,serif;letter-spacing:-.01em;color
 .ck-ok .ck-tag{background:#DDF1E4;color:#14532D}.ck-no .ck-tag{background:#FBE9D0;color:#7A3E00}
 .ck small{display:block;margin-top:2px;color:var(--mute);font-size:12px}
 @media (prefers-color-scheme:dark){.ck-ok .ck-tag{background:#17402A;color:#BFEBCF}.ck-no .ck-tag{background:#4A3210;color:#F5D7A1}}
-@media print{.ld,.ck{box-shadow:none;break-inside:avoid}.wx,.sc,.md,.st{box-shadow:none;break-inside:avoid}}
+/* page hero: reuses .band sizing; the card overlaps its bottom 72px, so text sits above that */
+.hero{color:#fff}.hero:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(8,15,30,.15),rgba(8,15,30,0) 40%,rgba(8,15,30,.45));pointer-events:none}
+.hero>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.hero>svg{position:absolute;inset:0;width:100%;height:100%}.hero-in{text-shadow:0 2px 18px rgba(8,15,30,.45)}
+.hero-in{position:absolute;z-index:2;left:max(24px,calc(50% - 360px + 24px));right:24px;bottom:96px;display:flex;flex-direction:column;gap:6px}
+.hero-k{font:500 12px/1 'DM Mono',monospace;letter-spacing:.16em;text-transform:uppercase;opacity:.85;overflow-wrap:anywhere}
+.hero-n{font:500 76px/.95 Fraunces,Georgia,serif;letter-spacing:-.03em;overflow-wrap:anywhere}.hero-s{font-size:17px;opacity:.9}
+.hero-mid{align-items:center;text-align:center;left:24px;bottom:100px}.hero-vs{display:flex;gap:26px;align-items:center;font:500 84px/1 Fraunces,Georgia,serif}.hero-vs i{font:500 14px 'DM Mono',monospace;letter-spacing:.2em;opacity:.7;text-transform:uppercase}.hero-vs b:last-child{opacity:.75}
+.hero .hero-ico svg{position:static;width:150px;height:150px}.hero-ico{position:absolute;z-index:2;right:max(24px,calc(50% - 360px + 24px));bottom:100px}
+.hero-title{font-size:32px;line-height:1.08}
+@media (max-width:600px){.band.hero{height:300px}.hero-in,.hero-ico{bottom:92px}.hero-n{font-size:60px}.hero-title{font-size:28px}.hero-vs{font-size:64px}.hero .hero-ico svg{width:100px;height:100px}}
+@media (prefers-reduced-motion:no-preference){.ld{animation:glow 1.4s ease-out .5s 1 both}@keyframes glow{0%{box-shadow:var(--shadow)}35%{box-shadow:0 0 0 4px rgba(200,88,58,.28),var(--shadow)}100%{box-shadow:var(--shadow)}}}
+@media print{.hero{display:none}.ld,.ck{box-shadow:none;break-inside:avoid}.wx,.sc,.md,.st{box-shadow:none;break-inside:avoid}}
 `

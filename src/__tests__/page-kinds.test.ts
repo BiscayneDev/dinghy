@@ -99,3 +99,42 @@ describe('lead and checks blocks', () => {
     expect(h.match(/class="ck-ok"/g)).toHaveLength(1)
     expect(h.match(/class="ck-no"/g)).toHaveLength(2)
  })
+
+describe('page hero', () => {
+    const lead = ':::lead\nfor | Alex\npick | Harbor Inn | ok\n:::\n\n'
+    it('stay: uses the picked row photo, and keeps the sunrise band without a kind block', () => {
+        const h = page(lead + ':::stay\nPine Lodge | $2,150 | 4 | x | y | img/p-aaa.jpg\nHarbor Inn | $2,680 | 4.6 | x | y | img/p-bbb.jpg\n:::')
+        expect(h).toContain('hero hero-stay')
+        expect(h).toContain('src="img/p-bbb.jpg"')
+        expect(h).toContain('$2,680')
+        expect(h).not.toContain('Photo credit at the bottom')
+        expect(page('Just text.')).not.toContain('class="band hero')
+        expect(page('Just text.')).toContain('class="band"')
+    })
+    it('stay without a photo gets a colour hero and no credit note', () => {
+        const h = page(':::stay\nHarbor Inn | $2,680 | 4.6 | x | y |\n:::')
+        expect(h).toContain('hero hero-stay')
+        expect(h).not.toContain('Photo credit')
+        expect(h).not.toContain('<img src="img/')
+    })
+    it('route shows the total time; scores show the score; weather shows the temp; all escaped', () => {
+        expect(page(':::route\nA | B | walk | 9 min | x\nB | C | walk | 5 min | y\n:::')).toContain('14 min')
+        expect(page(':::scores\nGulls | 3 | Otters | 1 | Final\n:::')).toMatch(/hero-vs"><b>3<\/b><i>vs<\/i><b>1<\/b>/)
+        expect(page(':::weather\nPort Marlow | 61° | Light rain | 64° | 52° | 9 mph | 70%\n:::')).toContain('hero-n">61°')
+        expect(page(':::weather\n<b>X</b> | 61° | Light rain | 64° | 52° | 9 mph | 70%\n:::')).not.toContain('<b>X</b>')
+    })
+    it('ambiguous route times fall back to a leg count, never a made-up total', () => {
+        expect(page(':::route\nA | B | walk | about 9 | x\n:::')).toContain('1 leg')
+    })
+    it('the hero is hidden from screen readers when decorative and never uses a remote image', () => {
+        const h = page(':::weather\nPort Marlow | 61° | Light rain | 64° | 52° | 9 mph | 70%\n:::')
+        expect(h).toContain('class="band hero" aria-hidden="true"')
+        expect(page(':::stay\nHarbor Inn | $1 | 4 | x | y | https://evil.test/a.jpg\n:::')).not.toContain('evil.test')
+    })
+})
+
+
+ it('hero does not call an unselected first stay a pick or invent a credit notice', () => {
+  const h = page(':::stay\nHarbor Inn | | 4.6 | x | y | img/local.jpg\n:::')
+  expect(h).toContain('hero-k">Stay<');expect(h).toContain('hero-n hero-title">Harbor Inn<');expect(h).not.toContain('Photo credit at the bottom')
+ })
