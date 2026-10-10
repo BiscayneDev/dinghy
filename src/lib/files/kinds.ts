@@ -263,7 +263,7 @@ export function pageHero(blocks: Seg[]): string | null {
         if (!g) return null
         const [a, as, h, hs, status] = g
         const played = num(as) !== null && num(hs) !== null
-        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(115deg,${hsl(hue(a), 45, 30)} 0 50%,${hsl(hue(h), 45, 30)} 50% 100%)"><div class="hero-in hero-mid">${played ? `<span class="hero-vs"><b>${esc(as)}</b><i>vs</i><b>${esc(hs)}</b></span>` : `<span class="hero-n">${esc(a)} vs ${esc(h)}</span>`}<span class="hero-s">${esc(a)} · ${esc(h)}${status ? ` · ${esc(status)}` : ''}</span></div></div>`
+        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(115deg,${hsl(hue(a), 45, 30)} 0 50%,${hsl(hue(h), 45, 30)} 50% 100%)"><div class="hero-in hero-mid">${played ? `<span class="hero-vs"><b>${esc(as)}</b><i>vs</i><b>${esc(hs)}</b></span>` : `<span class="hero-n hero-title">${esc(a)} vs ${esc(h)}</span>`}<span class="hero-s">${esc(a)} · ${esc(h)}${status ? ` · ${esc(status)}` : ''}</span></div></div>`
     }
     if (first.name === 'route') {
         const r = routeSummary(first.lines)
@@ -279,7 +279,7 @@ export function pageHero(blocks: Seg[]): string | null {
     const [name, price, , , , photo] = row
     const p = img(photo)
     const bg = `linear-gradient(160deg,${hsl(hue(name), 40, 30)},${hsl((hue(name) + 40) % 360, 45, 50)})`
-    return `<div class="band hero hero-stay" style="background:${bg}">${p ? `<img src="${esc(p)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${picked ? 'Pick' : 'Stay'}</span><span class="hero-n">${esc(price || name)}</span></div></div>`
+    return `<div class="band hero hero-stay" style="background:${bg}">${p ? `<img src="${esc(p)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${picked ? 'Pick' : 'Stay'}</span><span class="hero-n${price ? '' : ' hero-title'}">${esc(price || name)}</span></div></div>`
 }
 
 export function renderKind(name: KindBlock, lines: string[]): string {
@@ -368,8 +368,8 @@ h4{margin:0;font:500 21px/1.2 Fraunces,Georgia,serif;letter-spacing:-.01em;color
 .hero-n{font:500 76px/.95 Fraunces,Georgia,serif;letter-spacing:-.03em;overflow-wrap:anywhere}.hero-s{font-size:17px;opacity:.9}
 .hero-mid{align-items:center;text-align:center;left:24px;bottom:100px}.hero-vs{display:flex;gap:26px;align-items:center;font:500 84px/1 Fraunces,Georgia,serif}.hero-vs i{font:500 14px 'DM Mono',monospace;letter-spacing:.2em;opacity:.7;text-transform:uppercase}.hero-vs b:last-child{opacity:.75}
 .hero .hero-ico svg{position:static;width:150px;height:150px}.hero-ico{position:absolute;z-index:2;right:max(24px,calc(50% - 360px + 24px));bottom:100px}
-.hero-cr{position:absolute;z-index:2;right:12px;top:10px;font-size:11px;opacity:.75}
-@media (max-width:600px){.band.hero{height:300px}.hero-in,.hero-ico{bottom:92px}.hero-n{font-size:60px}.hero-vs{font-size:64px}.hero .hero-ico svg{width:100px;height:100px}}
+.hero-title{font-size:32px;line-height:1.08}
+@media (max-width:600px){.band.hero{height:300px}.hero-in,.hero-ico{bottom:92px}.hero-n{font-size:60px}.hero-title{font-size:28px}.hero-vs{font-size:64px}.hero .hero-ico svg{width:100px;height:100px}}
 @media (prefers-reduced-motion:no-preference){.ld{animation:glow 1.4s ease-out .5s 1 both}@keyframes glow{0%{box-shadow:var(--shadow)}35%{box-shadow:0 0 0 4px rgba(200,88,58,.28),var(--shadow)}100%{box-shadow:var(--shadow)}}}
 @media print{.hero{display:none}.ld,.ck{box-shadow:none;break-inside:avoid}.wx,.sc,.md,.st{box-shadow:none;break-inside:avoid}}
 `
