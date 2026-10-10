@@ -54,6 +54,7 @@ export interface PublishedSite {
     url: string
     slug: string
     expiresAt: string
+    versionId?: string
 }
 
 interface UploadTarget { path: string; url: string; headers?: Record<string, string> }
@@ -79,29 +80,24 @@ async function call<T>(path: string, init: RequestInit): Promise<T> {
     return (text ? JSON.parse(text) : {}) as T
 }
 
-/** Publish files as one Site; returns its link. Throws on any failure. */
-export async function publishSite(files: SiteFile[], opts: { title: string; userId: string }): Promise<PublishedSite> {
-    await assertAccountActive(opts.userId)
-    if (!shareEnabled()) throw new Error('hosted files are not set up')
-    const ttl = ttlSeconds()
-    const created = await call<CreateResponse>('/publish', {
-        method: 'POST',
-        body: JSON.stringify({
-            files: files.map((f) => ({
-                path: f.path,
-                size: f.bytes.length,
-                contentType: f.contentType,
-                hash: createHash('sha256').update(f.bytes).digest('hex'),
-            })),
-            displayName: opts.title.slice(0, 80),
-            displayDescription: ownerLine(ownerTag(opts.userId)),
-            folder: FOLDER,
-            ttlSeconds: ttl,
-        }),
-    })
-    const slug = created.slug
+function manifestBody(files: SiteFile[], opts: { title: string; userId: string }) {
+    return {
+        files: files.map((f) => ({
+            path: f.path,
+            size: f.bytes.length,
+            contentType: f.contentType,
+            hash: createHash('sha256').update(f.bytes).digest('hex'),
+        })),
+        displayName: opts.title.slice(0, 80),
+        displayDescription: ownerLine(ownerTag(opts.userId)),
+        folder: FOLDER,
+        ttlSeconds: ttlSeconds(),
+    }
+}
+
+async function uploadAndFinalize(slug: string, upload: CreateResponse['upload'], files: SiteFile[]): Promise<void> {
     const byPath = new Map(files.map((f) => [f.path, f]))
-    for (const u of created.upload.uploads) {
+    for (const u of upload.uploads) {
         const f = byPath.get(u.path)
         if (!f) continue
         const put = await fetch(u.url, {
@@ -114,9 +110,31 @@ export async function publishSite(files: SiteFile[], opts: { title: string; user
     }
     await call(`/publish/${encodeURIComponent(slug)}/finalize`, {
         method: 'POST',
-        body: JSON.stringify({ versionId: created.upload.versionId }),
+        body: JSON.stringify({ versionId: upload.versionId }),
     })
-    return { url: created.siteUrl, slug, expiresAt: new Date(Date.now() + ttl * 1000).toISOString() }
+}
+
+/** Publish files as one Site; returns its link. Throws on any failure. */
+export async function publishSite(files: SiteFile[], opts: { title: string; userId: string }): Promise<PublishedSite> {
+    await assertAccountActive(opts.userId)
+    if (!shareEnabled()) throw new Error('hosted files are not set up')
+    const ttl = ttlSeconds()
+    const created = await call<CreateResponse>('/publish', { method: 'POST', body: JSON.stringify(manifestBody(files, opts)) })
+    await uploadAndFinalize(created.slug, created.upload, files)
+    return { url: created.siteUrl, slug: created.slug, versionId: created.upload.versionId, expiresAt: new Date(Date.now() + ttl * 1000).toISOString() }
+}
+
+/**
+ * Replace a Site's files with a new full set (PUT is a full replacement: anything not listed is deleted).
+ * Used to add the og tag once the Site's own address is known. Callers treat a failure as "keep the
+ * version that is already live".
+ */
+export async function updateSite(slug: string, files: SiteFile[], opts: { title: string; userId: string; baseVersionId?: string }): Promise<void> {
+    await assertAccountActive(opts.userId)
+    if (!shareEnabled()) throw new Error('hosted files are not set up')
+    if (!opts.baseVersionId) throw new Error('missing base version for site update')
+    const updated = await call<CreateResponse>(`/publish/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify({ ...manifestBody(files, opts), baseVersionId: opts.baseVersionId }) })
+    await uploadAndFinalize(slug, updated.upload, files)
 }
 
 interface SiteDetails { slug: string; siteUrl: string; displayName?: string; displayDescription?: string; expiresAt?: string | null }

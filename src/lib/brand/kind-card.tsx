@@ -355,3 +355,81 @@ export async function renderKindCard(doc: { title: string; subtitle?: string; bo
     const res = new ImageResponse(built.el, { width: W, height: built.h, fonts: fonts() })
     return Buffer.from(await res.arrayBuffer())
 }
+
+
+const OG_W = 1200
+const OG_H = 630
+
+/**
+ * 1200x630 share image drawn from the page's own hero (weather, scores, stay or route), so a forwarded link
+ * looks designed in any thread. Published inside the private site as og.png: no title or content goes into a
+ * URL on our domain. Only the builder's vetted photos can appear. Null when the page has no hero kind.
+ */
+export async function renderHeroOg(doc: { title: string; subtitle?: string; body: string }, photos: CardPhoto[] = []): Promise<Buffer | null> {
+    if (/[^\u0000-\u024F\u2010-\u2027\u20AC\u2122]/u.test([doc.title, doc.subtitle ?? '', doc.body, ...photos.map((p) => p.credit ?? '')].join(' ').replace(/[\p{Symbol}\p{Mark}]/gu, ''))) return null
+    const segs = splitBlocks(doc.body)
+    const seg = segs.find((x) => x.kind === 'block' && ['weather', 'scores', 'stay', 'route'].includes(x.name))
+    if (!seg || seg.kind !== 'block') return null
+    let bg = 'linear-gradient(160deg, #16305A, #0E1A33)'
+    let big = '', kicker = '', photo: CardPhoto | undefined
+    let art: string | null = null
+    if (seg.name === 'weather') {
+        const [place, now, sky] = cells(seg.lines[0] ?? '')
+        if (!place || !now) return null
+        const cls = skyOf(sky ?? '').cls
+        const [c1, c2] = SKY[cls] ?? SKY.part
+        bg = `linear-gradient(160deg, ${c1}, ${c2})`; big = now; kicker = `${place} · ${sky ?? ''}`; art = icon(cls)
+    } else if (seg.name === 'scores') {
+        const g = seg.lines.map(cells).find((c) => c[0] && c[2])
+        if (!g) return null
+        bg = `linear-gradient(115deg, ${hsl(hue(g[0]), 45, 30)}, ${hsl(hue(g[2]), 45, 30)})`
+        big = num(g[1]) !== null && num(g[3]) !== null ? `${g[1]} - ${g[3]}` : `${g[0]} vs ${g[2]}`
+        kicker = `${g[0]} · ${g[2]}${g[4] ? ` · ${g[4]}` : ''}`
+    } else if (seg.name === 'route') {
+        const r = routeSummary(seg.lines)
+        if (!r) return null
+        big = r.eta; kicker = [...new Set(r.legs.map((l) => l[2]).filter(Boolean))].join(' + ') || 'Route'
+        const d = 'M120 470C300 450 400 300 560 292S800 340 900 190 1060 110 1100 100'
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630"><path d="${d}" stroke="rgba(240,138,104,0.3)" stroke-width="30" fill="none" stroke-linecap="round"/><path d="${d}" stroke="#F08A68" stroke-width="9" fill="none" stroke-linecap="round" stroke-dasharray="2 24"/><circle cx="120" cy="470" r="24" fill="#fff"/><circle cx="1100" cy="100" r="28" fill="#F08A68"/></svg>`
+        art = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
+    } else {
+        const rows = seg.lines.map(cells).filter((c) => c[0])
+        const lead = segs.find((x) => x.kind === 'block' && x.name === 'lead')
+        const pick = lead && lead.kind === 'block' ? (lead.lines.map(cells).find((c) => c[0]?.toLowerCase() === 'pick')?.[1] ?? '').toLowerCase() : ''
+        const picked = rows.find((r) => pick && r[0].toLowerCase() === pick)
+        const row = picked ?? rows[0]
+        if (!row) return null
+        bg = `linear-gradient(160deg, ${hsl(hue(row[0]), 40, 30)}, ${hsl((hue(row[0]) + 40) % 360, 45, 50)})`
+        big = row[1] || row[0]; kicker = picked ? 'Pick' : 'Stay'
+        photo = photos.find((ph) => ph.path === row[5] && /^img\/[a-z0-9][a-z0-9-]{0,60}\.(?:jpg|jpeg|png)$/i.test(ph.path) && /^image\/(jpeg|png)$/.test(ph.contentType) && ph.credit && ph.license)
+    }
+    const wide = seg.name === 'scores'
+    const el = (
+        <div style={{ width: OG_W, height: OG_H, display: 'flex', position: 'relative', backgroundImage: bg, color: '#fff' }}>
+            {photo && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={dataUri(photo)} width={OG_W} height={OG_H} alt="" style={{ position: 'absolute', left: 0, top: 0, width: OG_W, height: OG_H, objectFit: 'cover' }} />
+            )}
+            {art && seg.name === 'route' && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={art} width={OG_W} height={OG_H} alt="" style={{ position: 'absolute', left: 0, top: 0 }} />
+            )}
+            <div style={{ display: 'flex', position: 'absolute', left: 0, top: 0, width: OG_W, height: OG_H, backgroundImage: 'linear-gradient(180deg, rgba(8,15,30,0.1), rgba(8,15,30,0) 35%, rgba(8,15,30,0.7))' }} />
+            {art && seg.name === 'weather' && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={art} width={300} height={300} alt="" style={{ position: 'absolute', right: 80, top: 110 }} />
+            )}
+            <div style={{ display: 'flex', position: 'absolute', left: 64, top: 52 }}><Brand color="rgba(255,255,255,0.92)" /></div>
+            <div style={{ display: 'flex', flexDirection: 'column', position: 'absolute', left: 64, right: 64, top: 130, alignItems: wide ? 'center' : 'flex-start' }}>
+                <div style={{ display: 'flex', fontFamily: 'DM Mono', fontSize: 26, letterSpacing: '0.16em', textTransform: 'uppercase', opacity: 0.88 }}>{clip(kicker, 44)}</div>
+                <div style={{ display: 'flex', marginTop: 10, fontFamily: 'Fraunces', fontSize: big.length > 24 ? 64 : big.length > 14 ? 110 : wide ? 200 : 230, lineHeight: 1, letterSpacing: '-0.03em' }}>{big.length <= 24 ? latin(big) : clip(big, 52)}</div>
+            </div>
+            <div style={{ display: 'flex', position: 'absolute', left: 64, right: 64, bottom: photo ? 80 : 48, fontFamily: 'Fraunces', fontSize: 64, lineHeight: 1.05, letterSpacing: '-0.02em' }}>{clip(doc.title, 44)}</div>
+        </div>
+    )
+    const credit = photo ? `Photo: ${photo.credit}, ${photo.license}` : ''
+    if (credit.length > 180) return null
+    const withCredit = credit ? <div style={{ width: OG_W, height: OG_H, display: 'flex', position: 'relative' }}>{el}<div style={{ position: 'absolute', bottom: 18, left: 64, right: 64, display: 'flex', color: '#fff', fontFamily: 'Schibsted Grotesk', fontSize: 18 }}>{credit}</div></div> : el
+    const res = new ImageResponse(withCredit, { width: OG_W, height: OG_H, fonts: fonts() })
+    return Buffer.from(await res.arrayBuffer())
+}

@@ -22,8 +22,8 @@ import { createServerClient } from '@/lib/supabase/server'
 import type { Tool, ToolResult, UserContext } from '@/lib/llm/types'
 import { renderFile, renderHtml, type DinghyDoc, type FileFormat, type RenderedFile } from './render'
 import { attachPhotos, type Photo } from './photos'
-import { renderKindCard } from '@/lib/brand/kind-card'
-import { publishSite, revokeSite, shareEnabled, type PublishedSite, type SiteFile } from './share'
+import { renderHeroOg, renderKindCard } from '@/lib/brand/kind-card'
+import { publishSite, revokeSite, shareEnabled, updateSite, type PublishedSite, type SiteFile } from './share'
 import { findFile, rememberFile } from '@/lib/spectrum/plans'
 import { geocodeCached, nearbyEateries, keywords, toPlaces, zoneAt, anchorConfident, looksLikeStreetAddress, geocoderIsPrivate, BudgetUnavailable } from '@/lib/places/osm'
 import { freshPin, roundCoord } from '@/lib/places/pin'
@@ -119,6 +119,30 @@ async function replyLineFor(chatGuid: string | undefined): Promise<string | unde
     try { return await dinghyLineFor(chatGuid) } catch { return undefined }
 }
 
+/**
+ * Phase 2: the Site's address is only known after it is published, so re-publish the same files with the
+ * og:image pointing at the site's own og.png. Best effort and time-boxed: any failure leaves the page that is
+ * already live, with today's share image.
+ */
+async function addOgTag(hosted: HostedFile, files: SiteFile[], doc: DinghyDoc, ctx: { format: FileFormat; userId: string; replyLine?: string; pdf: RenderedFile | null }): Promise<void> {
+    try {
+        const url = new URL('og.png', hosted.url.endsWith('/') ? hosted.url : `${hosted.url}/`)
+        if (url.protocol !== 'https:' || !/\.here\.now$/.test(url.hostname)) return
+        const html = renderHtml(doc, {
+            ogImage: url.href,
+            ...(ctx.replyLine ? { replyLine: ctx.replyLine } : {}),
+            ...(ctx.pdf ? { download: { href: ctx.pdf.filename, label: 'download pdf' } } : {}),
+        })
+        const next = files.map((f) => (f.path === 'index.html' ? { ...f, bytes: Buffer.from(html, 'utf8') } : f))
+        await Promise.race([
+            updateSite(hosted.slug, next, { title: doc.title, userId: ctx.userId, baseVersionId: hosted.versionId }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('og update timed out')), 10_000)),
+        ])
+    } catch {
+        /* keep the live version */
+    }
+}
+
 async function host(input: DinghyDoc, format: FileFormat, userId: string, replyLine?: string, photosOk = false): Promise<{ hosted: HostedFile; pdf: RenderedFile | null; card: Buffer | null }> {
     // Free credited photos, only on a clean turn, never longer than 12s in total. A miss keeps the colour card.
     const found = await Promise.race([
@@ -135,7 +159,11 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
     const files: SiteFile[] = [{ path: 'index.html', bytes: Buffer.from(html, 'utf8'), contentType: 'text/html; charset=utf-8' }]
     if (pdf) files.push({ path: pdf.filename, bytes: pdf.bytes, contentType: pdf.mimeType })
     for (const p of found.photos) files.push({ path: p.path, bytes: p.bytes, contentType: p.contentType })
+    // Share image from the page's own hero, inside the private site. Clean turns only; a miss keeps today's image.
+    const og = photosOk ? await renderHeroOg({ title: doc.title, subtitle: doc.subtitle, body: doc.body }, found.photos).catch(() => null) : null
+    if (og) files.push({ path: 'og.png', bytes: og, contentType: 'image/png' })
     const hosted = await publishSite(files, { title: doc.title, userId })
+    if (og) await addOgTag(hosted, files, doc, { format, userId, replyLine, pdf })
     // Best effort and clean turns only: a card that fails to draw never blocks the page.
     const card = photosOk ? await renderKindCard({ title: doc.title, subtitle: doc.subtitle, body: doc.body }, found.photos).catch(() => null) : null
     return { hosted, pdf, card }
