@@ -263,7 +263,7 @@ export function pageHero(blocks: Seg[]): string | null {
         if (!g) return null
         const [a, as, h, hs, status] = g
         const played = num(as) !== null && num(hs) !== null
-        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(115deg,${hsl(hue(a), 45, 30)} 0 50%,${hsl(hue(h), 45, 30)} 50% 100%)"><div class="hero-in hero-mid">${played ? `<span class="hero-vs"><b>${esc(as)}</b><i>vs</i><b>${esc(hs)}</b></span>` : `<span class="hero-n hero-title">${esc(a)} vs ${esc(h)}</span>`}<span class="hero-s">${esc(a)} · ${esc(h)}${status ? ` · ${esc(status)}` : ''}</span></div></div>`
+        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(115deg,${hsl(hue(a), 45, 30)} 0 50%,${hsl(hue(h), 45, 30)} 50% 100%)"><div class="hero-in hero-mid">${played ? `<span class="hero-vs"><b>${esc(as)}</b><i>vs</i><b>${esc(hs)}</b></span>` : `<span class="hero-n hero-title">${esc(a)} vs ${esc(h)}</span>`}<span class="hero-s">${played ? `${esc(a)} · ${esc(h)}${status ? ` · ${esc(status)}` : ''}` : esc(status ?? '')}</span></div></div>`
     }
     if (first.name === 'route') {
         const r = routeSummary(first.lines)
