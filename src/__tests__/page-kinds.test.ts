@@ -136,5 +136,5 @@ describe('page hero', () => {
 
  it('hero does not call an unselected first stay a pick or invent a credit notice', () => {
   const h = page(':::stay\nHarbor Inn | | 4.6 | x | y | img/local.jpg\n:::')
-  expect(h).toContain('hero-k">Stay<');expect(h).toContain('hero-n">Harbor Inn<');expect(h).not.toContain('Photo credit at the bottom')
+  expect(h).toContain('hero-k">Stay<');expect(h).toContain('hero-n hero-title">Harbor Inn<');expect(h).not.toContain('Photo credit at the bottom')
  })
