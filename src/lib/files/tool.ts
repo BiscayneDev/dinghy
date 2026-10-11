@@ -1,3 +1,4 @@
+import {ITINERARY_DAY_HEADING_NOTE} from './itinerary-contract'
 import {parsePageSpec} from '@/lib/pages/runtime'
 import { optionalWithin, verifyShareMetadata, type ImageryState } from './imagery'
 import { renderSurfacePreview, type PreviewResult } from '@/lib/brand/surface-preview'
@@ -186,6 +187,7 @@ export function fileToolsFor(): FileToolset {
         description:
             'Make a polished document for the user: plans, itineraries, schedules, notes, checklists, summaries, tables. ' +
             'Write the body in Markdown (## headings, - lists, | tables |, > callouts). A list item starting with a time like "09:00" becomes a schedule row. ' +
+            ITINERARY_DAY_HEADING_NOTE+' ' +
             'By default it becomes a file link (a here.now page with a pdf download on it) that opens with one tap, no code; the link is sent right after your reply. ' +
             'Set attach=true only when they want the file itself in the chat (a pdf to print or forward as a file). docx (to edit in Word), csv and md always arrive as attachments. ' +
             'The link is private unless they forward it: anyone they send it to can open it too. It expires after 7 days; asking again later makes a fresh link. ' +
@@ -196,7 +198,7 @@ export function fileToolsFor(): FileToolset {
                 title: { type: 'string', description: 'Document title, e.g. "Weekend in Key Biscayne"' },
                 kind: { type: 'string', enum: ['file', 'itinerary'], description: 'Use itinerary only for an actual trip itinerary. Otherwise file.' },
                 subtitle: { type: 'string', description: 'Optional one-line subtitle: who, when, where' },
-                body: { type: 'string', description: 'The document body in Markdown. For interactive own-web Pages use :::pages then JSON {version:1,components:[{id,type,title,rows:[{id,label,detail}]}]} then :::. Types comparison/filter/checklist/map (map requires source-supported lat/lon; no guessed indoor route). Stable IDs preserve local state. Optional code is worker-only JavaScript returning a subset of declared row IDs; no network, accounts, sends or purchases. Static text/PDF fallback always remains. For researched facts use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or literal {{source:src1.content:START:END}} excerpts from this turn source_records. Never invent IDs; missing fields stay unknown.' },
+                body: { type: 'string', description: ITINERARY_DAY_HEADING_NOTE+' The document body in Markdown. For interactive own-web Pages use :::pages then JSON {version:1,components:[{id,type,title,rows:[{id,label,detail}]}]} then :::. Types comparison/filter/checklist/map (map requires source-supported lat/lon; no guessed indoor route). Stable IDs preserve local state. Optional code is worker-only JavaScript returning a subset of declared row IDs; no network, accounts, sends or purchases. Static text/PDF fallback always remains. For researched facts use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or literal {{source:src1.content:START:END}} excerpts from this turn source_records. Never invent IDs; missing fields stay unknown.' },
                 format: { type: 'string', enum: FORMATS, description: 'pdf (default), docx, html, csv or md' },
                 attach: { type: 'boolean', description: 'Send the file itself as an attachment instead of a private file link. Only when asked for the file.' },
             },
