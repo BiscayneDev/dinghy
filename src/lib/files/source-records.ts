@@ -80,7 +80,7 @@ function literal(value: string): string {
 }
 export const SOURCE_BINDING_NOTE = 'Source-bound file values: successful web reads return immutable source_records with IDs. In create_file title/subtitle/body use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or {{source:src1.content:START:END}}. START/END are exact character offsets, at most 500 characters; the server inserts the original source text, never your rewritten copy. Use these bindings for names, terminals, hours, prices, dates and links when supported. Source titles are page titles, not venue names. Search content is a snippet, not a verified page. Missing values stay unknown. Do not promote a directory listing into current stock, a terminal into a verified walking route, or source-reported text into independent verification. Pick and explain separately from bound facts. A researched deliverable needs source bindings; never invent IDs or substitute guessed values. The server appends provenance for every used source.'
 
-export function bindFileSources(input: unknown, records: SourceRecords, required = false): { input: unknown; count: number } | { error: string } {
+export function bindFileSources(input: unknown, records: SourceRecords, required = false): { input: unknown; count: number; usedSources: SourceRecord[] } | { error: string } {
     if (!input || typeof input !== 'object') return { error: 'File input required.' }
     const i = input as Record<string, unknown>
     const used = new Map<string, SourceRecord>()
@@ -120,7 +120,7 @@ export function bindFileSources(input: unknown, records: SourceRecords, required
         next.body += '\n\n## Source provenance\nSource-reported text, not independent confirmation of current stock, access or a walking route. A listed terminal is not a verified route.\n\n'+rows.join('\n')
     }
     if (typeof next.body === 'string' && next.body.length > 60_000) return {error:'Bound body is too long (max 60000 characters). Reduce source excerpts.'}
-    return { input: next, count }
+    return { input: next, count, usedSources:[...used.values()] }
 }
 
 /** Keep immutable IDs and literal content prefixes visible without duplicating
@@ -134,4 +134,19 @@ export function sourceResultEnvelope(records: SourceRecord[], maxChars=4000): st
         if(envelope().length>maxChars)shown.pop()
     }
     return envelope()
+                                                       }
+
+/** Renderer syntax comes from the registry, not model-transcribed source rows.
+ * Preserve invalid explicit source URLs as a rejection, never silently hide them. */
+export function compileItinerarySources(input:unknown,used:SourceRecord[],observedUrls:string[]):{input:unknown}|{error:string} {
+ if(!input||typeof input!=='object')return {error:'File input required.'}
+ const i=input as Record<string,unknown>
+ if(typeof i.body!=='string')return {input}
+ const blocks=[...i.body.matchAll(/(?:^|\n)[ \t]*:::sources[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*:::/gi)]
+ for(const block of blocks){const urls=block[1].match(/https?:\/\/[^\s<>"|)\]]+/g)??[];if(urls.some(url=>!observedUrls.includes(url)))return {error:'Itinerary recommendations require observed source links in :::sources. Unknown explicit source URL; no file was published.'}}
+ if(!used.length)return {error:'Itinerary recommendations require observed source links in :::sources. No source registry entries were bound.'}
+ const clean=i.body.replace(/(?:^|\n)[ \t]*:::sources[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*:::/gi,'')
+ if(/(?:^|\n)[ \t]*:::sources\b/i.test(clean))return {error:'Itinerary recommendations require observed source links in :::sources. Malformed explicit sources block; no file was published.'}
+ const rows=[...new Map(used.map(r=>[r.url,r])).values()].map(r=>`${literal(r.title??'Source').replace(/\|/g,'&#124;')} | ${r.url} | ${r.origin==='search'?'search snippet':'page text'}; checked ${literal(r.checked_at)}; source date ${literal(r.published_date??'unknown')}`)
+ return {input:{...i,body:clean.trimEnd()+'\n\n:::sources\n'+rows.join('\n')+'\n:::'}}
                                                        }
