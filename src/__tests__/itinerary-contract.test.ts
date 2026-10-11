@@ -160,3 +160,27 @@ describe('server-owned itinerary sources',()=>{
  it('does not hide a malformed explicit sources block',()=>{const records=new SourceRecords();const used=records.capture('web_fetch',{url,title:'Harbor',content:'guide'},'fictional-check');expect(compileItinerarySources({body:'## Friday\n:::sources\nBroken'},used,[url])).toHaveProperty('error')})
  it('does not manufacture a source from an empty used registry',()=>{expect(compileItinerarySources({body:'## Friday\nNo evidence'},[],[url])).toHaveProperty('error')})
 })
+
+describe('bounded required read fallback',()=>{
+ const urls=Array.from({length:8},(_,i)=>`https://harbor.test/source${i}`)
+ const search=()=>tool('web_search',{results:urls.map((u,i)=>({title:`Fictional ${i}`,url:u,content:'Search lead, not verified page'}))})
+ it('passes on the third actual URL after HTTP and network failures, without another gateway turn',async()=>{
+  const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async(i:any)=>i.url===urls[2]?{success:true,data:{title:'Harbor verified',url:i.url,content:'Public listing'}}:{success:false,publicReadFailure:i.url===urls[0]?'http' as const:'network' as const,error:'untrusted private raw error'})}
+  const req=harness([call('web_search'),call('create_file',{title:'Harbor',body:body.replaceAll(url,urls[2])}),stop()])
+  const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search(),read,file],ctx)
+  expect(read.execute.mock.calls.map(c=>c[0].url)).toEqual(urls.slice(0,3));expect(file.execute).toHaveBeenCalledTimes(1);expect(result.deliverable?.state).toBe('completed');expect(req).toHaveLength(2)
+  expect(stage).toHaveBeenCalledWith('tool','research:read_failure:http');expect(stage).toHaveBeenCalledWith('tool','research:read_failure:network');expect(JSON.stringify(stage.mock.calls)).not.toContain('private raw')
+ })
+ it('stops at six actual URLs with no recommendation from search snippets',async()=>{
+  const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async()=>({success:false,publicReadFailure:'timeout' as const,error:'raw'}))};harness([call('web_search')])
+  const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search(),read,file],ctx)
+  expect(read.execute.mock.calls.map(c=>(c[0] as any).url)).toEqual(urls.slice(0,6));expect(file.execute).not.toHaveBeenCalled();expect(result.deliverable?.state).toBe('unfulfilled');expect(stage).toHaveBeenCalledWith('tool','research:read_failure:timeout')
+ })
+ it('stops fallback when synthesis headroom falls below18s',async()=>{
+  const start=Date.now();const clock=vi.spyOn(Date,'now').mockReturnValue(start),file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async()=>{clock.mockReturnValue(start+83_000);return{success:false,publicReadFailure:'http' as const}})};harness([call('web_search')])
+  try{await chatWithTools([{role:'user',content:ask}],{...opts,deadlineAt:start+100_000,onStage:stage},[search(),read,file],ctx);expect(read.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','research:read_budget');expect(file.execute).not.toHaveBeenCalled()}finally{clock.mockRestore()}
+ })
+ it('classifies thrown custom reader errors without retaining their text',async()=>{
+  const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async()=>{throw Error('private message')})};harness([call('web_search')]);await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search(),read,file],ctx);expect(stage).toHaveBeenCalledWith('tool','research:read_failure:network');expect(JSON.stringify(stage.mock.calls)).not.toContain('private message');expect(file.execute).not.toHaveBeenCalled()
+ })
+})
