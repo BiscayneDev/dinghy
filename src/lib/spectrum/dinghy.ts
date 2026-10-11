@@ -1,3 +1,4 @@
+import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
 import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
 import { mapSourceUrls, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
@@ -579,11 +580,16 @@ export async function chatWithTools(
     const sourceRecords = new SourceRecords()
     const mapArtifact = contract?.kind === 'map'
     let deliverableCompleted = false
-    const finish = (r: ToolChatResult): ToolChatResult => ({ ...r, reply: truthfulDeliverableReply(r.reply, contract, deliverableCompleted), ...(contract ? { deliverable: deliverableOutcome(contract, deliverableCompleted) } : {}) })
+    const finish = (r: ToolChatResult): ToolChatResult => {
+        let reply=r.reply
+        if(contextualResearch&&prematureResearchReply(reply))reply=mapResearchRead&&stripPermissionOffer(reply)||'The location was not verified. I have no supported route to give.'
+        return {...r,reply:truthfulDeliverableReply(reply,contract,deliverableCompleted),...(contract?{deliverable:deliverableOutcome(contract,deliverableCompleted)}:{})}
+    }
     const mapSources = mapArtifact ? mapSourceUrls(history) : []
     let mapResearchRead = false
     const retailAvailability = !mapArtifact && isRetailAvailability(currentRetailRequest)
-    if (retailAvailability || mapArtifact) tools = tools.filter(t => t.name !== 'find_places')
+    const contextualResearch = !mapArtifact && researchFollowup(history)
+    if (retailAvailability || contextualResearch || mapArtifact) tools = tools.filter(t => t.name !== 'find_places')
     const defsNow = () => tools.map((t) => ({
         type: 'function' as const,
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
@@ -603,6 +609,7 @@ export async function chatWithTools(
     messages = withVolatileNote(messages, [opts.volatile, opts.interviewLine].filter(Boolean).join('\n\n')) as Record<string, unknown>[]
 
     if (retailAvailability) messages.push({ role: 'system', content: 'This is retail/product availability, not food discovery. Use focused web_search then read source pages, favor airport/operator/retailer official sources. Distinguish confirmed listing from current stock. For airports use the named destination, verify terminal and airside/landside access and opening hours. Ask only a missing terminal/access detail that changes the answer after researching available options. Do not substitute eateries or infer product stock, legal availability, or unrestricted walking access from OpenStreetMap. If evidence is incomplete say exactly what was verified and what remains unknown; no invented shop or stock claim.' })
+    if(contextualResearch){messages.push({role:'system',content:RESEARCH_RECOVERY_NOTE});await opts.onStage?.('context','research:contextual_navigation')}
     if (contract) await opts.onStage?.('context', `deliverable:${contract.kind}`)
     if (contract) messages.push({ role: 'system', content: contractNote(contract) + '\n' + SOURCE_BINDING_NOTE })
     if (mapArtifact) messages.push({ role: 'system', content: MAP_ARTIFACT_NOTE })
@@ -613,6 +620,9 @@ export async function chatWithTools(
     let sourceOnly = true
     const foundSources: { title: string; url: string }[] = []
     const currentRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
+    let recoveryUsed=false
+    let recoveryTool:string|undefined
+    let validationFailures=0
     let pageAttempted = false
     let pageRetry = false
     let completionMode = false
@@ -645,7 +655,7 @@ export async function chatWithTools(
         }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
-        const forceTool = pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool
+        const forceTool = recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
         const offered = completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const t0 = Date.now()
         // Bound a post-search generation, not tools or actions. Preserve honest
@@ -662,7 +672,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || mapArtifact || pageRetry) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || mapArtifact || pageRetry || Boolean(recoveryTool) || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
@@ -689,6 +699,21 @@ export async function chatWithTools(
 
         if (choice?.finish_reason !== 'tool_calls' || calls.length === 0) {
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
+            if(contextualResearch&&!recoveryUsed&&(!mapResearchRead||prematureResearchReply(reply))&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=20000)){
+                const next=successfulSearches>0&&!mapResearchRead?'web_fetch':!successfulSearches?'web_search':undefined
+                if(next&&tools.some(t=>t.name===next)&&!(tainted&&egressPolicy()==='block'&&isHardBlockTool(next))){
+                    recoveryUsed=true;recoveryTool=next;await opts.onStage?.('tool','repair:research_once');messages.push({role:'assistant',content:reply},{role:'system',content:RESEARCH_RECOVERY_NOTE+' This is the one bounded repair. Use the available read tool, then give a supported result or exact gap.'});continue
+                }
+            }
+            if(contextualResearch&&mapResearchRead&&prematureResearchReply(reply)){
+                const useful=stripPermissionOffer(reply)
+                if(useful&&useful!=='(no response)'){await opts.onStage?.('reply_ready','research:offer_removed');return finish({reply:useful,toolCalls:toolCallCount,iterations:iteration,tainted})}
+            }
+            if(contextualResearch&&prematureResearchReply(reply)){
+                await opts.onStage?.('reply_ready','research:unfulfilled')
+                const links=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
+                return finish({reply:mapResearchRead?`I did not verify a route or current stock. The source links are below; an exact indoor route remains unverified.${links?'\n'+links:''}`:`The location was not verified. I have no supported route to give.${links?' These are search leads, not verified directions:\n'+links:''}`,toolCalls:toolCallCount,iterations:iteration,tainted})
+            }
             if (!pageRetry && !pageAttempted && tools.some((t) => t.name === 'create_file') && (contract || needsAnswerPage(reply) || needsFileRepair(reply)) && iteration < MAX_TOOL_ITERATIONS && (opts.deadlineAt === undefined || opts.deadlineAt - Date.now() >= 20_000)) {
                 pageRetry = true
                 completionMode = !mapArtifact || mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
@@ -698,6 +723,7 @@ export async function chatWithTools(
             return finish({ reply, toolCalls: toolCallCount, iterations: iteration, tainted })
         }
 
+        recoveryTool=undefined
         messages.push({ role: 'assistant', content: msg?.content ?? null, tool_calls: calls })
         for (const call of calls) {
             toolCallCount++
@@ -714,10 +740,15 @@ export async function chatWithTools(
                 try {
                     await opts.onStage?.('tool', call.function.name)
                     await assertAccountActive(ctx.userId,ctx.chatGuid)
-                    let input = JSON.parse(call.function.arguments || '{}') as unknown
+                    if(validationFailures>=2&&['web_search','web_fetch','create_file'].includes(call.function.name)){content=JSON.stringify({error:'The single validation repair is exhausted. This tool was not run. Give the supported result and exact gap.'});messages.push({role:'tool',tool_call_id:call.id,content});continue}
+                    let input:unknown
+                    try{input=JSON.parse(call.function.arguments||'{}')}catch{validationFailures++;await opts.onStage?.('tool','invalid:arguments_json');throw new Error('Invalid JSON arguments; return one corrected tool call.')}
+                    const schemaError=inputSchemaError(input,tool.inputSchema)
+                    if(schemaError){validationFailures++;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
                     if (call.function.name === 'create_file') {
                         const bound = bindFileSources(input, sourceRecords, Boolean(contract) && sourceRecords.size() > 0)
                         if ('error' in bound) {
+                            validationFailures++;await opts.onStage?.('tool','invalid:source_binding');if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: correct the source binding from the returned registry, do not invent values.'})}
                             messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({error:bound.error}) })
                             continue
                         }
@@ -725,6 +756,7 @@ export async function chatWithTools(
                     }
                     const pageError = call.function.name === 'create_file' ? (deliverablePageError(contract, input, [...mapSources, ...foundSources.map(s => s.url)]) ?? weeklyPageError(input, currentRequest, foundSources.map(s => s.url))) : null
                     if (pageError) {
+                        validationFailures++;await opts.onStage?.('tool','invalid:deliverable_shape');if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: fix only the reported missing deliverable shape using evidence already returned.'})}
                         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: pageError }) })
                         continue
                     }
@@ -770,6 +802,7 @@ export async function chatWithTools(
                     }
                 } catch (err) {
                     if (err instanceof TurnDeadlineExceeded) throw err
+                    if(validationFailures>0&&!recoveryUsed){recoveryUsed=true;await opts.onStage?.('tool','repair:tool_once');messages.push({role:'system',content:'Use the single schema correction only. Do not repeat an effect that may already have executed.'})}
                     content = JSON.stringify({ error: err instanceof Error ? err.message : String(err) })
                 }
             }
