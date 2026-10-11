@@ -1,3 +1,4 @@
+import { SourceRecords, bindFileSources, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
 import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
 import { mapSourceUrls, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
@@ -575,6 +576,7 @@ export async function chatWithTools(
 ): Promise<ToolChatResult> {
     const currentRetailRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
     const contract = selectDeliverable(history)
+    const sourceRecords = new SourceRecords()
     const mapArtifact = contract?.kind === 'map'
     let deliverableCompleted = false
     const finish = (r: ToolChatResult): ToolChatResult => ({ ...r, reply: truthfulDeliverableReply(r.reply, contract, deliverableCompleted), ...(contract ? { deliverable: deliverableOutcome(contract, deliverableCompleted) } : {}) })
@@ -602,7 +604,7 @@ export async function chatWithTools(
 
     if (retailAvailability) messages.push({ role: 'system', content: 'This is retail/product availability, not food discovery. Use focused web_search then read source pages, favor airport/operator/retailer official sources. Distinguish confirmed listing from current stock. For airports use the named destination, verify terminal and airside/landside access and opening hours. Ask only a missing terminal/access detail that changes the answer after researching available options. Do not substitute eateries or infer product stock, legal availability, or unrestricted walking access from OpenStreetMap. If evidence is incomplete say exactly what was verified and what remains unknown; no invented shop or stock claim.' })
     if (contract) await opts.onStage?.('context', `deliverable:${contract.kind}`)
-    if (contract) messages.push({ role: 'system', content: contractNote(contract) })
+    if (contract) messages.push({ role: 'system', content: contractNote(contract) + '\n' + SOURCE_BINDING_NOTE })
     if (mapArtifact) messages.push({ role: 'system', content: MAP_ARTIFACT_NOTE })
     let placesMismatch: string | null = null
     let independentTool = false
@@ -712,7 +714,15 @@ export async function chatWithTools(
                 try {
                     await opts.onStage?.('tool', call.function.name)
                     await assertAccountActive(ctx.userId,ctx.chatGuid)
-                    const input = JSON.parse(call.function.arguments || '{}') as unknown
+                    let input = JSON.parse(call.function.arguments || '{}') as unknown
+                    if (call.function.name === 'create_file') {
+                        const bound = bindFileSources(input, sourceRecords, Boolean(contract) && sourceRecords.size() > 0)
+                        if ('error' in bound) {
+                            messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({error:bound.error}) })
+                            continue
+                        }
+                        input = bound.input
+                    }
                     const pageError = call.function.name === 'create_file' ? (deliverablePageError(contract, input, [...mapSources, ...foundSources.map(s => s.url)]) ?? weeklyPageError(input, currentRequest, foundSources.map(s => s.url))) : null
                     if (pageError) {
                         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: pageError }) })
@@ -732,7 +742,8 @@ export async function chatWithTools(
                             })])
                         } finally { if (timer) clearTimeout(timer) }
                     })
-                    content = JSON.stringify(result.success ? result.data ?? {} : { error: result.error ?? 'tool failed' })
+                    const captured = result.success ? sourceRecords.capture(call.function.name, result.data, new Date().toISOString()) : []
+                    content = JSON.stringify(result.success ? (captured.length ? {result: result.data, source_records:captured} : result.data ?? {}) : { error: result.error ?? 'tool failed' })
                     if (result.success && call.function.name === 'create_file') deliverableCompleted = true
                     if (result.success && call.function.name === 'web_fetch') mapResearchRead = true
                     if (result.success && call.function.name === 'find_places') placesMismatch = unmatchedPlacesReply(result.data)
