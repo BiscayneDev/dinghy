@@ -247,7 +247,7 @@ const WX_SKY: Record<string, [string, string]> = {
  * keeps the sunrise band. Decorative: the same numbers sit in the page below, so it is hidden from screen readers.
  */
 export function pageHero(blocks: Seg[]): string | null {
-    const first = blocks.find((b) => ['stay', 'route', 'scores', 'weather'].includes(b.name))
+    const first = blocks.find((b) => ['stay', 'route', 'scores', 'weather', 'media'].includes(b.name))
     if (!first) return null
     const lead = blocks.find((b) => b.name === 'lead')
     const leadPick = (lead?.lines.map(cells).find((c) => c[0]?.toLowerCase() === 'pick')?.[1] ?? '').toLowerCase()
@@ -271,6 +271,16 @@ export function pageHero(blocks: Seg[]): string | null {
         const path = 'M60 250C180 235 240 150 330 144S470 175 540 90 640 52 670 46'
         const svg = `<svg viewBox="0 0 720 340" preserveAspectRatio="xMidYMid slice"><path d="${path}" stroke="rgba(240,138,104,.3)" stroke-width="16" fill="none" stroke-linecap="round"/><path d="${path}" stroke="#F08A68" stroke-width="5" fill="none" stroke-linecap="round" stroke-dasharray="1 13"/><circle cx="60" cy="250" r="12" fill="#fff"/><circle cx="60" cy="250" r="5" fill="#0E1A33"/><circle cx="670" cy="46" r="14" fill="#F08A68"/><circle cx="670" cy="46" r="5" fill="#fff"/></svg>`
         return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(160deg,#16305A,#0E1A33)">${svg}<div class="hero-in"><span class="hero-k">${esc([...new Set(r.legs.map((l) => l[2]).filter(Boolean))].join(' + ') || 'Route')}</span><span class="hero-n">${esc(r.eta)}</span></div></div>`
+    }
+    if (first.name === 'media') {
+        const mrows = first.lines.map(cells).filter((c) => c[0])
+        const mp = mrows.find((c) => leadPick && c[0].toLowerCase() === leadPick)
+        const m = mp ?? mrows[0]
+        if (!m) return null
+        const mk = /book|game/i.test(m[1] ?? '') ? (m[1] as string).toLowerCase() : 'movie'
+        const mi = img(m[6])
+        const mbg = `linear-gradient(160deg,${hsl(hue(m[0]), 26, 24)},${hsl((hue(m[0]) + 30) % 360, 30, 42)})`
+        return `<div class="band hero hero-stay" style="background:${mbg}">${mi ? `<img src="${esc(mi)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${esc(mp ? `Pick · ${mk}` : mk)}</span><span class="hero-n hero-title">${esc(m[0].slice(0, 60))}</span></div></div>`
     }
     const rows = first.lines.map(cells).filter((c) => c[0])
     const picked = rows.find((c) => leadPick && c[0].toLowerCase() === leadPick)
