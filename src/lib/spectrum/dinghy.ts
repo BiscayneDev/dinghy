@@ -1,3 +1,4 @@
+import { isRetailAvailability } from '@/lib/places/intent'
 import { weeklyPageError } from '@/lib/files/weekly-standard'
 import { unmatchedPlacesReply } from '@/lib/places/intent'
 import { needsFileRepair } from '@/lib/files/reply'
@@ -569,6 +570,9 @@ export async function chatWithTools(
     tools: Tool[],
     ctx: UserContext
 ): Promise<ToolChatResult> {
+    const currentRetailRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
+    const retailAvailability = isRetailAvailability(currentRetailRequest)
+    if (retailAvailability) tools = tools.filter(t => t.name !== 'find_places')
     const defsNow = () => tools.map((t) => ({
         type: 'function' as const,
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
@@ -587,6 +591,7 @@ export async function chatWithTools(
     ]
     messages = withVolatileNote(messages, [opts.volatile, opts.interviewLine].filter(Boolean).join('\n\n')) as Record<string, unknown>[]
 
+    if (retailAvailability) messages.push({ role: 'system', content: 'This is retail/product availability, not food discovery. Use focused web_search then read source pages, favor airport/operator/retailer official sources. Distinguish confirmed listing from current stock. For airports use the named destination, verify terminal and airside/landside access and opening hours. Ask only a missing terminal/access detail that changes the answer after researching available options. Do not substitute eateries or infer product stock, legal availability, or unrestricted walking access from OpenStreetMap. If evidence is incomplete say exactly what was verified and what remains unknown; no invented shop or stock claim.' })
     let placesMismatch: string | null = null
     let independentTool = false
     let toolCallCount = 0
@@ -625,6 +630,7 @@ export async function chatWithTools(
             messages.push({ role: 'system', content: RESEARCH_FINISH })
         }
         const toolDefs = defsNow()
+        const forceTool = retailAvailability ? 'web_search' : opts.forceTool
         const offered = completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const t0 = Date.now()
         // Bound a post-search generation, not tools or actions. Preserve honest
@@ -641,7 +647,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : iteration === 1 && opts.forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(opts.forceTool)) && offered.some((t) => t.function.name === opts.forceTool) ? { tool_choice: { type: 'function', function: { name: opts.forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : iteration === 1 && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
