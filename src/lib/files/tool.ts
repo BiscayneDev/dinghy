@@ -147,8 +147,11 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
     const imagery: ImageryState = {page:'fallback',chat:'fallback',share:'fallback',metadata:await optionalWithin(verifyShareMetadata(hosted,fallbackImage,input.title),2700,false)?'verified':'unverified',reason:photosOk?'decoration_pending':'privacy_gate'}
     if(imagery.metadata==='unverified'&&photosOk)imagery.reason='metadata_unverified'
     const previews: {og:Omit<PreviewResult,'bytes'>;chat:Omit<PreviewResult,'bytes'>} = {og:{route:'static_link',...(photosOk?{}:{reason:'privacy_gate' as const})},chat:{route:'static_link',...(photosOk?{}:{reason:'privacy_gate' as const})}}
+    // The content is already published. Chat rendering uses only bundled fonts
+    // and local data images, never remote photos or title-bearing URLs. This
+    // must stay separate from the external imagery/privacy gate.
     const prepareChat=async()=>{
-        const chat=await optionalWithin(renderSurfacePreview(input,'chat',[],photosOk),1500,{bytes:null,route:'static_link' as const,reason:'renderer_error' as const})
+        const chat=await optionalWithin(renderSurfacePreview(input,'chat',[],true),1500,{bytes:null,route:'static_link' as const,reason:'renderer_error' as const})
         imagery.chat=chat.bytes?'ready':'fallback';previews.chat={route:chat.route,...(chat.reason?{reason:chat.reason}:{})};return chat.bytes
     }
     let enriched=false
