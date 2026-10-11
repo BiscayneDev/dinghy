@@ -73,4 +73,4 @@ export function gateTools(tools: Tool[], texts: string[]): Gated {
     }
     active.push(more)
     return { active, withheld: names }
-}
+    }
