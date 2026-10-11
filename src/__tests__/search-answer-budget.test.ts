@@ -6,7 +6,7 @@ const ctx = { userId: 'u', telegramId: 0, telegramChatId: 0, name: 'A', timezone
 const opts = { gatewayUrl: 'https://gateway.test', apiKey: 'test', model: 'test' }
 const answer = '1. A - verified option\n2. B - verified option\n3. C - verified option'
 function tool(name: string, success = true): Tool { return { name, description: name, inputSchema: {}, execute: vi.fn(async () => ({ success, data: { results: [{ url: 'https://venue.test/menu' }] }, error: success ? undefined : 'unavailable' })) } }
-function response(name?: string, reply = 'Done.') { return new Response(JSON.stringify({ choices: [{ finish_reason: name ? 'tool_calls' : 'stop', message: name ? { content: null, tool_calls: [{ id: Math.random().toString(), function: { name, arguments: name === 'create_file' ? JSON.stringify({title:'Fictional comparison',body:':::options\nHarbor | unknown | dinner | stock unknown\nPark | unknown | dinner | access unknown\n:::'}) : '{}' } }] } : { content: reply } }] })) }
+function response(name?: string, reply = 'Done.', bound = true) { return new Response(JSON.stringify({ choices: [{ finish_reason: name ? 'tool_calls' : 'stop', message: name ? { content: null, tool_calls: [{ id: Math.random().toString(), function: { name, arguments: name === 'create_file' ? JSON.stringify({title:'Fictional comparison',body:':::options\nHarbor | unknown | dinner | stock unknown\nPark | unknown | dinner | access unknown\n:::\n:::sources\nMenu | '+(bound ? '{{source:src1.url}}' : 'https://venue.test/menu')+' | date unknown\n:::'}) : '{}' } }] } : { content: reply } }] })) }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers() })
 describe('research completion headroom', () => {
   it('stops repeated search with time left for page creation and keeps returned evidence', async () => {
@@ -74,14 +74,14 @@ describe('post-search gateway rescue', () => {
 describe('answer page retry', () => {
   it('retries a long list once using the same evidence, then accepts the page result', async () => {
     const file = tool('create_file'); const bodies: any[] = []
-    vi.stubGlobal('fetch', vi.fn(async (_url, init) => { bodies.push(JSON.parse(init.body)); return bodies.length === 1 ? response(undefined, answer) : bodies.length === 2 ? response('create_file') : response() }))
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => { bodies.push(JSON.parse(init.body)); return bodies.length === 1 ? response(undefined, answer) : bodies.length === 2 ? response('create_file','Done.',false) : response() }))
     const r = await chatWithTools([{ role: 'user', content: 'Plan dinner' }], opts, [file], ctx)
     expect(file.execute).toHaveBeenCalledOnce(); expect(r.reply).toBe('Here you go.')
     expect(JSON.stringify(bodies[1].messages)).toContain('no page was made')
   })
   it('does not retry hosting after a failed attempt or start a retry near the deadline', async () => {
     const file = tool('create_file', false); let n = 0
-    vi.stubGlobal('fetch', vi.fn(async () => ++n === 1 ? response('create_file') : response(undefined, answer)))
+    vi.stubGlobal('fetch', vi.fn(async () => ++n === 1 ? response('create_file','Done.',false) : response(undefined, answer)))
     await chatWithTools([{ role: 'user', content: 'Plan' }], opts, [file], ctx)
     expect(file.execute).toHaveBeenCalledOnce(); expect(n).toBe(2)
     n = 0
