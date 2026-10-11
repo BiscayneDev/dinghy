@@ -172,7 +172,7 @@ describe('bounded required read fallback',()=>{
   expect(stage).toHaveBeenCalledWith('tool','research:read_failure:http');expect(stage).toHaveBeenCalledWith('tool','research:read_failure:network');expect(JSON.stringify(stage.mock.calls)).not.toContain('private raw')
  })
  it('stops at six actual URLs with no recommendation from search snippets',async()=>{
-  const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async()=>({success:false,publicReadFailure:'timeout' as const,error:'raw'}))};harness([call('web_search')])
+  const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async(_input:any)=>({success:false,publicReadFailure:'timeout' as const,error:'raw'}))};harness([call('web_search')])
   const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search(),read,file],ctx)
   expect(read.execute.mock.calls.map(c=>(c[0] as any).url)).toEqual(urls.slice(0,6));expect(file.execute).not.toHaveBeenCalled();expect(result.deliverable?.state).toBe('unfulfilled');expect(stage).toHaveBeenCalledWith('tool','research:read_failure:timeout')
  })
