@@ -1,6 +1,6 @@
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
-import { SourceRecords, bindFileSources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
+import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
 import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
 import { mapSourceUrls, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
@@ -809,6 +809,11 @@ export async function chatWithTools(
                             continue
                         }
                         input = bound.input
+                        if(contract?.kind==='itinerary'&&itineraryResearch){
+                            const compiled=compileItinerarySources(input,bound.usedSources,[...mapSources,...foundSources.map(s=>s.url)])
+                            if('error' in compiled){validationFailures++;fileValidationPending=true;if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: use only returned source registry bindings, do not invent source URLs.'})}await opts.onStage?.('tool','invalid:itinerary_shape:source_rows');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:compiled.error})});continue}
+                            input=compiled.input;await opts.onStage?.('tool','itinerary:sources_compiled')
+                        }
                     }
                     const pageError = call.function.name === 'create_file' ? (deliverablePageError(contract, input, [...mapSources, ...foundSources.map(s => s.url)]) ?? weeklyPageError(input, currentRequest, foundSources.map(s => s.url))) : null
                     if (pageError) {
@@ -901,4 +906,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+                  }

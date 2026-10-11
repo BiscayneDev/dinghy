@@ -187,7 +187,7 @@ export function fileToolsFor(): FileToolset {
         description:
             'Make a polished document for the user: plans, itineraries, schedules, notes, checklists, summaries, tables. ' +
             'Write the body in Markdown (## headings, - lists, | tables |, > callouts). A list item starting with a time like "09:00" becomes a schedule row. ' +
-            ITINERARY_DAY_HEADING_NOTE+' ' +
+            ITINERARY_DAY_HEADING_NOTE+' The server builds itinerary source rows from bound source_records; do not transcribe a :::sources block or URLs. Use source bindings for the facts and links you use. ' +
             'By default it becomes a file link (a here.now page with a pdf download on it) that opens with one tap, no code; the link is sent right after your reply. ' +
             'Set attach=true only when they want the file itself in the chat (a pdf to print or forward as a file). docx (to edit in Word), csv and md always arrive as attachments. ' +
             'The link is private unless they forward it: anyone they send it to can open it too. It expires after 7 days; asking again later makes a fresh link. ' +
