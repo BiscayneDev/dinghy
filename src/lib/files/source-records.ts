@@ -78,7 +78,7 @@ export function sourceBindingErrorCode(error:string):string {
 function literal(value: string): string {
     return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()!#|:]/g, c => `&#${c.charCodeAt(0)};`).replace(/[\r\n]/g, ' ')
 }
-export const SOURCE_BINDING_NOTE = 'Source-bound file values: successful web reads return immutable source_records with IDs. In create_file title/subtitle/body use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or {{source:src1.content:START:END}}. START/END are exact character offsets, at most 500 characters; the server inserts the original source text, never your rewritten copy. Use these bindings for names, terminals, hours, prices, dates and links when supported. Source titles are page titles, not venue names. Search content is a snippet, not a verified page. Missing values stay unknown. Do not promote a directory listing into current stock, a terminal into a verified walking route, or source-reported text into independent verification. Pick and explain separately from bound facts. A researched deliverable needs source bindings; never invent IDs or substitute guessed values. The server appends provenance for every used source.'
+export const SOURCE_BINDING_NOTE = 'Never bind a null/absent field. Check available_fields in each source_record; write unknown for missing dates/titles/content. For researched itineraries omit :::sources and any sources argument; the server adds them. Source-bound file values: successful web reads return immutable source_records with IDs. In create_file title/subtitle/body use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or {{source:src1.content:START:END}}. START/END are exact character offsets, at most 500 characters; the server inserts the original source text, never your rewritten copy. Use these bindings for names, terminals, hours, prices, dates and links when supported. Source titles are page titles, not venue names. Search content is a snippet, not a verified page. Missing values stay unknown. Do not promote a directory listing into current stock, a terminal into a verified walking route, or source-reported text into independent verification. Pick and explain separately from bound facts. A researched deliverable needs source bindings; never invent IDs or substitute guessed values. The server appends provenance for every used source.'
 
 export function bindFileSources(input: unknown, records: SourceRecords, required = false): { input: unknown; count: number; usedSources: SourceRecord[] } | { error: string } {
     if (!input || typeof input !== 'object') return { error: 'File input required.' }
@@ -129,7 +129,7 @@ export function sourceResultEnvelope(records: SourceRecord[], maxChars=4000): st
     const shown: unknown[]=[]
     const envelope=()=>JSON.stringify({source_records:shown,note:'Literal content prefixes only; offsets address the original source. Unknown fields stay unknown.',omitted_sources:records.length-shown.length})
     for(const r of records){
-        const item={...r,title:r.title?.slice(0,160)??null,content:r.content?.slice(0,1000)??null,content_length:r.content?.length??0,content_truncated:Boolean(r.content&&r.content.length>1000)}
+        const item={...r,available_fields:fields.filter(f=>r[f]!==null),title:r.title?.slice(0,160)??null,content:r.content?.slice(0,1000)??null,content_length:r.content?.length??0,content_truncated:Boolean(r.content&&r.content.length>1000)}
         shown.push(item)
         if(envelope().length>maxChars)shown.pop()
     }
@@ -149,4 +149,4 @@ export function compileItinerarySources(input:unknown,used:SourceRecord[],observ
  if(/(?:^|\n)[ \t]*:::sources\b/i.test(clean))return {error:'Itinerary recommendations require observed source links in :::sources. Malformed explicit sources block; no file was published.'}
  const rows=[...new Map(used.map(r=>[r.url,r])).values()].map(r=>`${literal(r.title??'Source').replace(/\|/g,'&#124;')} | ${r.url} | ${r.origin==='search'?'search snippet':'page text'}; checked ${literal(r.checked_at)}; source date ${literal(r.published_date??'unknown')}`)
  return {input:{...i,body:clean.trimEnd()+'\n\n:::sources\n'+rows.join('\n')+'\n:::'}}
-                                                       }
+}
