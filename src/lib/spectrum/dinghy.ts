@@ -860,7 +860,7 @@ export async function chatWithTools(
                         } finally { if (timer) clearTimeout(timer) }
                     })
                     const captured = result.success ? sourceRecords.capture(call.function.name, result.data, new Date().toISOString()) : []
-                    content = captured.length ? sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP) : JSON.stringify(result.success ? result.data ?? {} : {error:result.error??'tool failed'})
+                    content = captured.length ? (itineraryResearch&&call.function.name==='web_search' ? JSON.stringify({search_leads:captured.map(r=>({url:r.url,title:r.title,content:r.content?.slice(0,600)??null})),note:'Search leads only. No candidate source IDs here. Read selected URLs with web_fetch; use only the source_records IDs from successful page reads for itinerary_candidates.'}) : sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)) : JSON.stringify(result.success ? result.data ?? {} : {error:result.error??'tool failed'})
                     if (result.success && call.function.name === 'create_file') deliverableCompleted = true
                     if(call.function.name==='web_search')await opts.onStage?.('tool',result.success?'research:search_ok':'research:search_failed')
                     if (result.success && call.function.name === 'web_fetch') mapResearchRead = !itineraryResearch||captured.some(r=>Boolean(r.content))
@@ -930,4 +930,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                                                }
+}
