@@ -119,3 +119,22 @@ it('publishes source-linked structured itinerary when the model omits literal bi
  const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage},[search,read,file],ctx)
  expect(file.execute).toHaveBeenCalledTimes(1);expect(onStage).toHaveBeenCalledWith('tool','binding:observed_links');expect(result.deliverable?.state).toBe('completed')
 })
+
+import {itineraryShapeErrorCode} from '@/lib/files/itinerary-contract'
+it('records safe finite shape codes without retaining user body or raw errors',()=>{
+ expect(itineraryShapeErrorCode('Itinerary contract: organize by day')).toBe('day_sections')
+ expect(itineraryShapeErrorCode('Itinerary recommendations require observed source links')).toBe('source_rows')
+ expect(itineraryShapeErrorCode('Use a supported :::stay hotel row')).toBe('stay_rows')
+ expect(itineraryShapeErrorCode('Use :::options rows')).toBe('options_rows')
+ expect(itineraryShapeErrorCode('Preserve the requested working sessions')).toBe('working_sessions')
+ expect(itineraryShapeErrorCode('private unexpected text')).toBe('other')
+})
+it('offers only create_file on the bounded itinerary repair and keeps research unexecuted if the gateway ignores it',async()=>{
+ const file=tool('create_file'),search=tool('web_search',{results:[{title:'Harbor public guide',url,content:'lead'}]}),read=tool('web_fetch',{title:'Harbor public guide',url,content:'public guide'}),stage=vi.fn(async()=>{})
+ const bad=body.replace(/:::stay[\s\S]*?:::/,'Hotel unknown')
+ const req=harness([call('web_search'),call('create_file',{title:'Synthetic',body:bad}),call('web_fetch',{url}),stop()])
+ const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search,read,file],ctx)
+ expect(req[2].tools.map((t:any)=>t.function.name)).toEqual(['create_file'])
+ expect(stage).toHaveBeenCalledWith('tool','invalid:itinerary_shape:stay_rows')
+ expect(read.execute).toHaveBeenCalledTimes(1);expect(file.execute).not.toHaveBeenCalled();expect(result.deliverable?.state).toBe('unfulfilled')
+})
