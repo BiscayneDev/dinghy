@@ -1,4 +1,5 @@
-import { renderDocumentOg } from '@/lib/brand/document-og'
+import { renderSurfacePreview, type PreviewResult } from '@/lib/brand/surface-preview'
+import { surfacePlan } from './surface-contract'
 import { isFoodDrinkQuery } from '@/lib/places/intent'
 /**
  * create_file: Dinghy makes a real document and hands it to the user.
@@ -24,7 +25,6 @@ import { createServerClient } from '@/lib/supabase/server'
 import type { Tool, ToolResult, UserContext } from '@/lib/llm/types'
 import { renderFile, renderHtml, type DinghyDoc, type FileFormat, type RenderedFile } from './render'
 import { attachPhotos, type Photo } from './photos'
-import { renderHeroOg, renderKindCard } from '@/lib/brand/kind-card'
 import { publishSite, revokeSite, shareEnabled, updateSite, type PublishedSite, type SiteFile } from './share'
 import { findFile, rememberFile } from '@/lib/spectrum/plans'
 import { geocodeCached, nearbyEateries, keywords, toPlaces, zoneAt, anchorConfident, looksLikeStreetAddress, geocoderIsPrivate, BudgetUnavailable } from '@/lib/places/osm'
@@ -146,7 +146,7 @@ async function addOgTag(hosted: HostedFile, files: SiteFile[], doc: DinghyDoc, c
     }
 }
 
-async function host(input: DinghyDoc, format: FileFormat, userId: string, replyLine?: string, photosOk = false, signal?: AbortSignal): Promise<{ hosted: HostedFile; pdf: RenderedFile | null; enrich: () => Promise<Buffer | null> }> {
+async function host(input: DinghyDoc, format: FileFormat, userId: string, replyLine?: string, photosOk = false, signal?: AbortSignal): Promise<{ hosted: HostedFile; pdf: RenderedFile | null; enrich: () => Promise<Buffer | null>; previews: {og:Omit<PreviewResult,'bytes'>;chat?:Omit<PreviewResult,'bytes'>} }> {
     // Free credited photos, only on a clean turn, never longer than 12s in total. A miss keeps the colour card.
     const found = await Promise.race([
         attachPhotos(input.body, { allowed: photosOk }),
@@ -163,14 +163,18 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
     if (pdf) files.push({ path: pdf.filename, bytes: pdf.bytes, contentType: pdf.mimeType })
     for (const p of found.photos) files.push({ path: p.path, bytes: p.bytes, contentType: p.contentType })
     // Share image from the page's own hero, inside the private site. Clean turns only; a miss keeps today's image.
-    const og = photosOk ? (await renderHeroOg(doc, found.photos).catch(() => null) ?? await renderDocumentOg(doc).catch(() => null)) : null
+    const ogResult = await renderSurfacePreview(doc, 'og', found.photos, photosOk)
+    const og = ogResult.bytes
     if (og) files.push({ path: 'og.png', bytes: og, contentType: 'image/png' })
     signal?.throwIfAborted()
     const hosted = await publishSite(files, { title: doc.title, userId })
     // Publication is settled before optional site/card enrichment.
-    return { hosted, pdf, enrich: async () => {
+    const previews: {og:Omit<PreviewResult,'bytes'>;chat?:Omit<PreviewResult,'bytes'>} = {og:{route:ogResult.route,...(ogResult.reason?{reason:ogResult.reason}:{})}}
+    return { hosted, pdf, previews, enrich: async () => {
         if (og) await addOgTag(hosted, files, doc, { format, userId, replyLine, pdf })
-        return photosOk ? renderKindCard({ title: doc.title, subtitle: doc.subtitle, body: doc.body }, found.photos).catch(() => null) : null
+        const chat = await renderSurfacePreview(doc, 'chat', found.photos, photosOk)
+        previews.chat = {route:chat.route,...(chat.reason?{reason:chat.reason}:{})}
+        return chat.bytes
     } }
 }
 
@@ -208,7 +212,7 @@ export function fileToolsFor(): FileToolset {
             let hostError: string | undefined
             if (wantsPage && shareEnabled()) {
                 try {
-                    const { hosted, pdf, enrich } = await host(parsed.doc, parsed.format, ctx.userId, await replyLineFor(ctx.chatGuid), ctx.photosOk === true, ctx.signal)
+                    const { hosted, pdf, enrich, previews } = await host(parsed.doc, parsed.format, ctx.userId, await replyLineFor(ctx.chatGuid), ctx.photosOk === true, ctx.signal)
                     const file = pdf ?? (await renderFile(parsed.doc, 'html'))
                     const entry: MadeFile = { ...file, format: parsed.format, kind, title: parsed.doc.title, subtitle: parsed.doc.subtitle, link: null, hosted, markdown: parsed.doc.body }
                     await remember(ctx, entry)
@@ -221,6 +225,7 @@ export function fileToolsFor(): FileToolset {
                         data: {
                             status: 'queued_for_delivery',
                             delivery: 'file_link',
+                            surfaces: {types:surfacePlan(parsed.doc.body).types,unknown:surfacePlan(parsed.doc.body).unknown,previews},
                             expires: shortDate(hosted.expiresAt),
                             note: 'The app sends the new link immediately after your assistant message, without waiting for the user. Never reuse a link from history. Give a short verdict, not a delivery promise or link.',
                         },

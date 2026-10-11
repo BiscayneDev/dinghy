@@ -7,20 +7,20 @@ type Doc = { title: string; subtitle?: string; body: string }
 const supportedCard = ['weather', 'scores', 'stay', 'route', 'media', 'briefing']
 const clean = (s: string) => s.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[*_`<>]/g, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim()
 const clip = (s: string, n: number) => { const t = clean(s); return t.length > n ? `${t.slice(0, n - 3).trim()}...` : t }
-/** Plain pages only. Structured content keeps its own renderer, including the
- * media hero work. Read section names, never generate claims or stock photos. */
-export function documentOgContent(doc: Doc): { title: string; subtitle: string; headings: string[] } | null {
-    if (splitBlocks(doc.body).some(s => s.kind === 'block' && supportedCard.includes(s.name))) return null
+/** Default callers preserve specialized rendering. The explicit surface fallback
+ * may summarize structured section names, never generate claims or stock photos. */
+export function documentOgContent(doc: Doc, allowStructured = false): { title: string; subtitle: string; headings: string[] } | null {
+    if (!allowStructured && splitBlocks(doc.body).some(s => s.kind === 'block' && supportedCard.includes(s.name))) return null
     const headings = [...new Set(doc.body.split('\n').filter(line => /^#{1,3}\s/.test(line)).map(line => clean(line.replace(/^#{1,3}\s+/, ''))).filter(s => s && s !== clean(doc.title)))]
-    const content = { title: clip(doc.title, 100), subtitle: clip(doc.subtitle ?? '', 130), headings: headings.slice(0, 3).map(s => clip(s, 75)) }
+    const content = { title: clip(doc.title, 100), subtitle: clip(doc.subtitle ?? '', 130), headings: (headings.length ? headings : allowStructured ? [...new Set(splitBlocks(doc.body).filter(s=>s.kind==='block').map(s=>s.kind==='block'?s.name:''))] : []).slice(0, 3).map(s => clip(s, 75)) }
     // Bundled fonts only. Unsupported scripts keep the existing fallback, no
     // network font lookup carrying page text to another service.
     if (/[^\u0000-\u024F\u2010-\u2027\u20AC\u2122]/u.test([content.title, content.subtitle, ...content.headings].join(' '))) return null
     return content.title ? content : null
 }
 const data = (base64: string): ArrayBuffer => { const b = Buffer.from(base64, 'base64'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer }
-export async function renderDocumentOg(doc: Doc): Promise<Buffer | null> {
-    const c = documentOgContent(doc)
+export async function renderDocumentOg(doc: Doc, allowStructured = false): Promise<Buffer | null> {
+    const c = documentOgContent(doc, allowStructured)
     if (!c) return null
     const res = new ImageResponse(
         <div style={{display:'flex',width:1200,height:630,background:'#FBF6EE',color:'#0E1A33',padding:'46px 62px',flexDirection:'column'}}>

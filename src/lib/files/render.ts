@@ -156,7 +156,9 @@ function tokens(md: string): Token[] {
 // ── Components: ":::name" blocks ─────────────────────────────────────────────
 // The model writes plain Markdown; our code draws the components. Unknown block
 // names are left as ordinary text. Blocks never contain raw HTML (all escaped).
-const BLOCK_NAMES = ['facts', 'cost', 'heads-up', 'place', 'places', 'reply', 'options', 'sources', ...KIND_BLOCKS] as const
+export const BASE_BLOCKS = ['facts', 'cost', 'heads-up', 'place', 'places', 'reply', 'options', 'sources'] as const
+export const BLOCK_NAMES = [...BASE_BLOCKS, ...KIND_BLOCKS] as const
+const BLOCK_OPEN = new RegExp(`^\\s*:::\\s*(${BLOCK_NAMES.join('|')})\\s*$`, 'i')
 type BlockName = (typeof BLOCK_NAMES)[number]
 type Segment = { kind: 'md'; text: string } | { kind: 'block'; name: BlockName; lines: string[] }
 
@@ -169,7 +171,7 @@ export function splitBlocks(md: string): Segment[] {
     }
     const lines = (md ?? '').split('\n')
     for (let i = 0; i < lines.length; i++) {
-        const open = lines[i].match(/^\s*:::\s*(facts|cost|heads-up|places|place|reply|options|sources|weather|scores|media|stay|route|briefing|gallery|lead|checks)\s*$/i)
+        const open = lines[i].match(BLOCK_OPEN)
         if (open) {
             const end = lines.findIndex((l, j) => j > i && /^\s*:::\s*$/.test(l))
             if (end > i) {
