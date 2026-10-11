@@ -1,4 +1,5 @@
-import { mapArtifactTurn, mapSourceUrls, mapPageError, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
+import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
+import { mapSourceUrls, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
 import { weeklyPageError } from '@/lib/files/weekly-standard'
 import { unmatchedPlacesReply } from '@/lib/places/intent'
@@ -501,6 +502,7 @@ export interface ToolChatResult {
     iterations: number
     /** The turn read Google data (or started with it): save its reply tagged google_derived. */
     tainted?: boolean
+    deliverable?: ReturnType<typeof deliverableOutcome>
 }
 
 /**
@@ -572,7 +574,10 @@ export async function chatWithTools(
     ctx: UserContext
 ): Promise<ToolChatResult> {
     const currentRetailRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
-    const mapArtifact = mapArtifactTurn(history)
+    const contract = selectDeliverable(history)
+    const mapArtifact = contract?.kind === 'map'
+    let deliverableCompleted = false
+    const finish = (r: ToolChatResult): ToolChatResult => ({ ...r, reply: truthfulDeliverableReply(r.reply, contract, deliverableCompleted), ...(contract ? { deliverable: deliverableOutcome(contract, deliverableCompleted) } : {}) })
     const mapSources = mapArtifact ? mapSourceUrls(history) : []
     let mapResearchRead = false
     const retailAvailability = !mapArtifact && isRetailAvailability(currentRetailRequest)
@@ -596,6 +601,8 @@ export async function chatWithTools(
     messages = withVolatileNote(messages, [opts.volatile, opts.interviewLine].filter(Boolean).join('\n\n')) as Record<string, unknown>[]
 
     if (retailAvailability) messages.push({ role: 'system', content: 'This is retail/product availability, not food discovery. Use focused web_search then read source pages, favor airport/operator/retailer official sources. Distinguish confirmed listing from current stock. For airports use the named destination, verify terminal and airside/landside access and opening hours. Ask only a missing terminal/access detail that changes the answer after researching available options. Do not substitute eateries or infer product stock, legal availability, or unrestricted walking access from OpenStreetMap. If evidence is incomplete say exactly what was verified and what remains unknown; no invented shop or stock claim.' })
+    if (contract) await opts.onStage?.('context', `deliverable:${contract.kind}`)
+    if (contract) messages.push({ role: 'system', content: contractNote(contract) })
     if (mapArtifact) messages.push({ role: 'system', content: MAP_ARTIFACT_NOTE })
     let placesMismatch: string | null = null
     let independentTool = false
@@ -660,7 +667,7 @@ export async function chatWithTools(
           if (!(err instanceof TurnDeadlineExceeded) || !rescueEligible) throw err
           await opts.onStage?.('reply_ready', 'source_partial_gateway_timeout')
           const links = foundSources.slice(0, 3).map(s => `${s.title || 'Source'}: ${s.url}`).join('\n')
-          return { reply: `The search finished, but I didn't finish checking the options. These are source links, not verified recommendations:\n${links}`, toolCalls: toolCallCount, iterations: iteration, tainted }
+          return finish({ reply: `The search finished, but I didn't finish checking the options. These are source links, not verified recommendations:\n${links}`, toolCalls: toolCallCount, iterations: iteration, tainted })
         }
         if (!res.ok) {
             await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), 'http_error', t0, res))
@@ -680,13 +687,13 @@ export async function chatWithTools(
 
         if (choice?.finish_reason !== 'tool_calls' || calls.length === 0) {
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
-            if (!pageRetry && !pageAttempted && tools.some((t) => t.name === 'create_file') && (mapArtifact || needsAnswerPage(reply) || needsFileRepair(reply)) && iteration < MAX_TOOL_ITERATIONS && (opts.deadlineAt === undefined || opts.deadlineAt - Date.now() >= 20_000)) {
+            if (!pageRetry && !pageAttempted && tools.some((t) => t.name === 'create_file') && (contract || needsAnswerPage(reply) || needsFileRepair(reply)) && iteration < MAX_TOOL_ITERATIONS && (opts.deadlineAt === undefined || opts.deadlineAt - Date.now() >= 20_000)) {
                 pageRetry = true
                 completionMode = !mapArtifact || mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
                 messages.push({ role: 'assistant', content: reply }, { role: 'system', content: needsFileRepair(reply) ? 'No file was created in this turn. An older URL from history is not the new document. Call create_file now with the research already gathered, then give a short verdict. Do not claim delivery without a successful file tool.' : PAGE_FINISH })
                 continue
             }
-            return { reply, toolCalls: toolCallCount, iterations: iteration, tainted }
+            return finish({ reply, toolCalls: toolCallCount, iterations: iteration, tainted })
         }
 
         messages.push({ role: 'assistant', content: msg?.content ?? null, tool_calls: calls })
@@ -706,7 +713,7 @@ export async function chatWithTools(
                     await opts.onStage?.('tool', call.function.name)
                     await assertAccountActive(ctx.userId,ctx.chatGuid)
                     const input = JSON.parse(call.function.arguments || '{}') as unknown
-                    const pageError = call.function.name === 'create_file' ? (mapArtifact ? mapPageError(input, [...mapSources, ...foundSources.map(s => s.url)]) : weeklyPageError(input, currentRequest, foundSources.map(s => s.url))) : null
+                    const pageError = call.function.name === 'create_file' ? (deliverablePageError(contract, input, [...mapSources, ...foundSources.map(s => s.url)]) ?? weeklyPageError(input, currentRequest, foundSources.map(s => s.url))) : null
                     if (pageError) {
                         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: pageError }) })
                         continue
@@ -726,6 +733,7 @@ export async function chatWithTools(
                         } finally { if (timer) clearTimeout(timer) }
                     })
                     content = JSON.stringify(result.success ? result.data ?? {} : { error: result.error ?? 'tool failed' })
+                    if (result.success && call.function.name === 'create_file') deliverableCompleted = true
                     if (result.success && call.function.name === 'web_fetch') mapResearchRead = true
                     if (result.success && call.function.name === 'find_places') placesMismatch = unmatchedPlacesReply(result.data)
                     if (result.success && call.function.name === 'web_search') {
@@ -743,7 +751,7 @@ export async function chatWithTools(
                     if (result.success && call.function.name === 'create_file' && (completionMode || mapArtifact) && calls.length === 1) {
                         // Hosting succeeded; the transport already owns the queued link.
                         // Do not spend another slow gateway call merely announcing it.
-                        return { reply: 'Here you go.', toolCalls: toolCallCount, iterations: iteration, tainted }
+                        return finish({ reply: 'Here you go.', toolCalls: toolCallCount, iterations: iteration, tainted })
                     }
                     if (isGoogleTool(call.function.name)) {
                         tainted = true
@@ -782,10 +790,10 @@ export async function chatWithTools(
     }
     reportUsage(opts.onUsage, res, data, opts.model, Date.now() - tFinal)
     await logGatewayCall(buildCallRow(synthCtx, 'ok', tFinal, res, data))
-    return {
+    return finish({
         reply: (!independentTool ? placesMismatch : null) ?? data.choices?.[0]?.message?.content ?? '(no response)',
         toolCalls: toolCallCount,
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
-    }
+    })
 }
