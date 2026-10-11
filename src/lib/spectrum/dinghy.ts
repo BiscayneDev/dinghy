@@ -1,5 +1,5 @@
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
-import { SourceRecords, bindFileSources, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
+import { SourceRecords, bindFileSources, sourceBindingErrorCode, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
 import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
 import { mapSourceUrls, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
@@ -583,6 +583,7 @@ export async function chatWithTools(
     const finish = (r: ToolChatResult): ToolChatResult => {
         let reply=r.reply
         if(contextualResearch&&prematureResearchReply(reply))reply=mapResearchRead&&stripPermissionOffer(reply)||'The location was not verified. I have no supported route to give.'
+        if(contract&&prematureResearchReply(reply))reply=stripPermissionOffer(reply)
         return {...r,reply:truthfulDeliverableReply(reply,contract,deliverableCompleted),...(contract?{deliverable:deliverableOutcome(contract,deliverableCompleted)}:{})}
     }
     const mapSources = mapArtifact ? mapSourceUrls(history) : []
@@ -623,6 +624,8 @@ export async function chatWithTools(
     let recoveryUsed=false
     let recoveryTool:string|undefined
     let validationFailures=0
+    let fileValidationPending=false
+    let fileRepairAttempted=false
     let pageAttempted = false
     let pageRetry = false
     let completionMode = false
@@ -644,7 +647,7 @@ export async function chatWithTools(
         chatGuid: ctx.chatGuid, source: 'tool_loop', iteration, requestedModel: requestedLabel(opts.model, routingNow()), toolsOffered,
         promptChars: JSON.stringify(messages).length, privateRoute: tainted && privateRouteEnforced(), deadlineAt: opts.deadlineAt,
     })
-    for (let iteration = 1; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
+    toolLoop: for (let iteration = 1; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
         await opts.onStage?.('gateway', String(iteration))
         const remaining = opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now()
         // The production miss spent ~70s on gateway turns and ~8s searching.
@@ -655,7 +658,7 @@ export async function chatWithTools(
         }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
-        const forceTool = recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
+        const forceTool = (fileValidationPending ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
         const offered = completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const t0 = Date.now()
         // Bound a post-search generation, not tools or actions. Preserve honest
@@ -672,7 +675,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || mapArtifact || pageRetry || Boolean(recoveryTool) || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
@@ -714,6 +717,7 @@ export async function chatWithTools(
                 const links=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
                 return finish({reply:mapResearchRead?`I did not verify a route or current stock. The source links are below; an exact indoor route remains unverified.${links?'\n'+links:''}`:`The location was not verified. I have no supported route to give.${links?' These are search leads, not verified directions:\n'+links:''}`,toolCalls:toolCallCount,iterations:iteration,tainted})
             }
+            if(fileValidationPending)break toolLoop
             if (!pageRetry && !pageAttempted && tools.some((t) => t.name === 'create_file') && (contract || needsAnswerPage(reply) || needsFileRepair(reply)) && iteration < MAX_TOOL_ITERATIONS && (opts.deadlineAt === undefined || opts.deadlineAt - Date.now() >= 20_000)) {
                 pageRetry = true
                 completionMode = !mapArtifact || mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
@@ -723,6 +727,9 @@ export async function chatWithTools(
             return finish({ reply, toolCalls: toolCallCount, iterations: iteration, tainted })
         }
 
+        const correctingFile=fileValidationPending
+        let correctionCallUsed=false
+        if(correctingFile)fileRepairAttempted=true
         recoveryTool=undefined
         messages.push({ role: 'assistant', content: msg?.content ?? null, tool_calls: calls })
         for (const call of calls) {
@@ -730,7 +737,7 @@ export async function chatWithTools(
             if (call.function.name !== 'find_places') independentTool = true
             const tool = tools.find((t) => t.name === call.function.name)
             let content: string
-            if (completionMode && (call.function.name === 'web_search' || (pageAttempted && call.function.name === 'create_file'))) {
+            if ((fileRepairAttempted&&pageAttempted&&call.function.name==='create_file') || completionMode && (call.function.name === 'web_search' || (pageAttempted && call.function.name === 'create_file'))) {
                 content = JSON.stringify({ error: 'Research budget is complete. Use the sources already returned; finish the answer or create_file. This tool was not run.' })
             } else if (!tool) {
                 content = JSON.stringify({ error: `unknown tool ${call.function.name}` })
@@ -741,26 +748,30 @@ export async function chatWithTools(
                     await opts.onStage?.('tool', call.function.name)
                     await assertAccountActive(ctx.userId,ctx.chatGuid)
                     if(validationFailures>=2&&['web_search','web_fetch','create_file'].includes(call.function.name)){content=JSON.stringify({error:'The single validation repair is exhausted. This tool was not run. Give the supported result and exact gap.'});messages.push({role:'tool',tool_call_id:call.id,content});continue}
+                    if(correctingFile){
+                        if(correctionCallUsed||call.function.name!=='create_file'){content=JSON.stringify({error:'Correct only the failed file call once. This tool was not run.'});messages.push({role:'tool',tool_call_id:call.id,content});continue}
+                        correctionCallUsed=true;await opts.onStage?.('tool','repair:file_once')
+                    }
                     let input:unknown
-                    try{input=JSON.parse(call.function.arguments||'{}')}catch{validationFailures++;await opts.onStage?.('tool','invalid:arguments_json');throw new Error('Invalid JSON arguments; return one corrected tool call.')}
+                    try{input=JSON.parse(call.function.arguments||'{}')}catch{validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool','invalid:arguments_json');throw new Error('Invalid JSON arguments; return one corrected tool call.')}
                     const schemaError=inputSchemaError(input,tool.inputSchema)
-                    if(schemaError){validationFailures++;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
+                    if(schemaError){validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
                     if (call.function.name === 'create_file') {
                         const bound = bindFileSources(input, sourceRecords, Boolean(contract) && sourceRecords.size() > 0)
                         if ('error' in bound) {
-                            validationFailures++;await opts.onStage?.('tool','invalid:source_binding');if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: correct the source binding from the returned registry, do not invent values.'})}
-                            messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({error:bound.error}) })
+                            validationFailures++;await opts.onStage?.('tool',`invalid:source_binding:${sourceBindingErrorCode(bound.error)}`);fileValidationPending=true;if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: correct the source binding from the returned registry, do not invent values.'})}
+                            messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({error:bound.error,available_sources:sourceRecords.available(),repair:'Correct this call once using available fields. Unknown fields stay explicitly unknown; do not invent IDs or values.'}) })
                             continue
                         }
                         input = bound.input
                     }
                     const pageError = call.function.name === 'create_file' ? (deliverablePageError(contract, input, [...mapSources, ...foundSources.map(s => s.url)]) ?? weeklyPageError(input, currentRequest, foundSources.map(s => s.url))) : null
                     if (pageError) {
-                        validationFailures++;await opts.onStage?.('tool','invalid:deliverable_shape');if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: fix only the reported missing deliverable shape using evidence already returned.'})}
+                        validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:deliverable_shape');if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: fix only the reported missing deliverable shape using evidence already returned.'})}
                         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: pageError }) })
                         continue
                     }
-                    if (call.function.name === 'create_file') pageAttempted = true
+                    if (call.function.name === 'create_file') {pageAttempted = true;fileValidationPending=false}
                     if (!['web_search', 'web_fetch'].includes(call.function.name)) sourceOnly = false
                     const result = await withinTurn(opts.deadlineAt, async (signal) => {
                         const work = tool.execute(input, { ...ctx, signal, ...(call.function.name === 'create_file' ? { photosOk: !tainted } : {}) })
@@ -809,8 +820,12 @@ export async function chatWithTools(
             if (content.length > TOOL_RESULT_CHAR_CAP) content = content.slice(0, TOOL_RESULT_CHAR_CAP) + '…'
             messages.push({ role: 'tool', tool_call_id: call.id, content })
         }
+        if(fileValidationPending&&(fileRepairAttempted||validationFailures>=2||opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<20_000)){
+            await opts.onStage?.('tool','repair:file_exhausted');break toolLoop
+        }
     }
     // Loop exhausted: ask for a plain-text answer without tools.
+    if(fileValidationPending)messages.push({role:'system',content:'The one pre-publication validation correction did not complete. No file was published. Give only supported information and the exact unresolved gap. Do not ask permission to keep trying or offer another retry.'})
     await opts.onStage?.('synthesis')
     const tFinal = Date.now()
     const synthCtx: CallContext = { ...loopCtx(MAX_TOOL_ITERATIONS + 1, defsNow().length), source: 'synthesis' }
