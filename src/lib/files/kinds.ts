@@ -20,6 +20,9 @@ const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./,
 export const LOCAL_IMG = /^img\/[a-z0-9][a-z0-9-]{0,60}\.(?:jpg|jpeg|png|webp)$/i
 const img = (p?: string) => (p && LOCAL_IMG.test(p) ? p : '')
 
+/** Explicit uncertainty is body content, never a decorative price/rating. */
+export const knownValue = (value?:string):string => /^(?:unknown|unverified|not (?:checked|verified|available)|n\/?a|to (?:confirm|check)|tbc|tbd)$/i.test((value??'').trim()) ? '' : value??''
+
 /** Stable 0-359 hue from a title, so a card with no photo still gets its own colour. */
 export function hue(s: string): number {
     let h = 0
@@ -139,7 +142,7 @@ function renderStay(lines: string[]): string {
         const p = img(photo)
         const url = httpUrl(link)
         const pic = p ? `<div class="st-pic"><img src="${esc(p)}" alt="${esc(name)}" loading="lazy" decoding="async"></div>` : `<div class="st-pic st-blank" style="--h:${hue(name)}" aria-hidden="true"></div>`
-        return `<article class="st">${pic}<div class="st-b"><div class="st-top"><h4>${esc(name)}</h4>${price ? `<span class="st-p">${esc(price)}</span>` : ''}</div><div class="st-m">${[rating && `★ ${esc(rating)}`, area && esc(area)].filter(Boolean).join(' · ')}</div>${catchTxt ? `<p class="st-c"><span>Catch</span>${esc(catchTxt)}</p>` : ''}${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(host(url))}</a>` : ''}</div></article>`
+        return `<article class="st">${pic}<div class="st-b"><div class="st-top"><h4>${esc(name)}</h4>${price ? `<span class="st-p">${esc(price)}</span>` : ''}</div><div class="st-m">${[knownValue(rating) && `★ ${esc(rating)}`, area && esc(area)].filter(Boolean).join(' · ')}</div>${catchTxt ? `<p class="st-c"><span>Catch</span>${esc(catchTxt)}</p>` : ''}${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(host(url))}</a>` : ''}</div></article>`
     })
     return `<div class="sts">${cards.join('')}</div>`
 }
@@ -289,7 +292,7 @@ export function pageHero(blocks: Seg[]): string | null {
     const [name, price, , , , photo] = row
     const p = img(photo)
     const bg = `linear-gradient(160deg,${hsl(hue(name), 40, 30)},${hsl((hue(name) + 40) % 360, 45, 50)})`
-    return `<div class="band hero hero-stay" style="background:${bg}">${p ? `<img src="${esc(p)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${picked ? 'Pick' : 'Stay'}</span><span class="hero-n${price ? '' : ' hero-title'}">${esc(price || name)}</span></div></div>`
+    return `<div class="band hero hero-stay" style="background:${bg}">${p ? `<img src="${esc(p)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${picked ? 'Pick' : 'Stay'}</span><span class="hero-n${knownValue(price) ? '' : ' hero-title'}">${esc(knownValue(price) || name)}</span></div></div>`
 }
 
 export function renderKind(name: KindBlock, lines: string[]): string {

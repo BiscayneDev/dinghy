@@ -1,3 +1,4 @@
+import {itineraryNeedsResearch} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, sourceBindingErrorCode, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
 import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
@@ -578,6 +579,7 @@ export async function chatWithTools(
     const currentRetailRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
     const contract = selectDeliverable(history)
     const sourceRecords = new SourceRecords()
+    const itineraryResearch=contract?.kind==='itinerary'&&itineraryNeedsResearch(contract.request)
     const mapArtifact = contract?.kind === 'map'
     let deliverableCompleted = false
     const finish = (r: ToolChatResult): ToolChatResult => {
@@ -590,7 +592,7 @@ export async function chatWithTools(
     let mapResearchRead = false
     const retailAvailability = !mapArtifact && isRetailAvailability(currentRetailRequest)
     const contextualResearch = !mapArtifact && researchFollowup(history)
-    if (retailAvailability || contextualResearch || mapArtifact) tools = tools.filter(t => t.name !== 'find_places')
+    if (retailAvailability || contextualResearch || mapArtifact || itineraryResearch) tools = tools.filter(t => t.name !== 'find_places')
     const defsNow = () => tools.map((t) => ({
         type: 'function' as const,
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
@@ -658,7 +660,7 @@ export async function chatWithTools(
         }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
-        const forceTool = (fileValidationPending ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
+        const forceTool = (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
         const offered = completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const t0 = Date.now()
         // Bound a post-search generation, not tools or actions. Preserve honest
@@ -675,7 +677,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
@@ -756,6 +758,9 @@ export async function chatWithTools(
                     try{input=JSON.parse(call.function.arguments||'{}')}catch{validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool','invalid:arguments_json');throw new Error('Invalid JSON arguments; return one corrected tool call.')}
                     const schemaError=inputSchemaError(input,tool.inputSchema)
                     if(schemaError){validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
+                    if(call.function.name==='create_file'&&itineraryResearch&&!mapResearchRead){
+                        content=JSON.stringify({error:'This itinerary needs current recommendations. Use web_search then web_fetch first. If research is blocked, return only supplied facts and explicit gaps, not invented recommendations.'});messages.push({role:'tool',tool_call_id:call.id,content});continue
+                    }
                     if (call.function.name === 'create_file') {
                         const bound = bindFileSources(input, sourceRecords, Boolean(contract) && sourceRecords.size() > 0)
                         if ('error' in bound) {
