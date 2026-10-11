@@ -7,7 +7,7 @@ afterEach(()=>vi.unstubAllGlobals())
 const ctx={userId:'fictional',telegramId:0,telegramChatId:0,name:'Alex',timezone:'UTC',tokens:{}}
 const source='https://airport.test/shops'
 const history=[{role:'user' as const,content:'Where sells chargers at Harbor Airport?'},{role:'assistant' as const,content:`The directory lists East Electronics and Terminal Supplies. Terminal 4. Stock and access unverified. ${source}`},{role:'user' as const,content:'Can you make me a map'}]
-const body=`# Shop locator\nLocator, not a floor map. Indoor positions and walking routes are unverified. Stock and access are unverified.\n\nEast Electronics and Terminal Supplies: Terminal 4.\n\n:::sources\nShop directory | ${source} | date unavailable\n:::`
+const body=`# Shop locator\nLocator, not a floor map. Indoor positions and walking routes are unverified. Stock and access are unverified.\n\n- East Electronics: Terminal 4.\n- Terminal Supplies: Terminal 4.\n\n:::sources\nShop directory | ${source} | date unavailable\n:::`
 const tool=(name:string,data:unknown={})=>({name,description:'test',inputSchema:{},execute:vi.fn(async()=>({success:true,data}))})
 const call=(name:string,input:unknown)=>({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:name,type:'function',function:{name,arguments:JSON.stringify(input)}}]}}]})
 function mockGateway(sequence:unknown[]){const bodies:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_u,init)=>{bodies.push(JSON.parse(init.body));return new Response(JSON.stringify(sequence[bodies.length-1]??{choices:[{finish_reason:'stop',message:{content:'Done'}}]}))}));return bodies}
