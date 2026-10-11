@@ -84,12 +84,12 @@ describe('live info wiring', () => {
   it('every chat gets weather; web_search only with a key', async () => {
     const { liveInfoTools, guestCapabilities, toolsFor } = await import('@/lib/spectrum/imessage-tools')
     vi.stubEnv('TAVILY_API_KEY', '')
-    expect(liveInfoTools().map((t) => t.name)).toEqual(['weather', 'x_read_post', 'x_profile', 'x_recent_posts'])
+    expect(liveInfoTools().map((t) => t.name)).toEqual(['weather', 'web_fetch', 'x_read_post', 'x_profile', 'x_recent_posts'])
     expect(guestCapabilities()).toMatchObject({ google: false, wallet: false, files: false, live: true, search: false })
     vi.stubEnv('TAVILY_API_KEY', 'k')
-    expect(liveInfoTools().map((t) => t.name)).toEqual(['weather', 'web_search', 'x_read_post', 'x_profile', 'x_recent_posts'])
+    expect(liveInfoTools().map((t) => t.name)).toEqual(['weather', 'web_fetch', 'web_search', 'x_read_post', 'x_profile', 'x_recent_posts'])
     // A bound user with nothing connected still gets live info, computer tools, and no account tools.
-    expect(toolsFor(ctx).map((t) => t.name)).toEqual(['weather', 'web_search', 'x_read_post', 'x_profile', 'x_recent_posts', 'google_connect', 'computer_run', 'computer_browse', 'computer_status', 'computer_stop', 'computer_overage', 'browser_connect', 'browser_sessions', 'browser_disconnect', 'workflow_save', 'workflow_update', 'workflow_list', 'workflow_delete', 'workflow_run', 'recipe_list', 'recipe_delete'])
+    expect(toolsFor(ctx).map((t) => t.name)).toEqual(['weather', 'web_fetch', 'web_search', 'x_read_post', 'x_profile', 'x_recent_posts', 'google_connect', 'computer_run', 'computer_browse', 'computer_status', 'computer_stop', 'computer_overage', 'browser_connect', 'browser_sessions', 'browser_disconnect', 'workflow_save', 'workflow_update', 'workflow_list', 'workflow_delete', 'workflow_run', 'recipe_list', 'recipe_delete'])
   })
 
   it('prompt names the tools that are actually offered', () => {

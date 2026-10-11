@@ -107,3 +107,16 @@ export function bindFileSources(input: unknown, records: SourceRecords, required
     if (typeof next.body === 'string' && next.body.length > 60_000) return {error:'Bound body is too long (max 60000 characters). Reduce source excerpts.'}
     return { input: next, count }
 }
+
+/** Keep immutable IDs and literal content prefixes visible without duplicating
+ * the full raw read. Offsets in the shown prefix still address the stored page. */
+export function sourceResultEnvelope(records: SourceRecord[], maxChars=4000): string {
+    const shown: unknown[]=[]
+    const envelope=()=>JSON.stringify({source_records:shown,note:'Literal content prefixes only; offsets address the original source. Unknown fields stay unknown.',omitted_sources:records.length-shown.length})
+    for(const r of records){
+        const item={...r,title:r.title?.slice(0,160)??null,content:r.content?.slice(0,1000)??null,content_length:r.content?.length??0,content_truncated:Boolean(r.content&&r.content.length>1000)}
+        shown.push(item)
+        if(envelope().length>maxChars)shown.pop()
+    }
+    return envelope()
+                                                       }

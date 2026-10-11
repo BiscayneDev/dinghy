@@ -38,3 +38,14 @@ it('shows literal source punctuation in HTML blocks and flattened fallback, with
  const r=bindFileSources({title:'Facts',body:':::options\n{{source:src1.title}} | {{source:src1.content}} | source-reported | stock unknown\n:::'},s)
  expect(r).not.toHaveProperty('error');if('input' in r){const doc=r.input as any;const html=renderHtml(doc);expect(html).toContain('Harbor &amp; Park');expect(html).toContain('Price: $19.00 | unknown [stock] &lt;unverified&gt;');expect(flattenBlocks(doc.body)).toContain('Price&#58; $19.00 &#124; unknown &#91;stock&#93; &lt;unverified&gt;');expect(await renderPdf(doc)).toBeInstanceOf(Buffer)}
 })
+
+import { sourceResultEnvelope } from '@/lib/files/source-records'
+it('keeps a valid bounded registry envelope for long and quoted public pages',()=>{
+ const s=new SourceRecords();const content='Literal opening words. '+('"quoted" \\ public text\n').repeat(1000)
+ const rs=s.capture('web_fetch',{...hit,content},'2030-06-04T12:00:00Z')
+ const envelope=sourceResultEnvelope(rs);expect(envelope.length).toBeLessThanOrEqual(4000)
+ const shown=JSON.parse(envelope).source_records[0];expect(shown.id).toBe('src1');expect(shown.content).toBe(content.slice(0,1000));expect(shown.content_length).toBe(content.length);expect(shown.content_truncated).toBe(true)
+ expect(s.resolve({source:shown.id,field:'content',start:0,end:7})).toHaveProperty('value','Literal')
+ const many=s.capture('web_search',{results:Array.from({length:20},()=>hit)},'2030-06-04T12:00:00Z')
+ const bounded=sourceResultEnvelope(many);expect(bounded.length).toBeLessThanOrEqual(4000);expect(JSON.parse(bounded).omitted_sources).toBeGreaterThan(0)
+})

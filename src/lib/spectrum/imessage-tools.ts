@@ -17,7 +17,7 @@ import { gmailSearch, gmailRead, gmailSummarizeInbox } from '@/lib/tools/gmail'
 import { gcalListEvents, gcalTodayBriefing } from '@/lib/tools/gcal'
 import { WALLET_READ_TOOLS } from '@/lib/tools/wallet-read'
 import { payboxOnramp } from '@/lib/tools/paybox'
-import { webSearch } from '@/lib/tools/web'
+import { webSearch, webFetch } from '@/lib/tools/web'
 import { weather } from '@/lib/tools/weather'
 import { twitterSearch, twitterTimeline, twitterUserTweets } from '@/lib/tools/twitter'
 import { xFreeTools, xSearchEnabled } from '@/lib/tools/x-free'
@@ -86,7 +86,7 @@ export function searchEnabled(): boolean {
  * accounts involved. weather needs no key; web_search needs TAVILY_API_KEY.
  */
 export function liveInfoTools(): Tool[] {
-    return [weather, ...(searchEnabled() ? [webSearch] : []), ...xFreeTools()]
+    return [weather, webFetch, ...(searchEnabled() ? [webSearch] : []), ...xFreeTools()]
 }
 
 /**
