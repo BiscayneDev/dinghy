@@ -37,3 +37,46 @@ describe('researched itinerary contract',()=>{
 describe('uncertainty stays in body, not decorative hero',()=>{
  it('uses the hotel name as hero when price/rating are unknown',async()=>{const {renderHtml}=await import('@/lib/files/render');const html=renderHtml({title:'Harbor founders visit',body});expect(html).toContain('hero-title">Harbor Inn');expect(html).not.toContain('★ unknown');expect(html).toContain('unknown')})
 })
+
+describe('production iMessage itinerary research wiring',()=>{
+ it('uses actual offered search/reader to publish researched cards inside the short budget',async()=>{
+  vi.stubEnv('TAVILY_API_KEY','fictional-key')
+  const {toolsFor}=await import('@/lib/spectrum/imessage-tools')
+  const requests:any[]=[]
+  const file=tool('create_file')
+  const seq=[call('web_search',{query:'Harbor visitor official guide'}),call('web_fetch',{url}),call('create_file',{title:'Harbor founders visit',body:body.replace('Visitor directory | '+url,'{{source:src2.title}} | {{source:src2.url}}')}),stop()]
+  vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
+   if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor guide',url,content:'Visitor listings'}]}))
+   if(String(u)===url)return new Response('<html><title>Harbor visitors</title><body>Hotel, dining and museum listings. Prices and hours unknown.</body></html>')
+   const r=JSON.parse(init.body);requests.push(r);return new Response(JSON.stringify(seq[requests.length-1]??stop()))
+  }))
+  const result=await chatWithTools([{role:'user',content:ask}],{...opts,deadlineAt:Date.now()+55_000},[...toolsFor(ctx),file],ctx)
+  expect(requests[0].tools.map((t:any)=>t.function.name)).toContain('web_fetch')
+  expect(requests[1].tool_choice.function.name).toBe('web_fetch')
+  expect(requests[1].messages.at(-1).content).toContain('source_records')
+  expect(file.execute).toHaveBeenCalledTimes(1)
+  expect(result.deliverable?.state).toBe('completed')
+  expect(JSON.stringify(file.execute.mock.calls[0][0])).toContain('Source provenance')
+ })
+ it('identifies missing page-reader once without repeated gateway/file attempts',async()=>{
+  const search=tool('web_search'),file=tool('create_file'),onStage=vi.fn(async()=>{})
+  const fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock)
+  const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage},[search,file],ctx)
+  expect(onStage).toHaveBeenCalledWith('tool','research:unavailable:web_fetch')
+  expect(fetchMock).not.toHaveBeenCalled();expect(file.execute).not.toHaveBeenCalled()
+  expect(result.reply).toContain('not researched');expect(result.deliverable?.state).toBe('unfulfilled')
+ })
+ it('HTTP reader failure does not become a verified source or published file',async()=>{
+  vi.stubEnv('TAVILY_API_KEY','fictional-key')
+  const {liveInfoTools}=await import('@/lib/spectrum/imessage-tools')
+  const file=tool('create_file'),onStage=vi.fn(async()=>{})
+  let iteration=0
+  vi.stubGlobal('fetch',vi.fn(async(u)=>{
+   if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor guide',url,content:'Visitor listings'}]}))
+   if(String(u)===url)return new Response('Unavailable',{status:403})
+   return new Response(JSON.stringify([call('web_search',{query:'Harbor official guide'}),call('web_fetch',{url}),call('create_file',{title:'Harbor',body}),stop('Page read blocked; recommendations unverified.')][iteration++]??stop()))
+  }))
+  const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage},[...liveInfoTools(),file],ctx)
+  expect(file.execute).not.toHaveBeenCalled();expect(onStage).toHaveBeenCalledWith('tool','research:page_read_required');expect(result.deliverable?.state).toBe('unfulfilled')
+ })
+})
