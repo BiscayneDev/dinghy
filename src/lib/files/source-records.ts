@@ -57,6 +57,7 @@ export class SourceRecords {
         })
         return {input:{...i,body},count}
     }
+    pageIds() { return this.records.filter(r=>r.origin==='page' && r.content).map(r=>r.id) }
     size() { return this.records.length }
     available() { return this.records.map(r => ({id:r.id,fields:fields.filter(f=>r[f]!==null)})) }
 }
@@ -149,4 +150,4 @@ export function compileItinerarySources(input:unknown,used:SourceRecord[],observ
  if(/(?:^|\n)[ \t]*:::sources\b/i.test(clean))return {error:'Itinerary recommendations require observed source links in :::sources. Malformed explicit sources block; no file was published.'}
  const rows=[...new Map(used.map(r=>[r.url,r])).values()].map(r=>`${literal(r.title??'Source').replace(/\|/g,'&#124;')} | ${r.url} | ${r.origin==='search'?'search snippet':'page text'}; checked ${literal(r.checked_at)}; source date ${literal(r.published_date??'unknown')}`)
  return {input:{...i,body:clean.trimEnd()+'\n\n:::sources\n'+rows.join('\n')+'\n:::'}}
-}
+                }
