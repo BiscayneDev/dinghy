@@ -2,7 +2,7 @@ import type { ReactElement } from 'react'
 import { ImageResponse } from 'next/og'
 import { MARK_PNG } from './card-art'
 import { dmMono500, frauncesDisplay, schibsted400, schibsted600 } from './static-fonts'
-import { cells, hue, num, routeSummary, skyIcon, skyOf } from '@/lib/files/kinds'
+import { cells, hue, num, knownValue, routeSummary, skyIcon, skyOf } from '@/lib/files/kinds'
 import { splitBlocks } from '@/lib/files/render'
 export { routeSummary }
 
@@ -202,7 +202,7 @@ function stayCard(segs: ReturnType<typeof splitBlocks>, photos: CardPhoto[]): { 
                 )}
                 <div style={{ display: 'flex', position: 'absolute', left: 0, top: 0, width: W, height: 640, backgroundImage: 'linear-gradient(180deg, rgba(8,15,30,0.3), rgba(8,15,30,0) 35%, rgba(8,15,30,0.85))' }} />
                 <div style={{ display: 'flex', position: 'absolute', left: 44, top: 44, right: 44, justifyContent: 'space-between' }}>
-                    {tag(lead.for?.[0] ? `Made for ${clip(lead.for[0], 16)}` : 'Pick for you', 'rgba(255,255,255,0.92)', INK)}
+                    {tag(lead.for?.[0] ? `Made for ${clip(lead.for[0], 16)}` : pickName ? 'Pick for you' : 'Stay option', 'rgba(255,255,255,0.92)', INK)}
                     {lead.care?.[0] ? tag(clip(lead.care[0], 18), CORAL, '#fff') : null}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', position: 'absolute', left: 52, right: 52, bottom: 52, color: '#fff' }}>
@@ -213,7 +213,7 @@ function stayCard(segs: ReturnType<typeof splitBlocks>, photos: CardPhoto[]): { 
             {creditText ? <div style={{ display: 'flex', minHeight: creditHeight, padding: '10px 28px', fontFamily: 'Schibsted Grotesk', fontSize: 20, lineHeight: 1.3, color: INK }}>{latin(creditText)}</div> : null}
             <div style={{ display: 'flex', flexDirection: 'column', padding: '40px 56px 0' }}>
                 <div style={{ display: 'flex', alignItems: 'baseline' }}>
-                    <div style={{ display: 'flex', fontFamily: 'Fraunces', fontSize: 84, color: INK }}>{clip(price ?? '', 18)}</div>
+                    {knownValue(price) ? <div style={{ display: 'flex', fontFamily: 'Fraunces', fontSize: 84, color: INK }}>{clip(price, 18)}</div> : null}
                 </div>
                 {catchTxt ? <div style={{ display: 'flex', marginTop: 8, fontFamily: 'Schibsted Grotesk', fontSize: 32, color: MUTE }}>{clip(`Catch: ${catchTxt}`, 56)}</div> : null}
                 {chips.length ? (
@@ -410,7 +410,7 @@ export async function renderHeroOg(doc: { title: string; subtitle?: string; body
         const row = picked ?? rows[0]
         if (!row) return null
         bg = `linear-gradient(160deg, ${hsl(hue(row[0]), 40, 30)}, ${hsl((hue(row[0]) + 40) % 360, 45, 50)})`
-        big = row[1] || row[0]; kicker = picked ? 'Pick' : 'Stay'
+        big = knownValue(row[1]) || row[0]; kicker = picked ? 'Pick' : 'Stay'
         photo = photos.find((ph) => ph.path === row[5] && /^img\/[a-z0-9][a-z0-9-]{0,60}\.(?:jpg|jpeg|png)$/i.test(ph.path) && /^image\/(jpeg|png)$/.test(ph.contentType) && ph.credit && ph.license)
     }
     const wide = seg.name === 'scores'
