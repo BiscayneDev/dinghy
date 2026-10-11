@@ -1,3 +1,4 @@
+import { mapArtifactTurn, mapSourceUrls, mapPageError, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
 import { weeklyPageError } from '@/lib/files/weekly-standard'
 import { unmatchedPlacesReply } from '@/lib/places/intent'
@@ -170,7 +171,7 @@ const FILES_LINE =
     'If they want the file itself in the chat, set attach=true. revoke_file kills a link they no longer want working. ' +
     'Every file you make is saved to memory with its full text: recall_file reopens one from any earlier chat, so to update a file, recall it, change it and create_file the full new version. ' +
     'For restaurant booking or reservation asks, preserve that intent. Ask only missing party size and preferred time, not whether they want a booking. find_places is nearby discovery, not reservation availability or payment; open-now hours do not prove availability on a future date. Do not claim a reservation or payment happened without a successful authorized result. ' +
-    'For "where should I eat / what is near X" asks call find_places first: it finds real venues with open-now, walk time and map links and makes the page itself, so skip web_search and create_file for those. ' +
+    'For fresh food/drink discovery such as "where should I eat near X" call find_places first: it finds real venues with open-now, walk time and map links and makes the page itself, so skip web_search and create_file for those fresh food-discovery asks only. A request to map already-named shops/venues is a create_file deliverable, not food discovery. ' +
     'Offer one when a list or plan would be easier to keep as a document, and make it when asked. ' +
     'But when the answer itself is big - comparing three or more options, a multi-day plan or itinerary, a research write-up, anything that would run past about eight lines of text - do not paste it into the chat. ' +
     'Make the page without being asked, then text a short reply: your verdict in one or two lines. Open the page body with a pick callout ("> Pick: the one you would choose and why in a sentence"), ' +
@@ -571,8 +572,11 @@ export async function chatWithTools(
     ctx: UserContext
 ): Promise<ToolChatResult> {
     const currentRetailRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
-    const retailAvailability = isRetailAvailability(currentRetailRequest)
-    if (retailAvailability) tools = tools.filter(t => t.name !== 'find_places')
+    const mapArtifact = mapArtifactTurn(history)
+    const mapSources = mapArtifact ? mapSourceUrls(history) : []
+    let mapResearchRead = false
+    const retailAvailability = !mapArtifact && isRetailAvailability(currentRetailRequest)
+    if (retailAvailability || mapArtifact) tools = tools.filter(t => t.name !== 'find_places')
     const defsNow = () => tools.map((t) => ({
         type: 'function' as const,
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
@@ -592,6 +596,7 @@ export async function chatWithTools(
     messages = withVolatileNote(messages, [opts.volatile, opts.interviewLine].filter(Boolean).join('\n\n')) as Record<string, unknown>[]
 
     if (retailAvailability) messages.push({ role: 'system', content: 'This is retail/product availability, not food discovery. Use focused web_search then read source pages, favor airport/operator/retailer official sources. Distinguish confirmed listing from current stock. For airports use the named destination, verify terminal and airside/landside access and opening hours. Ask only a missing terminal/access detail that changes the answer after researching available options. Do not substitute eateries or infer product stock, legal availability, or unrestricted walking access from OpenStreetMap. If evidence is incomplete say exactly what was verified and what remains unknown; no invented shop or stock claim.' })
+    if (mapArtifact) messages.push({ role: 'system', content: MAP_ARTIFACT_NOTE })
     let placesMismatch: string | null = null
     let independentTool = false
     let toolCallCount = 0
@@ -625,12 +630,13 @@ export async function chatWithTools(
         const remaining = opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now()
         // The production miss spent ~70s on gateway turns and ~8s searching.
         // Keep time for synthesis and hosting rather than a fourth search turn.
-        if (!completionMode && successfulSearches > 0 && remaining < 60_000) {
+        if (!completionMode && successfulSearches > 0 && remaining < 60_000 && (!mapArtifact || mapResearchRead)) {
             completionMode = true
             messages.push({ role: 'system', content: RESEARCH_FINISH })
         }
         const toolDefs = defsNow()
-        const forceTool = retailAvailability ? 'web_search' : opts.forceTool
+        const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
+        const forceTool = pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool
         const offered = completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const t0 = Date.now()
         // Bound a post-search generation, not tools or actions. Preserve honest
@@ -647,7 +653,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : iteration === 1 && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || mapArtifact || pageRetry) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
@@ -674,9 +680,9 @@ export async function chatWithTools(
 
         if (choice?.finish_reason !== 'tool_calls' || calls.length === 0) {
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
-            if (!pageRetry && !pageAttempted && tools.some((t) => t.name === 'create_file') && (needsAnswerPage(reply) || needsFileRepair(reply)) && iteration < MAX_TOOL_ITERATIONS && (opts.deadlineAt === undefined || opts.deadlineAt - Date.now() >= 20_000)) {
+            if (!pageRetry && !pageAttempted && tools.some((t) => t.name === 'create_file') && (mapArtifact || needsAnswerPage(reply) || needsFileRepair(reply)) && iteration < MAX_TOOL_ITERATIONS && (opts.deadlineAt === undefined || opts.deadlineAt - Date.now() >= 20_000)) {
                 pageRetry = true
-                completionMode = true
+                completionMode = !mapArtifact || mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
                 messages.push({ role: 'assistant', content: reply }, { role: 'system', content: needsFileRepair(reply) ? 'No file was created in this turn. An older URL from history is not the new document. Call create_file now with the research already gathered, then give a short verdict. Do not claim delivery without a successful file tool.' : PAGE_FINISH })
                 continue
             }
@@ -700,7 +706,7 @@ export async function chatWithTools(
                     await opts.onStage?.('tool', call.function.name)
                     await assertAccountActive(ctx.userId,ctx.chatGuid)
                     const input = JSON.parse(call.function.arguments || '{}') as unknown
-                    const pageError = call.function.name === 'create_file' ? weeklyPageError(input, currentRequest, foundSources.map(s => s.url)) : null
+                    const pageError = call.function.name === 'create_file' ? (mapArtifact ? mapPageError(input, [...mapSources, ...foundSources.map(s => s.url)]) : weeklyPageError(input, currentRequest, foundSources.map(s => s.url))) : null
                     if (pageError) {
                         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: pageError }) })
                         continue
@@ -720,6 +726,7 @@ export async function chatWithTools(
                         } finally { if (timer) clearTimeout(timer) }
                     })
                     content = JSON.stringify(result.success ? result.data ?? {} : { error: result.error ?? 'tool failed' })
+                    if (result.success && call.function.name === 'web_fetch') mapResearchRead = true
                     if (result.success && call.function.name === 'find_places') placesMismatch = unmatchedPlacesReply(result.data)
                     if (result.success && call.function.name === 'web_search') {
                         successfulSearches++
@@ -733,7 +740,7 @@ export async function chatWithTools(
                             } catch { /* Invalid source URL is not delivered. */ }
                         }
                     }
-                    if (result.success && call.function.name === 'create_file' && completionMode && calls.length === 1) {
+                    if (result.success && call.function.name === 'create_file' && (completionMode || mapArtifact) && calls.length === 1) {
                         // Hosting succeeded; the transport already owns the queued link.
                         // Do not spend another slow gateway call merely announcing it.
                         return { reply: 'Here you go.', toolCalls: toolCallCount, iterations: iteration, tainted }
