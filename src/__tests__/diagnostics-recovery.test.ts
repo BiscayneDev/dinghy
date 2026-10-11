@@ -39,6 +39,7 @@ describe('requested file validation correction',()=>{
   const req=harness([call('web_search'),call('create_file',{title:'Leads',body:'- Retyped name'}),call('create_file',good),stop('Done.')]),file=tool('create_file'),stage=vi.fn(async()=>{})
   const result=await chatWithTools(ask,{...opts,onStage:stage},[tool('web_search',hits),file],ctx)
   expect(req[2].tool_choice.function.name).toBe('create_file')
+  expect(req[2].tools.map((t:any)=>t.function.name)).toEqual(['create_file'])
   expect(JSON.stringify(req[2].messages)).toContain('available_sources')
   expect(file.execute).toHaveBeenCalledTimes(1)
   expect(stage).toHaveBeenCalledWith('tool','invalid:source_binding:missing_binding')

@@ -14,3 +14,14 @@ export function itineraryPageError(body:string,request:string,urls:string[]):str
  if(/\bworking sessions?\b/i.test(request)&&!/working sessions?/i.test(body))return 'Preserve the requested working sessions in the itinerary. Unspecified duration and venue remain to confirm.'
  return null
 }
+
+/** Safe finite codes only. Preserve useful diagnosis without prompts/body/errors. */
+export function itineraryShapeErrorCode(error:string):string {
+ if(error.startsWith('Itinerary contract:'))return 'day_sections'
+ if(error.startsWith('Itinerary recommendations require'))return 'source_rows'
+ if(error.startsWith('Use a supported :::stay'))return 'stay_rows'
+ if(error.startsWith('Use :::options'))return 'options_rows'
+ if(error.startsWith('Preserve the requested working'))return 'working_sessions'
+ if(error.startsWith('The requested deliverable needs'))return 'body_missing'
+ return 'other'
+}
