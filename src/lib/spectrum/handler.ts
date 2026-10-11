@@ -210,9 +210,12 @@ async function sendFile(space: InboundSpace, chatGuid: string, file: MadeFile): 
             // Card above the link, best effort: the link still goes out if the card does not.
             try { await (space as ContentSender).send(attachment(file.card, { name: 'preview.png', mimeType: 'image/png' })) } catch (err) { logErr('page card send failed', err) }
         }
+        if(file.imagery)await runStageRecorder(chatGuid)('tool',`imagery:${file.imagery.page}/${file.imagery.chat}/${file.imagery.share};metadata:${file.imagery.metadata};reason:${file.imagery.reason ?? 'none'}`)
         const accepted = await deliverHostedLink(space as ContentSender, chatGuid, hosted.hosted.url)
         await runStageRecorder(chatGuid)('reply_attempted', accepted ? 'file_link_accepted' : 'file_link_pending')
         if (accepted) await saveMessage(chatGuid, 'assistant', line).catch((err) => logErr('message save failed', err))
+        // Only accepted link attempts qualify for later, awaited enrichment.
+        if (!accepted) file.enrichImagery = undefined
         return
     }
     try {
@@ -1161,6 +1164,11 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         }
         // Files made this turn go out after the text: a file link, or an attachment.
         for (const file of fileTools?.files() ?? []) await sendFile(space, chatGuid, file)
+        // All useful links go first. No detached work after the response lifecycle.
+        for (const file of fileTools?.files() ?? []) {
+            await file.enrichImagery?.().catch((err)=>logErr('page enrichment failed',err))
+            if(file.imagery)await onStage('tool',`imagery:${file.imagery.page}/${file.imagery.chat}/${file.imagery.share};metadata:${file.imagery.metadata};reason:${file.imagery.reason ?? 'none'}`)
+        }
         let firstReplyCardClaimed = false
         let googleConnectedAtFirstReply = true
         // The card follows a delivered answer. Claim once across serverless
@@ -1252,4 +1260,4 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         clearTimeout(eyesTimer)
         stopTypingReTap(space, typingHandle)
     }
-}
+                    }

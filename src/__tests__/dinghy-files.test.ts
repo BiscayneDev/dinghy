@@ -152,6 +152,7 @@ describe('file links (here.now)', () => {
       'PUT https://up.example/index.html',
       'PUT https://up.example/weekend-in-key-biscayne.pdf',
       'POST /publish/calm-boat-1a2b/finalize',
+      'GET https://calm-boat-1a2b.here.now/',
     ])
     expect(calls.some((c) => c.url.endsWith('/metadata') || c.body.includes('password'))).toBe(false)
     const create = JSON.parse(calls[0].body)
@@ -162,14 +163,14 @@ describe('file links (here.now)', () => {
     expect(upload).not.toHaveBeenCalled()
   })
 
-  it('page is noindex, links the pdf download and uses the per-file card', async () => {
+  it('private page is noindex, links the pdf and omits title-bearing remote cards', async () => {
     process.env.HERENOW_API_KEY = 'test-key'
     const { bodies } = fakeHereNow()
     await fileToolsFor().tools[0].execute(doc, ctx)
     const html = bodies['https://up.example/index.html']
     expect(html).toContain('<meta name="robots" content="noindex">')
     expect(html).toContain('href="weekend-in-key-biscayne.pdf" download')
-    expect(html).toContain('getdinghy.sh/api/og/file?title=Weekend+in+Key+Biscayne')
+    expect(html).not.toContain('property="og:image"')
     expect(bodies['https://up.example/weekend-in-key-biscayne.pdf'].startsWith('%PDF-')).toBe(true)
   })
 
