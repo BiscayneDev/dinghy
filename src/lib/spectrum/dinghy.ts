@@ -1,4 +1,4 @@
-import {compileItineraryCandidates} from '@/lib/files/itinerary-candidates'
+import {compileItineraryCandidates,itineraryCandidateErrorCode} from '@/lib/files/itinerary-candidates'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
@@ -818,7 +818,7 @@ export async function chatWithTools(
                     if (call.function.name === 'create_file') {
                         if(contract?.kind==='itinerary'&&itineraryResearch){
                             const candidates=compileItineraryCandidates(input,sourceRecords)
-                            if('error' in candidates){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:candidates.error})});continue}
+                            if('error' in candidates){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates');await opts.onStage?.('tool','invalid:itinerary_candidate:'+itineraryCandidateErrorCode(candidates.error));messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:candidates.error})});continue}
                             input=candidates.input;if(candidates.compiled)await opts.onStage?.('tool','itinerary:candidates_compiled')
                         }
                         const linked=sourceRecords.bindObservedLinks(input)
@@ -927,4 +927,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+                    }
