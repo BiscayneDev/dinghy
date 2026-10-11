@@ -11,6 +11,7 @@ vi.mock('@/lib/spectrum/line-for-chat', () => ({ dinghyLineFor: vi.fn(async () =
 vi.mock('@/lib/supabase/server', () => ({ createServerClient: () => ({}) }))
 vi.mock('@/lib/data-portability/erasure-state', () => ({ assertAccountActive: vi.fn(async () => undefined) }))
 vi.mock('@/lib/files/share', async (orig) => ({ ...(await orig<typeof import('@/lib/files/share')>()), publishSite, updateSite, shareEnabled: () => true }))
+vi.mock('@/lib/files/imagery',async(orig)=>({...await orig<typeof import('@/lib/files/imagery')>(),verifyShareMetadata:async()=>true}))
 vi.mock('@/lib/files/photos', () => ({ attachPhotos: vi.fn(async (body: string) => ({ body, photos: [] })) }))
 
 import { renderHeroOg } from '@/lib/brand/kind-card'
@@ -40,16 +41,16 @@ describe('renderHeroOg', () => {
 
 describe('create_file og phase 2', () => {
   beforeEach(() => { publishSite.mockClear(); updateSite.mockReset().mockResolvedValue(undefined) })
-  const run = async (kind: string, photosOk?: boolean) => fileToolsFor().tools.find((t) => t.name === 'create_file')!.execute(input(kind), ctx(photosOk))
+  const run = async (kind:string,photosOk?:boolean)=>{const set=fileToolsFor();const r=await set.tools[0].execute(input(kind),ctx(photosOk));await set.files()[0]?.enrichImagery?.();return r}
 
-  it('ships og.png in the first publish, then re-publishes the full set with the site-relative og:image', async () => {
+  it('ships useful fallback first, then enriches the full set with site-relative og:image', async () => {
     await run('weather', true)
     const first = (publishSite.mock.calls[0][0] as { path: string }[]).map((f) => f.path)
-    expect(first).toContain('og.png')
+    expect(first).not.toContain('og.png')
     expect(updateSite).toHaveBeenCalledTimes(1)
     const [slug, files] = updateSite.mock.calls[0] as unknown as [string, { path: string; bytes: Buffer }[]]
     expect(slug).toBe('harbor-test')
-    expect(files.map((f) => f.path).sort()).toEqual([...first].sort())
+    expect(files.map((f) => f.path).sort()).toEqual([...first,'og.png'].sort())
     const html = files.find((f) => f.path === 'index.html')!.bytes.toString('utf8')
     expect(html).toContain('<meta property="og:image" content="https://harbor-test.here.now/og.png">')
     expect(html).not.toContain('getdinghy.sh/api/og/file')
@@ -68,9 +69,9 @@ describe('create_file og phase 2', () => {
     expect(updateSite).not.toHaveBeenCalled()
     for (const c of publishSite.mock.calls) expect((c[0] as { path: string }[]).map((f) => f.path)).not.toContain('og.png')
     publishSite.mockClear()
-    await fileToolsFor().tools.find((t) => t.name === 'create_file')!.execute({ title: 'Notes', format: 'pdf', body: '## Decisions\nplain' }, ctx(true))
+    const set=fileToolsFor();await set.tools[0].execute({title:'Notes',format:'pdf',body:'## Decisions\nplain'},ctx(true));await set.files()[0].enrichImagery?.()
     expect(updateSite).toHaveBeenCalledTimes(1)
-    expect((publishSite.mock.calls[0][0] as { path: string }[]).map(f => f.path)).toContain('og.png')
+    expect((publishSite.mock.calls[0][0] as { path: string }[]).map(f => f.path)).not.toContain('og.png')
   }, 60000)
 })
 
