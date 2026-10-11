@@ -30,3 +30,41 @@ describe('schema and bounded recovery diagnostics',()=>{
  it('malformed JSON is logged without executing the bad call',async()=>{const malformed={choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'bad',function:{name:'web_search',arguments:'{broken'}}]}}]};harness([malformed,stop('The location was not verified.')]);const stage=vi.fn(async()=>{}),search=tool('web_search');await chatWithTools(history,{...opts,onStage:stage},[search],ctx);expect(search.execute).not.toHaveBeenCalled();expect(stage).toHaveBeenCalledWith('tool','invalid:arguments_json')})
  it('strips only the invitation sentence, not the source limitation',()=>{expect(stripPermissionOffer('The shop is listed. Route unknown. Let me know how to proceed!')).toBe('The shop is listed. Route unknown.')})
 })
+
+describe('requested file validation correction',()=>{
+ const ask=[{role:'user' as const,content:'Make a list of recent research leads.'}]
+ const hits={results:[{title:'Harbor Agent',url:'https://harbor.test/launch',content:'Harbor Agent launched on a reported date.'}]}
+ const good={title:'Launch leads',body:'- {{source:src1.title}}: {{source:src1.url}}. Publication date unknown; launch window unverified.'}
+ it('forces one correction, tells the model available fields, and executes only valid input',async()=>{
+  const req=harness([call('web_search'),call('create_file',{title:'Leads',body:'- Retyped name'}),call('create_file',good),stop('Done.')]),file=tool('create_file'),stage=vi.fn(async()=>{})
+  const result=await chatWithTools(ask,{...opts,onStage:stage},[tool('web_search',hits),file],ctx)
+  expect(req[2].tool_choice.function.name).toBe('create_file')
+  expect(JSON.stringify(req[2].messages)).toContain('available_sources')
+  expect(file.execute).toHaveBeenCalledTimes(1)
+  expect(stage).toHaveBeenCalledWith('tool','invalid:source_binding:missing_binding')
+  expect(stage).toHaveBeenCalledWith('tool','repair:file_once')
+  expect(result.deliverable?.state).toBe('completed')
+ })
+ it('exhausts after two rejected bindings, not eight gateway calls or a user permission ask',async()=>{
+  const req=harness([call('web_search'),call('create_file',{body:'- {{source:src99.title}}'}),call('create_file',{body:'- {{source:src1.published_date}}'}),stop('Dates are unknown. Let me know if you want me to keep trying.')]),file=tool('create_file'),stage=vi.fn(async()=>{})
+  const result=await chatWithTools(ask,{...opts,onStage:stage},[tool('web_search',hits),file],ctx)
+  expect(req).toHaveLength(4);expect(file.execute).not.toHaveBeenCalled()
+  expect(stage).toHaveBeenCalledWith('tool','invalid:source_binding:unknown_reference');expect(stage).toHaveBeenCalledWith('tool','invalid:source_binding:unknown_field')
+  expect(result.reply).toContain('Dates are unknown.');expect(result.reply).not.toContain('Let me know');expect(result.deliverable?.state).toBe('unfulfilled')
+ })
+ it('does not replay multiple corrected file calls in one batch',async()=>{
+  const batch={choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[1,2].map(id=>({id:String(id),function:{name:'create_file',arguments:JSON.stringify(good)}}))}}]}
+  harness([call('web_search'),call('create_file',{body:'- Unbound'}),batch,stop('Complete.')]);const file=tool('create_file')
+  await chatWithTools(ask,opts,[tool('web_search',hits),file],ctx);expect(file.execute).toHaveBeenCalledTimes(1)
+ })
+ it('does not retry a publication that may already have executed',async()=>{
+  harness([call('web_search'),call('create_file',good),stop('The publish result is unknown. Let me know if you want to keep trying.')]);const file={...tool('create_file'),execute:vi.fn(async()=>{throw new Error('Publication result unknown')})}
+  const result=await chatWithTools(ask,opts,[tool('web_search',hits),file],ctx)
+  expect(file.execute).toHaveBeenCalledTimes(1);expect(result.reply).not.toContain('Let me know')
+ })
+ it('will not spend correction headroom when fewer than twenty seconds remain',async()=>{
+  const req=harness([call('web_search'),call('create_file',{body:'- Unbound'}),stop('No verified launch window.')]),file=tool('create_file')
+  await chatWithTools(ask,{...opts,deadlineAt:Date.now()+19000},[tool('web_search',hits),file],ctx)
+  expect(req).toHaveLength(3);expect(req[2].tool_choice).toBe('none');expect(file.execute).not.toHaveBeenCalled()
+ })
+})
