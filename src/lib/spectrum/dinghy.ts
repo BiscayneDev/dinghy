@@ -1,3 +1,4 @@
+import {compileItineraryCandidates} from '@/lib/files/itinerary-candidates'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
@@ -807,6 +808,11 @@ export async function chatWithTools(
                         content=JSON.stringify({error:'This itinerary needs current recommendations. Use web_search then web_fetch first. If research is blocked, return only supplied facts and explicit gaps, not invented recommendations.'});messages.push({role:'tool',tool_call_id:call.id,content});continue
                     }
                     if (call.function.name === 'create_file') {
+                        if(contract?.kind==='itinerary'&&itineraryResearch){
+                            const candidates=compileItineraryCandidates(input,sourceRecords)
+                            if('error' in candidates){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:candidates.error})});continue}
+                            input=candidates.input;if(candidates.compiled)await opts.onStage?.('tool','itinerary:candidates_compiled')
+                        }
                         const linked=sourceRecords.bindObservedLinks(input)
                         if(linked.count)await opts.onStage?.('tool','binding:observed_links')
                         const bound = bindFileSources(linked.input, sourceRecords, Boolean(contract) && sourceRecords.size() > 0)
@@ -913,4 +919,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+                         }
