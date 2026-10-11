@@ -6,7 +6,7 @@ const ctx = { userId: 'u', telegramId: 0, telegramChatId: 0, name: 'A', timezone
 const opts = { gatewayUrl: 'https://gateway.test', apiKey: 'test', model: 'test' }
 const answer = '1. A - verified option\n2. B - verified option\n3. C - verified option'
 function tool(name: string, success = true): Tool { return { name, description: name, inputSchema: {}, execute: vi.fn(async () => ({ success, data: { results: [{ url: 'https://venue.test/menu' }] }, error: success ? undefined : 'unavailable' })) } }
-function response(name?: string, reply = 'Done.') { return new Response(JSON.stringify({ choices: [{ finish_reason: name ? 'tool_calls' : 'stop', message: name ? { content: null, tool_calls: [{ id: Math.random().toString(), function: { name, arguments: '{}' } }] } : { content: reply } }] })) }
+function response(name?: string, reply = 'Done.') { return new Response(JSON.stringify({ choices: [{ finish_reason: name ? 'tool_calls' : 'stop', message: name ? { content: null, tool_calls: [{ id: Math.random().toString(), function: { name, arguments: name === 'create_file' ? JSON.stringify({title:'Fictional comparison',body:':::options\nHarbor | unknown | dinner | stock unknown\nPark | unknown | dinner | access unknown\n:::'}) : '{}' } }] } : { content: reply } }] })) }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers() })
 describe('research completion headroom', () => {
   it('stops repeated search with time left for page creation and keeps returned evidence', async () => {
