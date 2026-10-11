@@ -616,6 +616,13 @@ export async function chatWithTools(
     if (contract) await opts.onStage?.('context', `deliverable:${contract.kind}`)
     if (contract) messages.push({ role: 'system', content: contractNote(contract) + '\n' + SOURCE_BINDING_NOTE })
     if (mapArtifact) messages.push({ role: 'system', content: MAP_ARTIFACT_NOTE })
+    if(itineraryResearch){
+        const missing=['web_search','web_fetch'].filter(name=>!tools.some(t=>t.name===name))
+        if(missing.length){
+            await opts.onStage?.('tool',`research:unavailable:${missing.join(',')}`)
+            return finish({reply:'The supplied visits can be kept, but current hotel, dining and activity recommendations were not researched because the public research tools are unavailable. No recommendations were validated or published.',toolCalls:0,iterations:0,tainted:Boolean(opts.startTainted)||history.some(m=>m.googleDerived)})
+        }
+    }
     let placesMismatch: string | null = null
     let independentTool = false
     let toolCallCount = 0
@@ -654,7 +661,7 @@ export async function chatWithTools(
         const remaining = opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now()
         // The production miss spent ~70s on gateway turns and ~8s searching.
         // Keep time for synthesis and hosting rather than a fourth search turn.
-        if (!completionMode && successfulSearches > 0 && remaining < 60_000 && (!mapArtifact || mapResearchRead)) {
+        if (!completionMode && successfulSearches > 0 && remaining < 60_000 && ((!mapArtifact&&!itineraryResearch) || mapResearchRead)) {
             completionMode = true
             messages.push({ role: 'system', content: RESEARCH_FINISH })
         }
@@ -759,6 +766,7 @@ export async function chatWithTools(
                     const schemaError=inputSchemaError(input,tool.inputSchema)
                     if(schemaError){validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
                     if(call.function.name==='create_file'&&itineraryResearch&&!mapResearchRead){
+                        await opts.onStage?.('tool','research:page_read_required')
                         content=JSON.stringify({error:'This itinerary needs current recommendations. Use web_search then web_fetch first. If research is blocked, return only supplied facts and explicit gaps, not invented recommendations.'});messages.push({role:'tool',tool_call_id:call.id,content});continue
                     }
                     if (call.function.name === 'create_file') {
