@@ -22,6 +22,7 @@ const bodies: Record<string, string> = {
   weather: ':::weather\nPort Marlow | 61° | Light rain | 64° | 52° | 9 mph NW | 70%\n:::',
   scores: ':::scores\nGulls | 3 | Otters | 1 | Final\n:::',
   stay: ':::stay\nHarbor Inn | $2,680 | 4.6 | Shelburne | rooms on request |\n:::',
+  media: ':::media\nThe Salt Road | book | 2019 | 4.5 | Ana Verrin | a slow coastal novel | |\n:::',
   route: ':::route\nHarbor Inn | Lakeside path | walk | 9 min | flat\nLakeside path | Aquarium | walk | 5 min | ramp\n:::',
 }
 const ctx = (photosOk?: boolean) => ({ userId: 'u1', tokens: {}, ...(photosOk === undefined ? {} : { photosOk }) }) as unknown as UserContext
