@@ -1,3 +1,5 @@
+import {SavedPage} from '@/components/pages/SavedPage'
+import {renderHtml,flattenBlocks} from '@/lib/files/render'
 import { redirect, notFound } from 'next/navigation'
 import { getSession } from '@/lib/auth/session'
 import { getFile, fileLinkState, safeFileUrl } from '@/lib/profile/files'
@@ -17,6 +19,6 @@ export default async function FilePage({ params }: { params: Promise<{ id: strin
     <p className={styles.meta}>Private saved copy · {new Date(file.created_at).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' })}</p>
     {state === 'live' && <a className={styles.connect} href={safeFileUrl(file.url)!} target="_blank" rel="noopener noreferrer">Open on here.now</a>}
     {state === 'expired' && <p className={styles.meta}>The shared link has expired. Your saved copy is still here.</p>}
-    <pre className={styles.savedBody}>{file.markdown}</pre>
+    {file.markdown.includes(':::pages') ? <><SavedPage fileId={file.id} html={renderHtml({title:file.title,body:file.markdown})}/><details><summary>Static saved view</summary><pre className={styles.savedBody}>{flattenBlocks(file.markdown)}</pre></details></> : <pre className={styles.savedBody}>{file.markdown}</pre>}
   </CoastShell>
 }

@@ -6,7 +6,7 @@ import {KIND_BLOCKS} from '@/lib/files/kinds'
 import {splitBlocks,renderHtml,renderPdf,flattenBlocks,BLOCK_NAMES} from '@/lib/files/render'
 import {renderSurfacePreview} from '@/lib/brand/surface-preview'
 const rows:Record<string,string>={
- markdown:'## Harbor notes\nPack a jacket.',facts:'Place | Harbor',cost:'Room | $120',
+ pages:JSON.stringify({version:1,components:[{id:'harbor',type:'checklist',title:'Harbor checklist',rows:[{id:'bag',label:'Harbor bag',detail:'Pack a jacket'}]}]}),markdown:'## Harbor notes\nPack a jacket.',facts:'Place | Harbor',cost:'Room | $120',
  'heads-up':'Stock unknown.',place:'name | Harbor kiosk',places:'Harbor Cafe | unknown | Hours unknown | estimate unknown | Harbor Road | | | https://venue.test |',reply:'Ask about Harbor access',options:'Harbor Inn | $120 | quiet | availability unknown',sources:'Harbor directory | https://venue.test | 2030-06-04',
  weather:'Harbor | 61° | Clear | 65° | 52° | 9 mph | 10%',scores:'Gulls | 3 | Otters | 1 | Final',media:'Night Ferry | movie | 2030 | unknown | Alex Example | Fictional | | https://media.test',stay:'Harbor Inn | $120 | unknown | Harbor | rooms unknown | | https://venue.test',route:'Harbor Inn | Harbor park | walk | unknown | access unverified',briefing:'Harbor budget vote | Harbor Gazette | date unknown | Fictional vote | https://news.test',gallery:'img/harbor.jpg | Harbor painting | Alex Example | CC BY 4.0',lead:'pick | Harbor Inn | quiet',checks:'Harbor access | unverified | |'
 }

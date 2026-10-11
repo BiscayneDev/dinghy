@@ -1,3 +1,4 @@
+import {parsePageSpec} from '@/lib/pages/runtime'
 import { optionalWithin, verifyShareMetadata, type ImageryState } from './imagery'
 import { renderSurfacePreview, type PreviewResult } from '@/lib/brand/surface-preview'
 import { surfacePlan } from './surface-contract'
@@ -89,6 +90,10 @@ export function parseFileInput(input: unknown): { doc: DinghyDoc; format: FileFo
     if (!title || !body.trim()) return { error: 'title and body are required' }
     if (title.length > 140) return { error: 'title is too long (max 140 characters)' }
     if (body.length > MAX_BODY_CHARS) return { error: `body is too long (max ${MAX_BODY_CHARS} characters)` }
+    const pages=[...body.matchAll(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/gm)]
+    if(pages.length>1)return {error:'Use one Pages block per file, with distinct stable component IDs.'}
+    // Rendering still handles stored invalid components as visible static text.
+    for(const page of pages){const validated=parsePageSpec(page[1]);if('error'in validated)return {error:'Invalid Pages block: '+validated.error+'. Correct the component or use plain document text.'}}
     const raw = str(i.format).toLowerCase() || 'pdf'
     const format = (raw === 'word' ? 'docx' : raw === 'markdown' ? 'md' : raw) as FileFormat
     if (!FORMATS.includes(format)) return { error: `format must be one of ${FORMATS.join(', ')}` }
@@ -188,7 +193,7 @@ export function fileToolsFor(): FileToolset {
                 title: { type: 'string', description: 'Document title, e.g. "Weekend in Key Biscayne"' },
                 kind: { type: 'string', enum: ['file', 'itinerary'], description: 'Use itinerary only for an actual trip itinerary. Otherwise file.' },
                 subtitle: { type: 'string', description: 'Optional one-line subtitle: who, when, where' },
-                body: { type: 'string', description: 'The document body in Markdown. For researched facts use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or literal {{source:src1.content:START:END}} excerpts from this turn source_records. Never invent IDs; missing fields stay unknown.' },
+                body: { type: 'string', description: 'The document body in Markdown. For interactive own-web Pages use :::pages then JSON {version:1,components:[{id,type,title,rows:[{id,label,detail}]}]} then :::. Types comparison/filter/checklist/map (map requires source-supported lat/lon; no guessed indoor route). Stable IDs preserve local state. Optional code is worker-only JavaScript returning a subset of declared row IDs; no network, accounts, sends or purchases. Static text/PDF fallback always remains. For researched facts use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or literal {{source:src1.content:START:END}} excerpts from this turn source_records. Never invent IDs; missing fields stay unknown.' },
                 format: { type: 'string', enum: FORMATS, description: 'pdf (default), docx, html, csv or md' },
                 attach: { type: 'boolean', description: 'Send the file itself as an attachment instead of a private file link. Only when asked for the file.' },
             },
