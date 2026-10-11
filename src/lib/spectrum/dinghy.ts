@@ -1,4 +1,4 @@
-import {itineraryNeedsResearch,itineraryShapeErrorCode} from '@/lib/files/itinerary-contract'
+import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
 import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
@@ -812,7 +812,7 @@ export async function chatWithTools(
                     }
                     const pageError = call.function.name === 'create_file' ? (deliverablePageError(contract, input, [...mapSources, ...foundSources.map(s => s.url)]) ?? weeklyPageError(input, currentRequest, foundSources.map(s => s.url))) : null
                     if (pageError) {
-                        validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:deliverable_shape');if(itineraryResearch)await opts.onStage?.('tool','invalid:itinerary_shape:'+itineraryShapeErrorCode(pageError));if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: fix only the reported missing deliverable shape using evidence already returned.'})}
+                        validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:deliverable_shape');if(itineraryResearch){await opts.onStage?.('tool','invalid:itinerary_shape:'+itineraryShapeErrorCode(pageError));if(itineraryShapeErrorCode(pageError)==='day_sections')await opts.onStage?.('tool','invalid:itinerary_format:'+itineraryDayFormatCode(typeof (input as {body?:unknown})?.body==='string'?(input as {body:string}).body:''));}if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: fix only the reported missing deliverable shape using evidence already returned.'})}
                         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: pageError }) })
                         continue
                     }
