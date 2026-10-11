@@ -28,12 +28,14 @@ export function unmatchedPlacesReply(data: unknown): string | null {
 }
 
 /** Product stock and retail locations are not food/drink map discovery. */
+const EXTRA_FOOD = /\b(?:tea|boba|juice|smoothies?|beer|wine|cocktails?|steak|burgers?|sandwich(?:es)?|salads?|vegan|vegetarian|thai|indian|italian|korean|chinese|japanese|mexican|seafood|dumplings?|croissants?|pastries|donuts?|doughnuts?|kebabs?|falafel|burritos?|hot dogs?|congee|laksa|satay|pho|banh mi|yakitori|udon|soba|curry|buffets?|fast food|halal|kosher|gluten.free)\b/i
+const RETAIL_PRODUCT = /\b(?:nicotine|tobacco|cigarettes?|vapes?|pouches?|pharmac(?:y|ies)|medicin(?:e|es)|painkillers?|chargers?|adapters?|electronics?|sim cards?|esim|toiletries|sunscreen|perfume|cosmetics?|souvenirs?|duty.?free|retail)\b/i
 export function isRetailAvailability(text: string): boolean {
-    return /\b(?:nicotine|tobacco|cigarettes?|vapes?|pouches?|pharmac(?:y|ies)|medicin(?:e|es)|painkillers?|chargers?|adapters?|electronics?|sim cards?|esim|toiletries|sunscreen|perfume|cosmetics?|souvenirs?|duty.?free|retail|shop(?:s|ping)?|buy|stock|sold|sell|purchase)\b/i.test(text)
+    return RETAIL_PRODUCT.test(text) || (/\b(?:shop(?:s|ping)?|buy|stock|sold|sell|purchase)\b/i.test(text) && !FOOD.test(text) && !EXTRA_FOOD.test(text))
 }
 
 /** Allow only known food/drink categories, and reject mixed retail intents.
  * Unknown categories can still be researched with web_search. */
 export function isFoodDrinkQuery(text: string): boolean {
-    return !isRetailAvailability(text) && (FOOD.test(text) || /\b(?:tea|boba|juice|smoothies?|beer|wine|cocktails?|steak|burgers?|sandwich(?:es)?|salads?|vegan|vegetarian|thai|indian|italian|korean|chinese|japanese|mexican|seafood|dumplings?|croissants?|pastries|donuts?|doughnuts?|kebabs?|falafel|burritos?|hot dogs?|congee|laksa|satay|pho|banh mi|yakitori|udon|soba|curry|buffets?|fast food|halal|kosher|gluten.free)\b/i.test(text))
+    return !isRetailAvailability(text) && (FOOD.test(text) || EXTRA_FOOD.test(text))
 }
