@@ -1,4 +1,4 @@
-import {itineraryPageError,ITINERARY_NOTE} from './itinerary-contract'
+import {itineraryPageError,ITINERARY_NOTE,ITINERARY_DAY_HEADING,ITINERARY_DAY_HEADING_NOTE} from './itinerary-contract'
 import { mapArtifactTurn, mapPageError } from './map-artifact'
 import { weeklyListRequest, weeklyPageError } from './weekly-standard'
 type Line = { role: string; content: string }
@@ -61,7 +61,7 @@ export function deliverablePageError(c: DeliverableContract | null, input: unkno
         if (Math.max(optionRows, tableRows) < 2) return 'Comparison contract: supply at least two named options in a markdown table or :::options block. Show differences and catches; never invent missing values.'
     }
     if (c.kind === 'list' && !listRows(body) && !blockRows(body, 'media|options|places|briefing')) return 'List contract: supply actual list/checklist items or structured rows, not a generic paragraph.'
-    if (c.kind === 'itinerary' && !blockRows(body, 'route') && !/(?:^|\n)\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i.test(body)) return 'Itinerary contract: organize by day or numbered stop headings, or use :::route legs. Unknown timings stay unknown.'
+    if (c.kind === 'itinerary' && !blockRows(body, 'route') && !ITINERARY_DAY_HEADING.test(body)) return 'Itinerary contract: '+ITINERARY_DAY_HEADING_NOTE+' Unknown timings stay unknown.'
     if(c.kind==='itinerary'){const error=itineraryPageError(body,c.request,urls);if(error)return error}
     return weeklyPageError(input, c.request, urls)
 }
