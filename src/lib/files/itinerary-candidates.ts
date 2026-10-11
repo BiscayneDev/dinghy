@@ -43,3 +43,26 @@ export function compileItineraryCandidates(input:unknown,records:SourceRecords):
  const {itinerary_candidates:_c,...rest}=i
  return {input:{...rest,body},compiled:true}
 }
+
+/** Finite metadata only. Never persist model arguments or source text. */
+export function itineraryCandidateErrorCode(error:string):string {
+ if(error.startsWith('File input'))return 'input'
+ if(error.startsWith('Typed itinerary candidates'))return 'count_or_body'
+ if(error.startsWith('Do not mix'))return 'manual_blocks'
+ if(error.startsWith('Candidate facts require exact page-content source references'))return 'reference_type'
+ if(error.startsWith('Unknown candidate reference'))return 'reference_key'
+ if(error.startsWith('Candidate facts require exact page-content excerpt offsets'))return 'reference_shape'
+ if(error.startsWith('Unknown source'))return 'unknown_source'
+ if(error.startsWith('This source field'))return 'absent_field'
+ if(error.startsWith('Invalid source excerpt'))return 'offset_range'
+ if(error.startsWith('Excerpt cuts'))return 'offset_cut'
+ if(error.startsWith('Candidate excerpt'))return 'empty_excerpt'
+ if(error.startsWith('Candidate facts require a successful page'))return 'snippet'
+ if(error.startsWith('Each candidate'))return 'candidate_type'
+ if(error.startsWith('Candidate kind'))return 'kind'
+ if(error.startsWith('Unknown candidate field'))return 'candidate_key'
+ if(error.startsWith('Rating/area'))return 'hotel_only'
+ if(error.startsWith('Candidate reason/catch'))return 'judgment_shape'
+ if(error.startsWith('Candidate groups'))return 'group_limit'
+ return 'other'
+}
