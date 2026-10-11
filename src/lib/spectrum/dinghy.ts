@@ -600,10 +600,13 @@ export async function chatWithTools(
         const schema=t.inputSchema as {required?:string[];properties?:Record<string,unknown>}
         return {...t,description:'For this researched itinerary, itinerary_candidates is REQUIRED. No handwritten stay/options/sources blocks. '+t.description,inputSchema:{...schema,required:[...new Set([...(schema.required??[]),'itinerary_candidates'])]}}
     })
-    const defsNow = () => tools.map((t) => ({
-        type: 'function' as const,
-        function: { name: t.name, description: t.description, parameters: t.inputSchema },
-    }))
+    const defsNow = () => tools.map((t) => {
+        const ids=sourceRecords.pageIds()
+        const schema=t.inputSchema as {properties?:Record<string,any>}
+        const candidates=schema.properties?.itinerary_candidates
+        const parameters=itineraryResearch&&t.name==='create_file'&&ids.length&&candidates ? {...schema,properties:{...schema.properties,itinerary_candidates:{...candidates,items:{...candidates.items,properties:Object.fromEntries(Object.entries(candidates.items.properties).map(([key,value])=>{const v=value as any;return [key,['name','price','rating','area'].includes(key)?{...v,properties:{...v.properties,source:{type:'string',enum:ids,description:'Successful page-read ID only, never a search snippet'}}}:v]}))}}}} : t.inputSchema
+        return {type:'function' as const,function:{name:t.name,description:t.description,parameters}}
+    })
     let messages: Record<string, unknown>[] = [
         {
             role: 'system',
@@ -927,4 +930,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                    }
+                                                                }

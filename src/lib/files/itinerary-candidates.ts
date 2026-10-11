@@ -19,7 +19,7 @@ export function compileItineraryCandidates(input:unknown,records:SourceRecords):
   const result=records.resolve(r)
   if('error'in result)return result
   if(!result.value.trim())return {error:'Candidate excerpt must not be empty.'}
-  if(result.record.origin!=='page')return {error:'Candidate facts require a successful page read, not search snippets.'}
+  if(result.record.origin!=='page')return {error:'Candidate facts require a successful page read, not search snippets. Use page source IDs: '+records.pageIds().join(', ')+'. Select exact content excerpts from those pages.'}
   return `{{source:${r.source}.content:${r.start}:${r.end}}}`
  }
  for(const raw of i.itinerary_candidates){
