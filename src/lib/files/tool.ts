@@ -1,3 +1,4 @@
+import { renderDocumentOg } from '@/lib/brand/document-og'
 import { isFoodDrinkQuery } from '@/lib/places/intent'
 /**
  * create_file: Dinghy makes a real document and hands it to the user.
@@ -162,7 +163,7 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
     if (pdf) files.push({ path: pdf.filename, bytes: pdf.bytes, contentType: pdf.mimeType })
     for (const p of found.photos) files.push({ path: p.path, bytes: p.bytes, contentType: p.contentType })
     // Share image from the page's own hero, inside the private site. Clean turns only; a miss keeps today's image.
-    const og = photosOk ? await renderHeroOg({ title: doc.title, subtitle: doc.subtitle, body: doc.body }, found.photos).catch(() => null) : null
+    const og = photosOk ? (await renderHeroOg(doc, found.photos).catch(() => null) ?? await renderDocumentOg(doc).catch(() => null)) : null
     if (og) files.push({ path: 'og.png', bytes: og, contentType: 'image/png' })
     signal?.throwIfAborted()
     const hosted = await publishSite(files, { title: doc.title, userId })

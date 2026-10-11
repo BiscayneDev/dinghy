@@ -62,14 +62,15 @@ describe('create_file og phase 2', () => {
     expect(publishSite).toHaveBeenCalledTimes(1)
   }, 60000)
 
-  it('unclean turns and non-hero pages get no og.png and no second publish', async () => {
+  it('unclean turns get no og.png; clean plain pages use their content image', async () => {
     await run('weather', false)
     await run('weather')
     expect(updateSite).not.toHaveBeenCalled()
     for (const c of publishSite.mock.calls) expect((c[0] as { path: string }[]).map((f) => f.path)).not.toContain('og.png')
     publishSite.mockClear()
-    await fileToolsFor().tools.find((t) => t.name === 'create_file')!.execute({ title: 'Notes', format: 'pdf', body: 'plain' }, ctx(true))
-    expect(updateSite).not.toHaveBeenCalled()
+    await fileToolsFor().tools.find((t) => t.name === 'create_file')!.execute({ title: 'Notes', format: 'pdf', body: '## Decisions\nplain' }, ctx(true))
+    expect(updateSite).toHaveBeenCalledTimes(1)
+    expect((publishSite.mock.calls[0][0] as { path: string }[]).map(f => f.path)).toContain('og.png')
   }, 60000)
 })
 
