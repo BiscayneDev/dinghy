@@ -1,3 +1,4 @@
+import { optionalWithin, verifyShareMetadata, type ImageryState } from './imagery'
 import { renderSurfacePreview, type PreviewResult } from '@/lib/brand/surface-preview'
 import { surfacePlan } from './surface-contract'
 import { isFoodDrinkQuery } from '@/lib/places/intent'
@@ -52,6 +53,9 @@ export interface MadeFile extends RenderedFile {
     hosted?: HostedFile
     /** Phone-width preview card (PNG) for weather and scores pages, sent above the link. Clean turns only. */
     card?: Buffer
+    imagery?: ImageryState
+    /** Run only after link delivery attempt, while the request is still alive. */
+    enrichImagery?: () => Promise<void>
     /** The document body, kept so Dinghy can reopen and update its own files. */
     markdown?: string
 }
@@ -122,60 +126,47 @@ async function replyLineFor(chatGuid: string | undefined): Promise<string | unde
     try { return await dinghyLineFor(chatGuid) } catch { return undefined }
 }
 
-/**
- * Phase 2: the Site's address is only known after it is published, so re-publish the same files with the
- * og:image pointing at the site's own og.png. Best effort and time-boxed: any failure leaves the page that is
- * already live, with today's share image.
- */
-async function addOgTag(hosted: HostedFile, files: SiteFile[], doc: DinghyDoc, ctx: { format: FileFormat; userId: string; replyLine?: string; pdf: RenderedFile | null }): Promise<void> {
-    try {
-        const url = new URL('og.png', hosted.url.endsWith('/') ? hosted.url : `${hosted.url}/`)
-        if (url.protocol !== 'https:' || !/\.here\.now$/.test(url.hostname)) return
-        const html = renderHtml(doc, {
-            ogImage: url.href,
-            ...(ctx.replyLine ? { replyLine: ctx.replyLine } : {}),
-            ...(ctx.pdf ? { download: { href: ctx.pdf.filename, label: 'download pdf' } } : {}),
-        })
-        const next = files.map((f) => (f.path === 'index.html' ? { ...f, bytes: Buffer.from(html, 'utf8') } : f))
-        await Promise.race([
-            updateSite(hosted.slug, next, { title: doc.title, userId: ctx.userId, baseVersionId: hosted.versionId }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('og update timed out')), 10_000)),
-        ])
-    } catch {
-        /* keep the live version */
-    }
-}
-
-async function host(input: DinghyDoc, format: FileFormat, userId: string, replyLine?: string, photosOk = false, signal?: AbortSignal): Promise<{ hosted: HostedFile; pdf: RenderedFile | null; enrich: () => Promise<Buffer | null>; previews: {og:Omit<PreviewResult,'bytes'>;chat?:Omit<PreviewResult,'bytes'>} }> {
-    // Free credited photos, only on a clean turn, never longer than 12s in total. A miss keeps the colour card.
-    const found = await Promise.race([
-        attachPhotos(input.body, { allowed: photosOk }),
-        new Promise<{ body: string; photos: [] }>((resolve) => setTimeout(() => resolve({ body: input.body, photos: [] }), 12_000)),
-    ]).catch(() => ({ body: input.body, photos: [] as Photo[] }))
-    const doc: DinghyDoc = { ...input, body: found.body }
-    const pdf = format === 'pdf' ? await renderFile(doc, 'pdf') : null
-    const html = renderHtml(doc, {
-        ogImage: fileCardUrl(doc, format === 'pdf' ? 'pdf' : 'page'),
-        ...(replyLine ? { replyLine } : {}),
-        ...(pdf ? { download: { href: pdf.filename, label: 'download pdf' } } : {}),
-    })
-    const files: SiteFile[] = [{ path: 'index.html', bytes: Buffer.from(html, 'utf8'), contentType: 'text/html; charset=utf-8' }]
-    if (pdf) files.push({ path: pdf.filename, bytes: pdf.bytes, contentType: pdf.mimeType })
-    for (const p of found.photos) files.push({ path: p.path, bytes: p.bytes, contentType: p.contentType })
-    // Share image from the page's own hero, inside the private site. Clean turns only; a miss keeps today's image.
-    const ogResult = await renderSurfacePreview(doc, 'og', found.photos, photosOk)
-    const og = ogResult.bytes
-    if (og) files.push({ path: 'og.png', bytes: og, contentType: 'image/png' })
+/** Useful content is settled first. Vetted decoration updates the same page only
+ * after the link has been attempted. Initial share metadata is already final. */
+async function host(input: DinghyDoc, format: FileFormat, userId: string, replyLine?: string, photosOk = false, signal?: AbortSignal) {
+    const pdf = format === 'pdf' ? await renderFile(input, 'pdf') : null
+    // Clean turns can use the existing deterministic branded fallback. Private
+    // turns carry no title/subtitle in a remote image URL.
+    const fallbackImage = photosOk ? fileCardUrl(input, format === 'pdf' ? 'pdf' : 'page') : null
+    const opts = {...(replyLine ? {replyLine} : {}), ...(pdf ? {download:{href:pdf.filename,label:'download pdf'}} : {})}
+    const html = renderHtml(input, {imageryState:'fallback',...opts,...(fallbackImage ? {ogImage:fallbackImage} : {})})
+    const files: SiteFile[] = [{path:'index.html',bytes:Buffer.from(html),contentType:'text/html; charset=utf-8'}]
+    if(pdf) files.push({path:pdf.filename,bytes:pdf.bytes,contentType:pdf.mimeType})
     signal?.throwIfAborted()
-    const hosted = await publishSite(files, { title: doc.title, userId })
-    // Publication is settled before optional site/card enrichment.
-    const previews: {og:Omit<PreviewResult,'bytes'>;chat?:Omit<PreviewResult,'bytes'>} = {og:{route:ogResult.route,...(ogResult.reason?{reason:ogResult.reason}:{})}}
-    return { hosted, pdf, previews, enrich: async () => {
-        if (og) await addOgTag(hosted, files, doc, { format, userId, replyLine, pdf })
-        const chat = await renderSurfacePreview(doc, 'chat', found.photos, photosOk)
-        previews.chat = {route:chat.route,...(chat.reason?{reason:chat.reason}:{})}
-        return chat.bytes
-    } }
+    const hosted = await publishSite(files,{title:input.title,userId})
+    const imagery: ImageryState = {page:'fallback',chat:'fallback',share:'fallback',metadata:await optionalWithin(verifyShareMetadata(hosted,fallbackImage),2700,false)?'verified':'unverified',reason:photosOk?'decoration_pending':'privacy_gate'}
+    if(imagery.metadata==='unverified'&&photosOk)imagery.reason='metadata_unverified'
+    const previews: {og:Omit<PreviewResult,'bytes'>;chat:Omit<PreviewResult,'bytes'>} = {og:{route:'static_link',...(photosOk?{}:{reason:'privacy_gate' as const})},chat:{route:'static_link',...(photosOk?{}:{reason:'privacy_gate' as const})}}
+    const prepareChat=async()=>{
+        const chat=await optionalWithin(renderSurfacePreview(input,'chat',[],photosOk),1500,{bytes:null,route:'static_link' as const,reason:'renderer_error' as const})
+        imagery.chat=chat.bytes?'ready':'fallback';previews.chat={route:chat.route,...(chat.reason?{reason:chat.reason}:{})};return chat.bytes
+    }
+    let enriched=false
+    const enrichImagery = async () => {
+        if(enriched||!photosOk||signal?.aborted)return
+        enriched=true
+        const found=await optionalWithin(attachPhotos(input.body,{allowed:true}),12000,{body:input.body,photos:[] as Photo[]})
+        if(signal?.aborted)return
+        const doc={...input,body:found.body}
+        const og=await optionalWithin(renderSurfacePreview(doc,'og',found.photos),1500,{bytes:null,route:'static_link' as const})
+        if(signal?.aborted)return
+        if(!found.photos.length&&!og.bytes){imagery.reason='decoration_unavailable';return}
+        try {
+            const image=og.bytes?new URL('og.png',hosted.url).href:fallbackImage
+            const next:SiteFile[]=[{path:'index.html',bytes:Buffer.from(renderHtml(doc,{imageryState:found.photos.length?'ready':'fallback',...opts,...(image?{ogImage:image}:{})})),contentType:'text/html; charset=utf-8'},...files.filter(f=>f.path!=='index.html'),...found.photos]
+            if(og.bytes)next.push({path:'og.png',bytes:og.bytes,contentType:'image/png'})
+            // Await the real write; never race an uncancelled mutation.
+            await updateSite(hosted.slug,next,{title:input.title,userId,baseVersionId:hosted.versionId})
+            const checked=await optionalWithin(verifyShareMetadata(hosted,image),2700,false)
+            previews.og={route:og.route,...(og.reason?{reason:og.reason}:{})};imagery.page=found.photos.length?'ready':'fallback';imagery.share=og.bytes?'ready':'fallback';imagery.metadata=checked?'verified':'unverified';imagery.reason=checked?(found.photos.length?'vetted_photos':'no_vetted_photo'):'metadata_unverified'
+        }catch{imagery.reason='enrichment_failed'}
+    }
+    return {hosted,pdf,imagery,previews,enrichImagery,prepareChat}
 }
 
 export function fileToolsFor(): FileToolset {
@@ -212,20 +203,20 @@ export function fileToolsFor(): FileToolset {
             let hostError: string | undefined
             if (wantsPage && shareEnabled()) {
                 try {
-                    const { hosted, pdf, enrich, previews } = await host(parsed.doc, parsed.format, ctx.userId, await replyLineFor(ctx.chatGuid), ctx.photosOk === true, ctx.signal)
+                    const { hosted, pdf, enrichImagery, imagery, previews, prepareChat } = await host(parsed.doc, parsed.format, ctx.userId, await replyLineFor(ctx.chatGuid), ctx.photosOk === true, ctx.signal)
                     const file = pdf ?? (await renderFile(parsed.doc, 'html'))
-                    const entry: MadeFile = { ...file, format: parsed.format, kind, title: parsed.doc.title, subtitle: parsed.doc.subtitle, link: null, hosted, markdown: parsed.doc.body }
+                    const entry: MadeFile = { ...file, format: parsed.format, kind, title: parsed.doc.title, subtitle: parsed.doc.subtitle, link: null, hosted, imagery, enrichImagery, markdown: parsed.doc.body }
                     await remember(ctx, entry)
                     if (closed || ctx.signal?.aborted) return { success: false, error: 'Publication completed after the turn ended; the saved page can be recovered.' }
                     made.push(entry)
-                    const card = await enrich()
-                    if (!closed && !ctx.signal?.aborted && card) entry.card = card
+                    const card=await prepareChat()
+                    if(!closed&&!ctx.signal?.aborted&&card)entry.card=card
                     return {
                         success: true,
                         data: {
                             status: 'queued_for_delivery',
                             delivery: 'file_link',
-                            surfaces: {types:surfacePlan(parsed.doc.body).types,unknown:surfacePlan(parsed.doc.body).unknown,previews},
+                            surfaces: {types:surfacePlan(parsed.doc.body).types,unknown:surfacePlan(parsed.doc.body).unknown,previews,imagery},
                             expires: shortDate(hosted.expiresAt),
                             note: 'The app sends the new link immediately after your assistant message, without waiting for the user. Never reuse a link from history. Give a short verdict, not a delivery promise or link.',
                         },
