@@ -15,7 +15,7 @@ const NOT = /\b(deliver(?:y|ed)?|doordash|uber ?eats|order (?:me|a|some)|recipe|
 
 export function wantsPlaces(text: string): boolean {
     const t = (text ?? '').slice(0, 600)
-    return FOOD.test(t) && NEAR.test(t) && !NOT.test(t) && !wantsRestaurantBooking(t)
+    return !isRetailAvailability(t) && FOOD.test(t) && NEAR.test(t) && !NOT.test(t) && !wantsRestaurantBooking(t)
 }
 
 /** Never relabel nearby fallback eateries as cuisine matches. No booking or payment effects. */
@@ -25,4 +25,17 @@ export function unmatchedPlacesReply(data: unknown): string | null {
     if (d.matched !== false) return null
     const note = typeof d.note === 'string' ? d.note.trim() : ''
     return `${note || 'The map data did not confirm a match for the requested food. These are nearby eateries instead.'} ${d.page === 'will_send_after_reply' ? 'The page lists nearby alternatives, not verified matches.' : 'The page did not go out.'}`
+}
+
+/** Product stock and retail locations are not food/drink map discovery. */
+const EXTRA_FOOD = /\b(?:tea|boba|juice|smoothies?|beer|wine|cocktails?|steak|burgers?|sandwich(?:es)?|salads?|vegan|vegetarian|thai|indian|italian|korean|chinese|japanese|mexican|seafood|dumplings?|croissants?|pastries|donuts?|doughnuts?|kebabs?|falafel|burritos?|hot dogs?|congee|laksa|satay|pho|banh mi|yakitori|udon|soba|curry|buffets?|fast food|halal|kosher|gluten.free)\b/i
+const RETAIL_PRODUCT = /\b(?:nicotine|tobacco|cigarettes?|vapes?|pouches?|pharmac(?:y|ies)|medicin(?:e|es)|painkillers?|chargers?|adapters?|electronics?|sim cards?|esim|toiletries|sunscreen|perfume|cosmetics?|souvenirs?|duty.?free|retail)\b/i
+export function isRetailAvailability(text: string): boolean {
+    return RETAIL_PRODUCT.test(text) || (/\b(?:shop(?:s|ping)?|buy|stock|sold|sell|purchase)\b/i.test(text) && !FOOD.test(text) && !EXTRA_FOOD.test(text))
+}
+
+/** Allow only known food/drink categories, and reject mixed retail intents.
+ * Unknown categories can still be researched with web_search. */
+export function isFoodDrinkQuery(text: string): boolean {
+    return !isRetailAvailability(text) && (FOOD.test(text) || EXTRA_FOOD.test(text))
 }
