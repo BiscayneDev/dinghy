@@ -595,6 +595,11 @@ export async function chatWithTools(
     const retailAvailability = !mapArtifact && isRetailAvailability(currentRetailRequest)
     const contextualResearch = !mapArtifact && researchFollowup(history)
     if (retailAvailability || contextualResearch || mapArtifact || itineraryResearch) tools = tools.filter(t => t.name !== 'find_places')
+    if(itineraryResearch)tools=tools.map(t=>{
+        if(t.name!=='create_file')return t
+        const schema=t.inputSchema as {required?:string[];properties?:Record<string,unknown>}
+        return {...t,description:'For this researched itinerary, itinerary_candidates is REQUIRED. No handwritten stay/options/sources blocks. '+t.description,inputSchema:{...schema,required:[...new Set([...(schema.required??[]),'itinerary_candidates'])]}}
+    })
     const defsNow = () => tools.map((t) => ({
         type: 'function' as const,
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
@@ -801,12 +806,15 @@ export async function chatWithTools(
                     }
                     let input:unknown
                     try{input=JSON.parse(call.function.arguments||'{}')}catch{validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool','invalid:arguments_json');throw new Error('Invalid JSON arguments; return one corrected tool call.')}
-                    const schemaError=inputSchemaError(input,tool.inputSchema)
-                    if(schemaError){validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
                     if(call.function.name==='create_file'&&itineraryResearch&&!mapResearchRead){
                         await opts.onStage?.('tool','research:page_read_required')
                         content=JSON.stringify({error:'This itinerary needs current recommendations. Use web_search then web_fetch first. If research is blocked, return only supplied facts and explicit gaps, not invented recommendations.'});messages.push({role:'tool',tool_call_id:call.id,content});continue
                     }
+                    if(call.function.name==='create_file'&&itineraryResearch&&!(input&&typeof input==='object'&&Array.isArray((input as {itinerary_candidates?:unknown}).itinerary_candidates))){
+                        validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'itinerary_candidates is required for this researched recommendation itinerary. Supply explicit typed page-content candidates, leave absent facts unknown; body is the supplied agenda only, no stay/options/sources blocks. Correct this call once.'})});continue
+                    }
+                    const schemaError=inputSchemaError(input,tool.inputSchema)
+                    if(schemaError){validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
                     if (call.function.name === 'create_file') {
                         if(contract?.kind==='itinerary'&&itineraryResearch){
                             const candidates=compileItineraryCandidates(input,sourceRecords)
@@ -919,4 +927,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                         }
+}
