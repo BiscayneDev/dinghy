@@ -57,7 +57,7 @@ export interface MadeFile extends RenderedFile {
 /** Save the file to memory (dinghy_files). Best-effort: never blocks the reply. */
 async function remember(ctx: UserContext, f: MadeFile): Promise<void> {
     if (!ctx.userId) return
-    await rememberFile(ctx.userId, null, {
+    await rememberFile(ctx.userId, ctx.chatGuid ?? null, {
         title: f.title,
         kind: f.kind,
         format: f.hosted ? 'page' : f.format,

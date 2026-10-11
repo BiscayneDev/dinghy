@@ -1,3 +1,4 @@
+import { wantsPageResend, latestChatFile, verifiedPage, deliverHostedLink } from '@/lib/files/recover'
 import { fileReply } from '@/lib/files/reply'
 import { assertAccountActive, erasureEnabled, isEraseIntent } from '@/lib/data-portability/erasure-state'
 import { withinTurn, TURN_WORK_MS, TURN_DEADLINE_REPLY, TurnDeadlineExceeded } from './turn-budget'
@@ -42,7 +43,7 @@ import { reminderToolsFor } from './reminders'
 import { payboxSigningToolsFor } from '@/lib/tools/paybox-signing'
 import { EMPTY_MEMORY, loadMemoryContext, renderMemoryBlock, updateMemory } from './memory'
 import { fileToolsFor, stripFileMarkers, type MadeFile } from '@/lib/files/tool'
-import { hostedHistoryLine, sendFileWithPreview, sendHostedFile } from '@/lib/files/send'
+import { hostedHistoryLine, sendFileWithPreview } from '@/lib/files/send'
 import { actionToolsFor, cancelPendingActions, executePendingActionDetailed, hasPendingAction, takeLooseProposal, parseConfirmation, isRepeatedActionConfirmation, renderProposal, sendConfirmedReaction } from './actions'
 import { GATEWAY_URL, SHIPYARD_API_KEY, SHIPYARD_MODEL } from './config'
 import { dinghyContactCard } from './contact-card'
@@ -209,13 +210,9 @@ async function sendFile(space: InboundSpace, chatGuid: string, file: MadeFile): 
             // Card above the link, best effort: the link still goes out if the card does not.
             try { await (space as ContentSender).send(attachment(file.card, { name: 'preview.png', mimeType: 'image/png' })) } catch (err) { logErr('page card send failed', err) }
         }
-        try {
-            await sendHostedFile(space as ContentSender, hosted)
-        } catch (err) {
-            logErr('page send failed', err)
-            await sendText(space, chatGuid, 'reply', `${file.title}: ${file.hosted.url}`)
-        }
-        await saveMessage(chatGuid, 'assistant', line).catch((err) => logErr('message save failed', err))
+        const accepted = await deliverHostedLink(space as ContentSender, chatGuid, hosted.hosted.url)
+        await runStageRecorder(chatGuid)('reply_attempted', accepted ? 'file_link_accepted' : 'file_link_pending')
+        if (accepted) await saveMessage(chatGuid, 'assistant', line).catch((err) => logErr('message save failed', err))
         return
     }
     try {
@@ -915,6 +912,27 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             await saveMessage(chatGuid, 'user', text).catch((err) => logErr('message save failed', err))
             return
         }
+    }
+
+    // Recovery is not a new creation claim. Resolve durable same-chat state before the model.
+    const lastAssistantForFile = [...history].reverse().find((m) => m.role === 'assistant')?.content ?? ''
+    if (textIntents && wantsPageResend(text, lastAssistantForFile)) {
+        await saveMessage(chatGuid, 'user', text).catch((err) => logErr('message save failed', err))
+        try {
+            const uid = await briefableUserId(chatGuid)
+            const file = uid ? await latestChatFile(uid, chatGuid, history.map((m) => String(m.content ?? ''))) : null
+            if (file && await verifiedPage(file)) {
+                const accepted = await deliverHostedLink(space as ContentSender, chatGuid, file.url)
+                await runStageRecorder(chatGuid)('reply_attempted', accepted ? 'file_resend_accepted' : 'file_resend_pending')
+                if (accepted) await saveMessage(chatGuid, 'assistant', `[file: ${file.title}] ${file.url}`)
+                return
+            }
+            await sendText(space, chatGuid, 'reply', 'I could not verify an active page from this chat. Which page did you mean?')
+        } catch (err) {
+            logErr('page recovery failed', err)
+            await sendText(space, chatGuid, 'reply', 'I could not check the page just now. The earlier page may still exist.')
+        }
+        return
     }
 
     if (!SHIPYARD_API_KEY) {
