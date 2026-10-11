@@ -18,6 +18,8 @@ export interface ToolCallResult {
 }
 
 export interface ToolResult {
+  /** Finite public reader metadata; never raw error text or a URL. */
+  publicReadFailure?: 'http' | 'timeout' | 'network' | 'invalid_input'
   success: boolean
   data?: unknown
   error?: string
