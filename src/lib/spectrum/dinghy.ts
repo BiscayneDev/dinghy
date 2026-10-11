@@ -1,6 +1,6 @@
 import {itineraryNeedsResearch} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
-import { SourceRecords, bindFileSources, sourceBindingErrorCode, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
+import { SourceRecords, bindFileSources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
 import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
 import { mapSourceUrls, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
@@ -799,7 +799,7 @@ export async function chatWithTools(
                         } finally { if (timer) clearTimeout(timer) }
                     })
                     const captured = result.success ? sourceRecords.capture(call.function.name, result.data, new Date().toISOString()) : []
-                    content = JSON.stringify(result.success ? (captured.length ? {result: result.data, source_records:captured} : result.data ?? {}) : { error: result.error ?? 'tool failed' })
+                    content = captured.length ? sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP) : JSON.stringify(result.success ? result.data ?? {} : {error:result.error??'tool failed'})
                     if (result.success && call.function.name === 'create_file') deliverableCompleted = true
                     if (result.success && call.function.name === 'web_fetch') mapResearchRead = true
                     if (result.success && call.function.name === 'find_places') placesMismatch = unmatchedPlacesReply(result.data)
