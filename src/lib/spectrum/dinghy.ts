@@ -671,7 +671,8 @@ export async function chatWithTools(
         if(itineraryResearch&&foundSources.length&&!mapResearchRead&&!itineraryReadAttempted){
             itineraryReadAttempted=true
             const reader=tools.find(t=>t.name==='web_fetch')!
-            for(const source of foundSources.slice(0,2)){
+            // At most six actual search URLs; preserve synthesis headroom on every try.
+            for(const source of foundSources.slice(0,6)){
                 const args=JSON.stringify({url:source.url})
                 const blocked=egressRejection('web_fetch',args,tainted,corpus)
                 if(blocked){await opts.onStage?.('tool','research:read_blocked');break}
@@ -680,8 +681,8 @@ export async function chatWithTools(
                 await opts.onStage?.('tool','research:read_step')
                 toolCallCount++
                 let result
-                try{result=await withinTurn(opts.deadlineAt,async signal=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([reader.execute({url:source.url},{...ctx,signal}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Public read timed out')),TOOL_TIMEOUT_MS)})])}finally{if(timer)clearTimeout(timer)}})}
-                catch(err){if(err instanceof TurnDeadlineExceeded)throw err;result={success:false,error:'Public source read failed.'}}
+                try{result=await withinTurn(opts.deadlineAt,async signal=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([reader.execute({url:source.url},{...ctx,signal}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('Public read timed out'),{publicReadTimeout:true})),TOOL_TIMEOUT_MS)})])}finally{if(timer)clearTimeout(timer)}})}
+                catch(err){if(err instanceof TurnDeadlineExceeded)throw err;result={success:false,publicReadFailure:(err instanceof Error&&'publicReadTimeout' in err?'timeout':'network') as 'timeout'|'network',error:'Public source read failed.'}}
                 const captured=result.success?sourceRecords.capture('web_fetch',result.data,new Date().toISOString()):[]
                 if(captured.some(r=>r.content)){
                     mapResearchRead=true
@@ -691,6 +692,12 @@ export async function chatWithTools(
                     break
                 }
                 await opts.onStage?.('tool',result.success?'research:read_empty':'research:read_failed')
+                if(!result.success){
+                    const code=result.publicReadFailure
+                    // Never interpolate raw error text, even from a custom tool.
+                    const safe=code==='http'||code==='timeout'||code==='network'||code==='invalid_input'?code:'other'
+                    await opts.onStage?.('tool',`research:read_failure:${safe}`)
+                }
             }
             if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
         }
@@ -906,4 +913,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                  }
+}
