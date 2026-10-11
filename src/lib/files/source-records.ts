@@ -1,0 +1,85 @@
+/** Per-turn immutable values from successful public read tools. Titles are
+ * source titles, not verified venue identities. Text is source-reported,
+ * never a stock/access/route confirmation. No cross-turn or persistent cache. */
+export type SourceField = 'title' | 'url' | 'published_date' | 'content'
+export type SourceRecord = Readonly<{ id: string; title: string | null; url: string; published_date: string | null; content: string | null; checked_at: string; origin: 'search' | 'page' }>
+export type SourceRef = { source: string; field: SourceField; start?: number; end?: number }
+const fields: SourceField[] = ['title', 'url', 'published_date', 'content']
+const urlOk = (value: unknown): value is string => {
+    if (typeof value !== 'string' || /[\s<>\"|{}\[\]()\\]/.test(value)) return false
+    try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password } catch { return false }
+}
+const text = (value: unknown) => typeof value === 'string' && value.trim() ? value : null
+export class SourceRecords {
+    private records: SourceRecord[] = []
+    capture(tool: string, data: unknown, checkedAt: string): SourceRecord[] {
+        if (!['web_search', 'web_fetch'].includes(tool) || !data || typeof data !== 'object') return []
+        const input = data as Record<string, unknown>
+        const candidates = tool === 'web_search' ? (Array.isArray(input.results) ? input.results : []) : [input]
+        const added: SourceRecord[] = []
+        for (const candidate of candidates) {
+            if (!candidate || typeof candidate !== 'object') continue
+            const hit = candidate as Record<string, unknown>
+            if (!urlOk(hit.url)) continue
+            const record = Object.freeze({ id: `src${this.records.length + 1}`, url: hit.url, title: text(hit.title), content: text(hit.content), published_date: text(hit.published_date), checked_at: checkedAt, origin: tool === 'web_search' ? 'search' as const : 'page' as const })
+            this.records.push(record); added.push(record)
+        }
+        return added
+    }
+    resolve(ref: unknown): { value: string; record: SourceRecord; field: SourceField } | { error: string } {
+        if (!ref || typeof ref !== 'object') return { error: 'Source reference required.' }
+        const r = ref as SourceRef
+        const record = this.records.find(s => s.id === r.source)
+        if (!record || !fields.includes(r.field)) return { error: 'Unknown source ID or field. Use IDs returned by a successful read this turn.' }
+        const value = record[r.field]
+        if (value === null) return { error: 'This source field is unknown. Do not invent a replacement.' }
+        if (r.start === undefined && r.end === undefined) {
+            if (r.field === 'content' && value.length > 500) return {error:'Select a literal source excerpt of at most 500 characters.'}
+            return { value, record, field: r.field }
+        }
+        if (r.field !== 'content' || !Number.isInteger(r.start) || !Number.isInteger(r.end) || r.start! < 0 || r.end! <= r.start! || r.end! > value.length || r.end! - r.start! > 500) return { error: 'Invalid source excerpt offsets. Select at most 500 characters from content, without rewriting them.' }
+        const cutsToken = (at: number) => at > 0 && at < value.length && (/\w/.test(value[at-1]) && /\w/.test(value[at]) || /\d/.test(value[at-1]) && /[:/\-]/.test(value[at]) || /[:/\-]/.test(value[at-1]) && /\d/.test(value[at]) || value[at] === '.' && /\d/.test(value[at-1]) && /\d/.test(value[at+1] ?? '') || value[at-1] === '.' && /\d/.test(value[at]) && /\d/.test(value[at-2] ?? ''))
+        if (cutsToken(r.start!) || cutsToken(r.end!)) return {error:'Excerpt cuts a word, price, date or time. Select the complete source value.'}
+        return { value: value.slice(r.start, r.end), record, field: r.field }
+    }
+    size() { return this.records.length }
+}
+
+/** Escape source values as literal markdown/block cells. Prevent external
+ * text from introducing links, HTML or block delimiters. Words remain data. */
+function literal(value: string): string {
+    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()!#|:]/g, c => `&#${c.charCodeAt(0)};`).replace(/[\r\n]/g, ' ')
+}
+export const SOURCE_BINDING_NOTE = 'Source-bound file values: successful web reads return immutable source_records with IDs. In create_file title/subtitle/body use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or {{source:src1.content:START:END}}. START/END are exact character offsets, at most 500 characters; the server inserts the original source text, never your rewritten copy. Use these bindings for names, terminals, hours, prices, dates and links when supported. Source titles are page titles, not venue names. Search content is a snippet, not a verified page. Missing values stay unknown. Do not promote a directory listing into current stock, a terminal into a verified walking route, or source-reported text into independent verification. Pick and explain separately from bound facts. A researched deliverable needs source bindings; never invent IDs or substitute guessed values. The server appends provenance for every used source.'
+
+export function bindFileSources(input: unknown, records: SourceRecords, required = false): { input: unknown; count: number } | { error: string } {
+    if (!input || typeof input !== 'object') return { error: 'File input required.' }
+    const i = input as Record<string, unknown>
+    const used = new Map<string, SourceRecord>()
+    let count = 0
+    let error: string | undefined
+    const expand = (raw: unknown, field: string) => {
+        if (typeof raw !== 'string') return raw
+        const expanded = raw.replace(/\{\{source:([^}]+)\}\}/g, (_token, spec: string) => {
+            const m = spec.match(/^(src\d+)\.(title|url|published_date|content)(?::(\d+):(\d+))?$/)
+            if (!m) { error = 'Invalid binding syntax. Use a returned source ID and exact field/offsets.'; return '' }
+            const result = records.resolve({source:m[1],field:m[2],...(m[3] ? {start:Number(m[3]),end:Number(m[4])} : {})})
+            if ('error' in result) { error = result.error; return '' }
+            used.set(result.record.id,result.record); count++
+            // Bound URLs remain safe URLs for markdown links/sources rows.
+            // Titles/subtitles have no markdown interpretation at render time.
+            return field !== 'body' || result.field === 'url' ? result.value.replace(/[\r\n]/g, ' ') : literal(result.value)
+        })
+        if (expanded.includes('{{source:')) error = 'Unclosed source binding. No file was published.'
+        return expanded
+    }
+    const next = {...i,title:expand(i.title,'title'),subtitle:expand(i.subtitle,'subtitle'),body:expand(i.body,'body')}
+    if (error) return { error }
+    if (required && !count) return { error: 'This researched deliverable needs source bindings for its source facts. Use source_records IDs, not retyped names/prices/hours or invented values.' }
+    if (typeof next.body === 'string' && used.size) {
+        const rows = [...used.values()].map(r => `- ${literal(r.title ?? 'Source')} (${r.origin === 'search' ? 'search snippet' : 'page text'}), checked ${literal(r.checked_at)}${r.published_date ? `, source date ${literal(r.published_date)}` : ', source date unknown'}: ${r.url}`)
+        next.body += '\n\n## Source provenance\nSource-reported text, not independent confirmation of current stock, access or a walking route. A listed terminal is not a verified route.\n\n'+rows.join('\n')
+    }
+    if (typeof next.body === 'string' && next.body.length > 60_000) return {error:'Bound body is too long (max 60000 characters). Reduce source excerpts.'}
+    return { input: next, count }
+}
