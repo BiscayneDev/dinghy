@@ -1005,6 +1005,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         eyes = tapback(message, '👀')
     }, 6_000)
     eyesTimer.unref?.()
+    let fileTools: ReturnType<typeof fileToolsFor> | null = null
     try {
         // Read tools only for chats bound to a user with Google/PayBox connected;
         // everyone else gets the plain conversational path.
@@ -1046,7 +1047,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         let toolCalls = 0
         let iterations = 0
         const actions = toolCtx && capabilitiesFor(toolCtx).google ? actionToolsFor(chatGuid) : null
-        const fileTools = toolCtx ? fileToolsFor() : null
+        fileTools = toolCtx ? fileToolsFor() : null
         // Unbound chats still get live info (weather, web search): public
         // data only, run against an empty context with no account tokens.
         // Every chat can ask what it has spent; the owner sees all chats.
@@ -1224,6 +1225,14 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         // After the reply is out: refresh memory (no-op unless due).
         await updateMemory(chatGuid).catch((err) => logErr('memory update failed', err))
     } catch (err) {
+        // Freeze the current-turn queue before any failure reply. A settled page wins;
+        // late background work may be saved for recovery but cannot send in this turn.
+        fileTools?.close()
+        if (fileTools?.files().length) {
+            await sendText(space, chatGuid, 'reply', 'Here you go.')
+            for (const file of fileTools.files()) await sendFile(space, chatGuid, file)
+            return
+        }
         if (err instanceof TurnDeadlineExceeded) {
             await onStage('deadline')
             await sendText(space, chatGuid, 'error_notice', TURN_DEADLINE_REPLY)
@@ -1238,7 +1247,8 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             ? 'That one needs a minute on my side. Ask me again shortly.'
             : 'Something went wrong on my end. Try again in a moment.')
     } finally {
+        fileTools?.close()
         clearTimeout(eyesTimer)
         stopTypingReTap(space, typingHandle)
     }
-    }
+}

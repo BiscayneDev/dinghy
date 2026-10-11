@@ -9,6 +9,7 @@ export function needsFileRepair(reply: string): boolean {
 
 /** A fabricated announcement is never sent, even when the repair failed. */
 export function fileReply(reply: string, made: number): string {
+    if (made > 0 && /(?:timed? out|time.?limit|failed|not made|couldn['’]?t (?:make|create)|could not (?:make|create))/i.test(reply)) return 'Here you go.'
     if (made > 0 && (HOSTED_URL.test(reply) || DELIVERY_PROMISE.test(reply))) return 'Here you go.'
     if (made === 0 && needsFileRepair(reply)) return 'The document was not made, so there is no new file to send.'
     return reply
