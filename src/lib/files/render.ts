@@ -116,14 +116,17 @@ const safe = new Marked({
     },
 })
 
+const decodeSourceLiteral = (s: string): string => s.replace(/&#(\d+);/g, (entity, code) => { const n = Number(code); return [92,96,42,95,123,125,91,93,40,41,33,35,124,58].includes(n) ? String.fromCharCode(n) : entity }).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+
 /** Inline markdown (bold/italic/code/links) to plain text for PDF/DOCX runs. */
 function plain(text: string): string {
-    return text
+    return decodeSourceLiteral(text
         .replace(/\*\*(.+?)\*\*/g, '$1')
         .replace(/__(.+?)__/g, '$1')
         .replace(/(^|\W)\*(.+?)\*(?=\W|$)/g, '$1$2')
         .replace(/`([^`]+)`/g, '$1')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    )
 }
 
 interface Run {
@@ -238,7 +241,7 @@ function renderReplies(lines: string[], line?: string): string {
 }
 
 
-const cells = (line: string): string[] => line.split('|').map((c) => c.trim())
+const cells = (line: string): string[] => line.split('|').map((c) => decodeSourceLiteral(c.trim()))
 
 /** Option cards: "Name | price | why | catch" per line, up to 5. The catch is shown on purpose. */
 function renderOptions(lines: string[]): string {
@@ -302,6 +305,7 @@ function renderBlock(name: BlockName, lines: string[], opts: HtmlOptions = {}): 
 
 /** Plain-Markdown form of the blocks, for PDF and DOCX (and anything that does not draw components). */
 export function flattenBlocks(md: string): string {
+    const cells = (line: string) => line.split('|').map(c => c.trim())
     return splitBlocks(md)
         .map((sg) => {
             if (sg.kind === 'md') return sg.text
@@ -805,4 +809,4 @@ export async function renderFile(doc: DinghyDoc, format: FileFormat, html: HtmlO
                   ? Buffer.from(renderCsv(doc), 'utf8')
                   : Buffer.from(`# ${doc.title}\n\n${doc.subtitle ? `_${doc.subtitle}_\n\n` : ''}${doc.body.trim()}\n`, 'utf8')
     return { filename: `${base}.${format}`, mimeType: MIME[format], bytes }
-                                }
+                                                            }

@@ -193,7 +193,7 @@ export function fileToolsFor(): FileToolset {
                 title: { type: 'string', description: 'Document title, e.g. "Weekend in Key Biscayne"' },
                 kind: { type: 'string', enum: ['file', 'itinerary'], description: 'Use itinerary only for an actual trip itinerary. Otherwise file.' },
                 subtitle: { type: 'string', description: 'Optional one-line subtitle: who, when, where' },
-                body: { type: 'string', description: 'The document body in Markdown' },
+                body: { type: 'string', description: 'The document body in Markdown. For researched facts use {{source:src1.title}}, {{source:src1.url}}, {{source:src1.published_date}} or literal {{source:src1.content:START:END}} excerpts from this turn source_records. Never invent IDs; missing fields stay unknown.' },
                 format: { type: 'string', enum: FORMATS, description: 'pdf (default), docx, html, csv or md' },
                 attach: { type: 'boolean', description: 'Send the file itself as an attachment instead of a private file link. Only when asked for the file.' },
             },
