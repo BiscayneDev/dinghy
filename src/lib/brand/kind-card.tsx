@@ -368,7 +368,7 @@ const OG_H = 630
 export async function renderHeroOg(doc: { title: string; subtitle?: string; body: string }, photos: CardPhoto[] = []): Promise<Buffer | null> {
     if (/[^\u0000-\u024F\u2010-\u2027\u20AC\u2122]/u.test([doc.title, doc.subtitle ?? '', doc.body, ...photos.map((p) => p.credit ?? '')].join(' ').replace(/[\p{Symbol}\p{Mark}]/gu, ''))) return null
     const segs = splitBlocks(doc.body)
-    const seg = segs.find((x) => x.kind === 'block' && ['weather', 'scores', 'stay', 'route'].includes(x.name))
+    const seg = segs.find((x) => x.kind === 'block' && ['weather', 'scores', 'stay', 'route', 'media'].includes(x.name))
     if (!seg || seg.kind !== 'block') return null
     let bg = 'linear-gradient(160deg, #16305A, #0E1A33)'
     let big = '', kicker = '', photo: CardPhoto | undefined
@@ -392,6 +392,16 @@ export async function renderHeroOg(doc: { title: string; subtitle?: string; body
         const d = 'M120 470C300 450 400 300 560 292S800 340 900 190 1060 110 1100 100'
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630"><path d="${d}" stroke="rgba(240,138,104,0.3)" stroke-width="30" fill="none" stroke-linecap="round"/><path d="${d}" stroke="#F08A68" stroke-width="9" fill="none" stroke-linecap="round" stroke-dasharray="2 24"/><circle cx="120" cy="470" r="24" fill="#fff"/><circle cx="1100" cy="100" r="28" fill="#F08A68"/></svg>`
         art = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
+    } else if (seg.name === 'media') {
+        const rows = seg.lines.map(cells).filter((c) => c[0])
+        const lead = segs.find((x) => x.kind === 'block' && x.name === 'lead')
+        const pick = lead && lead.kind === 'block' ? (lead.lines.map(cells).find((c) => c[0]?.toLowerCase() === 'pick')?.[1] ?? '').toLowerCase() : ''
+        const picked = rows.find((r) => pick && r[0].toLowerCase() === pick)
+        const row = picked ?? rows[0]
+        if (!row) return null
+        bg = `linear-gradient(160deg, ${hsl(hue(row[0]), 26, 24)}, ${hsl((hue(row[0]) + 30) % 360, 30, 42)})`
+        big = row[0]; kicker = [picked ? 'Pick' : '', /book|game/i.test(row[1] ?? '') ? row[1].toLowerCase() : 'movie', row[3] ?? ''].filter(Boolean).join(' · ')
+        photo = photos.find((ph) => ph.path === row[6] && /^img\/[a-z0-9][a-z0-9-]{0,60}\.(?:jpg|jpeg|png)$/i.test(ph.path) && /^image\/(jpeg|png)$/.test(ph.contentType) && ph.credit && ph.license)
     } else {
         const rows = seg.lines.map(cells).filter((c) => c[0])
         const lead = segs.find((x) => x.kind === 'block' && x.name === 'lead')
@@ -422,7 +432,7 @@ export async function renderHeroOg(doc: { title: string; subtitle?: string; body
             <div style={{ display: 'flex', position: 'absolute', left: 64, top: 52 }}><Brand color="rgba(255,255,255,0.92)" /></div>
             <div style={{ display: 'flex', flexDirection: 'column', position: 'absolute', left: 64, right: 64, top: 130, alignItems: wide ? 'center' : 'flex-start' }}>
                 <div style={{ display: 'flex', fontFamily: 'DM Mono', fontSize: 26, letterSpacing: '0.16em', textTransform: 'uppercase', opacity: 0.88 }}>{clip(kicker, 44)}</div>
-                <div style={{ display: 'flex', marginTop: 10, fontFamily: 'Fraunces', fontSize: big.length > 24 ? 64 : big.length > 14 ? 110 : wide ? 200 : 230, lineHeight: 1, letterSpacing: '-0.03em' }}>{big.length <= 24 ? latin(big) : clip(big, 52)}</div>
+                <div style={{ display: 'flex', marginTop: 10, fontFamily: 'Fraunces', fontSize: seg.name === 'media' ? (big.length > 30 ? 56 : big.length > 20 ? 72 : big.length > 12 ? 92 : 130) : big.length > 24 ? 64 : big.length > 14 ? 110 : wide ? 200 : 230, lineHeight: 1, letterSpacing: '-0.03em' }}>{big.length <= 24 ? latin(big) : clip(big, 52)}</div>
             </div>
             <div style={{ display: 'flex', position: 'absolute', left: 64, right: 64, bottom: photo ? 80 : 48, fontFamily: 'Fraunces', fontSize: 64, lineHeight: 1.05, letterSpacing: '-0.02em' }}>{clip(doc.title, 44)}</div>
         </div>
