@@ -90,7 +90,7 @@ describe('server-owned required read transition',()=>{
   const requests=harness([call('web_search'),call('create_file',{title:'Harbor',body:body.replace('Visitor directory | '+url,'{{source:src2.title}} | {{source:src2.url}}')}),stop()])
   const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage},[search,read,file],ctx)
   expect(read.execute).toHaveBeenCalledTimes(1);expect(file.execute).toHaveBeenCalledTimes(1);expect(result.deliverable?.state).toBe('completed')
-  expect(onStage).toHaveBeenCalledWith('tool','research:read_ok');expect(requests).toHaveLength(3)
+  expect(onStage).toHaveBeenCalledWith('tool','research:read_ok');expect(requests).toHaveLength(2)
  })
  it('tries one other observed source on403 and never fabricates a URL',async()=>{
   const second='https://harbor.test/second',file=tool('create_file'),search=tool('web_search',{results:[{title:'One',url,content:'lead'},{title:'Two',url:second,content:'lead'}]}),read={...tool('web_fetch'),execute:vi.fn(async(i:any)=>i.url===url?{success:false,error:'HTTP403'}:{success:true,data:{url:second,title:'Second guide',content:'Public listing.'}})}
@@ -111,4 +111,11 @@ describe('server-owned required read transition',()=>{
   await chatWithTools([{role:'user',content:ask,googleDerived:true}],{...opts,onStage},[search,read,file],ctx)
   expect(search.execute).not.toHaveBeenCalled();expect(read.execute).not.toHaveBeenCalled();expect(file.execute).not.toHaveBeenCalled()
  })
+})
+
+it('publishes source-linked structured itinerary when the model omits literal binding tokens twice',async()=>{
+ const file=tool('create_file'),search=tool('web_search',{results:[{title:'Harbor visitors',url,content:'listing'}]}),read=tool('web_fetch',{title:'Harbor visitors',url,content:'Public visitor listing.'}),onStage=vi.fn(async()=>{})
+ harness([call('web_search'),call('create_file',{title:'Harbor synthetic',body}),call('create_file',{title:'Harbor synthetic',body}),stop()])
+ const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage},[search,read,file],ctx)
+ expect(file.execute).toHaveBeenCalledTimes(1);expect(onStage).toHaveBeenCalledWith('tool','binding:observed_links');expect(result.deliverable?.state).toBe('completed')
 })

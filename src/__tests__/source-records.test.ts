@@ -49,3 +49,14 @@ it('keeps a valid bounded registry envelope for long and quoted public pages',()
  const many=s.capture('web_search',{results:Array.from({length:20},()=>hit)},'2030-06-04T12:00:00Z')
  const bounded=sourceResultEnvelope(many);expect(bounded.length).toBeLessThanOrEqual(4000);expect(JSON.parse(bounded).omitted_sources).toBeGreaterThan(0)
 })
+
+it('binds exact observed URLs structurally without claiming the surrounding prose is verified',()=>{
+ const s=new SourceRecords();s.capture('web_fetch',hit,'test')
+ const linked=s.bindObservedLinks({title:'Fictional guide',body:':::sources\nGuide | '+hit.url+' | date unknown\n:::\nUnbound prose remains unverified.'})
+ expect(linked.count).toBe(1)
+ const result=bindFileSources(linked.input,s,true);expect(result).not.toHaveProperty('error')
+ if('input'in result){expect((result.input as any).body).toContain(hit.url);expect((result.input as any).body).toContain('Source provenance')}
+ expect(s.bindObservedLinks({body:'https://invented.test/guide'}).count).toBe(0)
+ expect(s.bindObservedLinks({body:hit.url+'/invented'}).count).toBe(0)
+ expect(s.bindObservedLinks({body:'{{source:src99.url}} '+hit.url}).count).toBe(0)
+})

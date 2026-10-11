@@ -800,7 +800,9 @@ export async function chatWithTools(
                         content=JSON.stringify({error:'This itinerary needs current recommendations. Use web_search then web_fetch first. If research is blocked, return only supplied facts and explicit gaps, not invented recommendations.'});messages.push({role:'tool',tool_call_id:call.id,content});continue
                     }
                     if (call.function.name === 'create_file') {
-                        const bound = bindFileSources(input, sourceRecords, Boolean(contract) && sourceRecords.size() > 0)
+                        const linked=sourceRecords.bindObservedLinks(input)
+                        if(linked.count)await opts.onStage?.('tool','binding:observed_links')
+                        const bound = bindFileSources(linked.input, sourceRecords, Boolean(contract) && sourceRecords.size() > 0)
                         if ('error' in bound) {
                             validationFailures++;await opts.onStage?.('tool',`invalid:source_binding:${sourceBindingErrorCode(bound.error)}`);fileValidationPending=true;if(!recoveryUsed){recoveryUsed=true;messages.push({role:'system',content:'One bounded repair: correct the source binding from the returned registry, do not invent values.'})}
                             messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({error:bound.error,available_sources:sourceRecords.available(),repair:'Correct this call once using available fields. Unknown fields stay explicitly unknown; do not invent IDs or values.'}) })
@@ -846,7 +848,7 @@ export async function chatWithTools(
                             } catch { /* Invalid source URL is not delivered. */ }
                         }
                     }
-                    if (result.success && call.function.name === 'create_file' && (completionMode || mapArtifact) && calls.length === 1) {
+                    if (result.success && call.function.name === 'create_file' && (completionMode || mapArtifact || itineraryResearch) && calls.length === 1) {
                         // Hosting succeeded; the transport already owns the queued link.
                         // Do not spend another slow gateway call merely announcing it.
                         return finish({ reply: 'Here you go.', toolCalls: toolCallCount, iterations: iteration, tainted })

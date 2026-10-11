@@ -42,6 +42,21 @@ export class SourceRecords {
         if (cutsToken(r.start!) || cutsToken(r.end!)) return {error:'Excerpt cuts a word, price, date or time. Select the complete source value.'}
         return { value: value.slice(r.start, r.end), record, field: r.field }
     }
+    /** Bind exact observed URLs structurally, without trusting model-written IDs.
+     * Only literal equality is accepted. This binds a link, never surrounding claims. */
+    bindObservedLinks(input:unknown):{input:unknown;count:number} {
+        if(!input||typeof input!=='object')return {input,count:0}
+        const i=input as Record<string,unknown>
+        if(typeof i.body!=='string'||i.body.includes('{{source:'))return {input,count:0}
+        let count=0
+        const byUrl=new Map<string,SourceRecord>()
+        for(const record of this.records)byUrl.set(record.url,record)
+        const body=i.body.replace(/https?:\/\/[^\s<>"|)\]]+/g,url=>{
+            const r=byUrl.get(url);if(!r)return url
+            count++;return `{{source:${r.id}.url}}`
+        })
+        return {input:{...i,body},count}
+    }
     size() { return this.records.length }
     available() { return this.records.map(r => ({id:r.id,fields:fields.filter(f=>r[f]!==null)})) }
 }
