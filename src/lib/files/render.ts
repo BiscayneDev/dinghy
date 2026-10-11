@@ -1,3 +1,4 @@
+import {pageRuntimeHtml,staticPageText} from '@/lib/pages/runtime'
 /**
  * Dinghy file renderer. One document model (title + markdown body) rendered in
  * the Dinghy paper look (see src/lib/brand): cream paper, midnight ink, coral
@@ -156,7 +157,7 @@ function tokens(md: string): Token[] {
 // ── Components: ":::name" blocks ─────────────────────────────────────────────
 // The model writes plain Markdown; our code draws the components. Unknown block
 // names are left as ordinary text. Blocks never contain raw HTML (all escaped).
-export const BASE_BLOCKS = ['facts', 'cost', 'heads-up', 'place', 'places', 'reply', 'options', 'sources'] as const
+export const BASE_BLOCKS = ['facts', 'cost', 'heads-up', 'place', 'places', 'reply', 'options', 'sources', 'pages'] as const
 export const BLOCK_NAMES = [...BASE_BLOCKS, ...KIND_BLOCKS] as const
 const BLOCK_OPEN = new RegExp(`^\\s*:::\\s*(${BLOCK_NAMES.join('|')})\\s*$`, 'i')
 type BlockName = (typeof BLOCK_NAMES)[number]
@@ -176,7 +177,7 @@ export function splitBlocks(md: string): Segment[] {
             const end = lines.findIndex((l, j) => j > i && /^\s*:::\s*$/.test(l))
             if (end > i) {
                 flush()
-                out.push({ kind: 'block', name: open[1].toLowerCase() as BlockName, lines: lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).slice(0, 12) })
+                out.push({ kind: 'block', name: open[1].toLowerCase() as BlockName, lines: lines.slice(i + 1, end).map((l) => l.trim()).filter(Boolean).slice(0,open[1].toLowerCase()==='pages'?300:12) })
                 i = end
                 continue
             }
@@ -273,6 +274,7 @@ function renderSources(lines: string[]): string {
 }
 
 function renderBlock(name: BlockName, lines: string[], opts: HtmlOptions = {}): string {
+    if(name==='pages')return pageRuntimeHtml(lines.join('\n'))
     const inline = (t: string) => safe.parseInline(t) as string
     if (name === 'facts') {
         const chips = lines.slice(0, 8).map(pair).map((p) => `<div class="fact"><span class="fk">${esc(p.k)}</span><span class="fv">${inline(p.v)}</span></div>`)
@@ -311,6 +313,7 @@ export function flattenBlocks(md: string): string {
     return splitBlocks(md)
         .map((sg) => {
             if (sg.kind === 'md') return sg.text
+            if (sg.name === 'pages')return staticPageText(sg.lines.join('\n'))
             if (sg.name === 'heads-up') return `> Heads up: ${sg.lines.join(' ')}`
             if (sg.name === 'reply') return sg.lines.slice(0, 3).map((l) => `- Reply with: ${l.replace(/^[-*]\s+/, '')}`).join('\n')
             if (sg.name === 'options') return sg.lines.slice(0, 5).map((l) => { const [n, p, w, c] = cells(l); return `- ${[n, p, w].filter(Boolean).join(' - ')}${c ? ` (catch: ${c})` : ''}` }).join('\n')
