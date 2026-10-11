@@ -1,3 +1,4 @@
+import { isFoodDrinkQuery } from '@/lib/places/intent'
 /**
  * create_file: Dinghy makes a real document and hands it to the user.
  *
@@ -266,7 +267,7 @@ export function fileToolsFor(): FileToolset {
         name: 'find_places',
         description:
             'Find real food and drink places near an address, hotel or landmark, with open-now, walking time, address, hours and map links, from OpenStreetMap (free, no key). ' +
-            'Use this FIRST for "where should I eat / get X near Y" asks; do not use web_search for nearby venues. ' +
+            'Use this only for nearby food and drink discovery. Never use it for retail products, nicotine, pharmacies, shopping, or product stock. Use web_search and source pages for those instead. ' +
             'It makes the options page itself and the link goes out right after your reply, so do not call create_file for it. ' +
             'Give anchor as a searchable place with the city ("Parkroyal on Pickering, Singapore") and what as the food ("chicken rice"). The local time zone is worked out from the map position. ' +
             'Open or closed is only reported when the listed hours can be read; otherwise it says hours not listed. Never add hours, ratings or prices the tool did not return. ' +
@@ -284,6 +285,7 @@ export function fileToolsFor(): FileToolset {
             const i = (input ?? {}) as Record<string, unknown>
             const anchor = str(i.anchor).slice(0, 200), what = str(i.what).slice(0, 80)
             if (!anchor || !what) return { success: false, error: 'anchor and what are required' }
+            if (!isFoodDrinkQuery(what)) return { success: false, error: 'find_places only finds food and drink. For retail/product availability use web_search and read current official sources. In airports verify terminal and airside/landside access; map eateries do not establish stock or legal availability.' }
             const radius = Math.min(3000, Math.max(300, Math.round(typeof i.radius_m === 'number' ? i.radius_m : 1500)))
             try {
                 // A street address (likely home or work) is never sent to a public geocoder. Use the
