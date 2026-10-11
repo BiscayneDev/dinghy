@@ -1,3 +1,4 @@
+import {researchFollowup} from './recovery'
 import { mapArtifactTurn } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
 /**
@@ -39,7 +40,7 @@ export interface Gated {
 /** `texts`: current user message first, then recent context (prior user messages, last assistant line). */
 export function gateTools(tools: Tool[], texts: string[]): Gated {
     // Current retail intent wins over stale food context and cannot be bypassed by more_tools.
-    if (isRetailAvailability(texts[0] ?? '') || mapArtifactTurn([{role: 'user', content: texts[0] ?? ''}])) tools = tools.filter(t => t.name !== 'find_places')
+    if (researchFollowup([...texts.slice(1,3).reverse().map(content=>({role:'user',content})),{role:'user',content:texts[0]??''}]) || isRetailAvailability(texts[0] ?? '') || mapArtifactTurn([{role: 'user', content: texts[0] ?? ''}])) tools = tools.filter(t => t.name !== 'find_places')
     if (tools.length <= MIN_TO_GATE) return { active: [...tools], withheld: [] }
     const haystack = texts.join('\n')
     const wanted = new Set(GROUPS.filter((g) => g.when.test(haystack)).map((g) => g.name))
@@ -73,4 +74,4 @@ export function gateTools(tools: Tool[], texts: string[]): Gated {
     }
     active.push(more)
     return { active, withheld: names }
-    }
+}
