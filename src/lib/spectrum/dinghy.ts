@@ -1,3 +1,4 @@
+import { weeklyPageError } from '@/lib/files/weekly-standard'
 import { unmatchedPlacesReply } from '@/lib/places/intent'
 import { needsFileRepair } from '@/lib/files/reply'
 import { assertAccountActive } from '@/lib/data-portability/erasure-state'
@@ -73,6 +74,7 @@ export const AGENCY_LINE =
 export const GROUNDING_LINE =
     'A question is a work order. Do the work to get to the answer: use focused searches (different wordings, ' +
     'narrower terms, recentDays for anything time-bound), check dates, compare sources, then come back with the answer. ' +
+    'For current top lists distinguish sales charts from editorial picks and new releases. Name sources, show publication/list dates and date checked in the page; never call evergreen classics this week’s top list. Use :::media for books, movies and games. ' +
     'For "this week", "today", "latest" or "recently", use the published_date on each result and include only items dated inside that window. ' +
     'An undated result is a lead, not a fact: search again to find a dated source before using it. ' +
     'Then answer confidently: the confirmed items, each with its date and source (publication or site, link when useful). ' +
@@ -591,6 +593,7 @@ export async function chatWithTools(
     let successfulSearches = 0
     let sourceOnly = true
     const foundSources: { title: string; url: string }[] = []
+    const currentRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
     let pageAttempted = false
     let pageRetry = false
     let completionMode = false
@@ -691,6 +694,11 @@ export async function chatWithTools(
                     await opts.onStage?.('tool', call.function.name)
                     await assertAccountActive(ctx.userId,ctx.chatGuid)
                     const input = JSON.parse(call.function.arguments || '{}') as unknown
+                    const pageError = call.function.name === 'create_file' ? weeklyPageError(input, currentRequest, foundSources.map(s => s.url)) : null
+                    if (pageError) {
+                        messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: pageError }) })
+                        continue
+                    }
                     if (call.function.name === 'create_file') pageAttempted = true
                     if (!['web_search', 'web_fetch'].includes(call.function.name)) sourceOnly = false
                     const result = await withinTurn(opts.deadlineAt, async (signal) => {
