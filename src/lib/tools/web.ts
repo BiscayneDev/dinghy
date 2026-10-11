@@ -116,12 +116,15 @@ export const webFetch: Tool = {
     },
     required: ['url'],
   },
-  async execute(input: unknown): Promise<ToolResult> {
+  async execute(input: unknown, ctx): Promise<ToolResult> {
     try {
       const parsed = FetchInput.parse(input)
 
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 10_000)
+      const abort = () => controller.abort()
+      if (ctx?.signal?.aborted) controller.abort()
+      else ctx?.signal?.addEventListener('abort', abort, {once:true})
 
       try {
         const response = await fetch(parsed.url, {
@@ -134,7 +137,7 @@ export const webFetch: Tool = {
         })
 
         if (!response.ok) {
-          return { success: false, error: `HTTP ${response.status}: ${response.statusText}` }
+          return { success: false, publicReadFailure: 'http', error: `HTTP ${response.status}: ${response.statusText}` }
         }
 
         const html = await response.text()
@@ -152,13 +155,14 @@ export const webFetch: Tool = {
         }
       } finally {
         clearTimeout(timeoutId)
+        ctx?.signal?.removeEventListener('abort', abort)
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        return { success: false, error: 'Request timed out (10s limit)' }
+        return { success: false, publicReadFailure: 'timeout', error: 'Request timed out (10s limit)' }
       }
       const msg = err instanceof Error ? err.message : String(err)
-      return { success: false, error: `Fetch failed: ${msg}` }
+      return { success: false, publicReadFailure: err instanceof z.ZodError ? 'invalid_input' : 'network', error: `Fetch failed: ${msg}` }
     }
   },
   }
