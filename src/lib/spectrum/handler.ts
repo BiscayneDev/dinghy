@@ -1088,6 +1088,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
                 ...(wantsPlaces(text) && tools.some((t) => t.name === 'find_places') ? { forceTool: 'find_places' } : {}),
             }
             const r = await chatWithTools(full, toolOpts, tools, runCtx)
+            if (r.deliverable) await onStage('reply_ready', `deliverable:${r.deliverable.kind}:${r.deliverable.state}`)
             reply = r.reply
             replyTainted = Boolean(r.tainted)
             toolCalls = r.toolCalls
