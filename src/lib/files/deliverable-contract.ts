@@ -1,5 +1,5 @@
 import { mapArtifactTurn, mapPageError } from './map-artifact'
-import { weeklyPageError } from './weekly-standard'
+import { weeklyListRequest, weeklyPageError } from './weekly-standard'
 type Line = { role: string; content: string }
 export type DeliverableKind = 'map' | 'comparison' | 'list' | 'itinerary' | 'note'
 export type DeliverableContract = { kind: DeliverableKind; request: string }
@@ -9,7 +9,7 @@ function classify(request: string): DeliverableContract | null {
     let kind: DeliverableKind | null = null
     if (/\b(?:itinerary|day.by.day plan)\b/i.test(request) && /\b(?:make|create|build|prepare|write|plan|put together|send|give|show)\b/i.test(request)) kind = 'itinerary'
     else if (/\bcompare\b/i.test(request) || (artifact.test(request) && /\b(?:comparison|versus|vs\.?)\b/i.test(request))) kind = 'comparison'
-    else if ((artifact.test(request) && /\b(?:list|checklist)\b/i.test(request)) || /\b(?:top|best|popular|trending)\s+\d+\b/i.test(request)) kind = 'list'
+    else if ((artifact.test(request) && /\b(?:list|checklist)\b/i.test(request)) || /\b(?:top|best|popular|trending)\s+\d+\b/i.test(request) || weeklyListRequest(request)) kind = 'list'
     else if (artifact.test(request) && /\b(?:note|notes|document|page|file|pdf)\b/i.test(request)) kind = 'note'
     return kind ? { kind, request } : null
 }
@@ -34,6 +34,13 @@ export function contractNote(c: DeliverableContract): string {
     }[c.kind]
     return `Deliverable contract: ${c.kind}. ${shape} Use create_file with the full body. A chat answer alone does not complete this requested deliverable. Existing confirmations and privacy rules still apply. Ask only for information that actually blocks the requested work. Never claim completion before the file tool succeeds.`
 }
+function blockRows(body: string, kinds: string): number {
+    const block = body.match(new RegExp(`(?:^|\\n)\\s*:::(?:${kinds})\\s*\\n([\\s\\S]*?)\\n\\s*:::`, 'i'))?.[1] ?? ''
+    return block.split('\n').filter(line => line.split('|').filter(cell => cell.trim()).length >= 2).length
+}
+function listRows(body: string): boolean {
+    return /(?:^|\n)\s*(?:[-*] |\d+[.)] )\S/.test(body)
+}
 export function deliverablePageError(c: DeliverableContract | null, input: unknown, urls: string[]): string | null {
     if (!c) return null
     const i = input as { body?: unknown; title?: unknown }
@@ -44,16 +51,16 @@ export function deliverablePageError(c: DeliverableContract | null, input: unkno
         if (evidenceError) return evidenceError
         // Structure only, not verification of names or factual accuracy.
         const locatorBody = body.replace(/:::sources\s*\n[\s\S]*?\n\s*:::/gi, '')
-        if (!/(?:^|\n)\s*(?:[-*] |\d+[.)] |:::(?:places|options)\s*\n|\|[^|\n]+\|)/i.test(locatorBody)) return 'Map contract: include named venue/location rows in a list, table or :::places/:::options block. Sources and disclaimers alone are not a locator. Keep unsupported positions unknown.'
+        if (!listRows(locatorBody) && !blockRows(locatorBody, 'places|options') && !/\|[^|\n]+\|[^|\n]+\|/.test(locatorBody)) return 'Map contract: include named venue/location rows in a list, table or :::places/:::options block. Sources and disclaimers alone are not a locator. Keep unsupported positions unknown.'
         return null
     }
     if (c.kind === 'comparison') {
-        const optionRows = body.match(/(?:^|\n)\s*:::options\s*\n([\s\S]*?)\n\s*:::/i)?.[1]?.split('\n').filter(l => l.trim() && l.includes('|')).length ?? 0
+        const optionRows = blockRows(body, 'options')
         const tableRows = body.split('\n').filter(l => /^\s*\|/.test(l) && !/^\s*\|[\s:|-]+\|\s*$/.test(l)).length - 1
         if (Math.max(optionRows, tableRows) < 2) return 'Comparison contract: supply at least two named options in a markdown table or :::options block. Show differences and catches; never invent missing values.'
     }
-    if (c.kind === 'list' && !/(?:^|\n)\s*(?:[-*] |\d+[.)] |:::(?:media|options|places|briefing)\s*\n)/i.test(body)) return 'List contract: supply actual list/checklist items or structured rows, not a generic paragraph.'
-    if (c.kind === 'itinerary' && !/(?:^|\n)\s*:::\s*route\b|(?:^|\n)\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i.test(body)) return 'Itinerary contract: organize by day or numbered stop headings, or use :::route legs. Unknown timings stay unknown.'
+    if (c.kind === 'list' && !listRows(body) && !blockRows(body, 'media|options|places|briefing')) return 'List contract: supply actual list/checklist items or structured rows, not a generic paragraph.'
+    if (c.kind === 'itinerary' && !blockRows(body, 'route') && !/(?:^|\n)\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i.test(body)) return 'Itinerary contract: organize by day or numbered stop headings, or use :::route legs. Unknown timings stay unknown.'
     return weeklyPageError(input, c.request, urls)
 }
 /** Successful tool settlement, not an attempt or model-written assertion. */
