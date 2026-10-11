@@ -331,6 +331,7 @@ export interface HtmlOptions {
     replyLine?: string
     ogImage?: string
     description?: string
+    imageryState?: 'ready' | 'fallback'
     /** Relative link to a downloadable copy (e.g. the PDF next to the page). */
     download?: { href: string; label: string }
 }
@@ -477,7 +478,7 @@ th{background:var(--sand);color:var(--ink)}
 }
 @media print{.band{display:none}.card{margin:0;box-shadow:none;width:100%;max-width:none}.card>*,.band svg{animation:none}.reply,.pa,.dl{display:none}}
 </style></head>
-<body>
+<body${opts.imageryState ? ` data-imagery="${opts.imageryState}"` : ''}>
 ${pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? `<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`}
 <main class="card">
 <div class="brand">${anchorSvg(BRAND.ink, 18)}<span>dinghy</span></div>
@@ -811,4 +812,4 @@ export async function renderFile(doc: DinghyDoc, format: FileFormat, html: HtmlO
                   ? Buffer.from(renderCsv(doc), 'utf8')
                   : Buffer.from(`# ${doc.title}\n\n${doc.subtitle ? `_${doc.subtitle}_\n\n` : ''}${doc.body.trim()}\n`, 'utf8')
     return { filename: `${base}.${format}`, mimeType: MIME[format], bytes }
-                                                            }
+}
