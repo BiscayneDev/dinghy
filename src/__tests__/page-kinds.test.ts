@@ -101,6 +101,15 @@ describe('lead and checks blocks', () => {
  })
 
 describe('page hero', () => {
+    it('media: a colour hero with the picked title and kind', () => {
+        const h = page(':::lead\nPick | The Salt Road\n:::\n:::media\nHollow Tide | movie | 2021 | 3.9 | Kim Aro | tense | |\nThe Salt Road | book | 2019 | 4.5 | Ana Verrin | slow | |\n:::')
+        expect(h).toContain('hero hero-stay')
+        expect(h).toContain('Pick · book')
+        expect(h).toMatch(/hero-n hero-title">The Salt Road/)
+    })
+    it('media with no lead uses the first row', () => {
+        expect(page(':::media\nHollow Tide | movie | 2021 | 3.9 | Kim Aro | tense | |\n:::')).toMatch(/hero-k">movie<.*hero-title">Hollow Tide/)
+    })
     const lead = ':::lead\nfor | Alex\npick | Harbor Inn | ok\n:::\n\n'
     it('stay: uses the picked row photo, and keeps the sunrise band without a kind block', () => {
         const h = page(lead + ':::stay\nPine Lodge | $2,150 | 4 | x | y | img/p-aaa.jpg\nHarbor Inn | $2,680 | 4.6 | x | y | img/p-bbb.jpg\n:::')
