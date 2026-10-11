@@ -60,6 +60,7 @@ export function bindFileSources(input: unknown, records: SourceRecords, required
     let error: string | undefined
     const expand = (raw: unknown, field: string) => {
         if (typeof raw !== 'string') return raw
+        if(field==='code'&&raw.includes('{{source:')){error='Source bindings cannot be used as generated code.';return ''}
         const expanded = raw.replace(/\{\{source:([^}]+)\}\}/g, (_token, spec: string) => {
             const m = spec.match(/^(src\d+)\.(title|url|published_date|content)(?::(\d+):(\d+))?$/)
             if (!m) { error = 'Invalid binding syntax. Use a returned source ID and exact field/offsets.'; return '' }
@@ -73,7 +74,17 @@ export function bindFileSources(input: unknown, records: SourceRecords, required
         if (expanded.includes('{{source:')) error = 'Unclosed source binding. No file was published.'
         return expanded
     }
-    const next = {...i,title:expand(i.title,'title'),subtitle:expand(i.subtitle,'subtitle'),body:expand(i.body,'body')}
+    // JSON strings need JSON escaping, not markdown entities. Parse before
+    // expanding so source text cannot introduce keys, code or components.
+    const body = typeof i.body === 'string' ? i.body.split(/(:::pages[^\S\r\n]*\r?\n[\s\S]*?\r?\n:::)/g).map(part=>{
+        if(!part.startsWith(':::pages')) return expand(part,'body')
+        try {
+            const data=JSON.parse(part.replace(/^:::pages[^\S\r\n]*\r?\n/,'').replace(/\r?\n:::$/,''))
+            const walk=(v:unknown,k=''):unknown=>typeof v==='string' ? expand(v,k==='code'?'code':'pages') : Array.isArray(v)?v.map(x=>walk(x)):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([key,value])=>[key,walk(value,key)])):v
+            return ':::pages\n'+JSON.stringify(walk(data))+'\n:::'
+        }catch{return expand(part,'body')}
+    }).join('') : i.body
+    const next = {...i,title:expand(i.title,'title'),subtitle:expand(i.subtitle,'subtitle'),body}
     if (error) return { error }
     if (required && !count) return { error: 'This researched deliverable needs source bindings for its source facts. Use source_records IDs, not retyped names/prices/hours or invented values.' }
     if (typeof next.body === 'string' && used.size) {
