@@ -43,6 +43,19 @@ export class SourceRecords {
         return { value: value.slice(r.start, r.end), record, field: r.field }
     }
     size() { return this.records.length }
+    available() { return this.records.map(r => ({id:r.id,fields:fields.filter(f=>r[f]!==null)})) }
+}
+
+/** Metadata-only categories for failed bindings. Never log the attempted body. */
+export function sourceBindingErrorCode(error:string):string {
+    if(error.startsWith('Unknown source'))return 'unknown_reference'
+    if(error.startsWith('This source field'))return 'unknown_field'
+    if(error.startsWith('This researched'))return 'missing_binding'
+    if(error.startsWith('Invalid binding')||error.startsWith('Unclosed'))return 'syntax'
+    if(error.startsWith('Invalid source excerpt')||error.startsWith('Excerpt cuts')||error.startsWith('Select a literal'))return 'excerpt'
+    if(error.startsWith('Source bindings cannot'))return 'code_binding'
+    if(error.startsWith('Bound body'))return 'body_length'
+    return 'input'
 }
 
 /** Escape source values as literal markdown/block cells. Prevent external
