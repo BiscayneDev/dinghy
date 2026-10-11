@@ -693,12 +693,18 @@ export async function chatWithTools(
                     const input = JSON.parse(call.function.arguments || '{}') as unknown
                     if (call.function.name === 'create_file') pageAttempted = true
                     if (!['web_search', 'web_fetch'].includes(call.function.name)) sourceOnly = false
-                    const result = await withinTurn(opts.deadlineAt, () => Promise.race([
-                        tool.execute(input, call.function.name === 'create_file' ? { ...ctx, photosOk: !tainted } : ctx),
-                        new Promise<never>((_, reject) =>
-                            setTimeout(() => reject(new Error(`tool timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS)
-                        ),
-                    ]))
+                    const result = await withinTurn(opts.deadlineAt, async (signal) => {
+                        const work = tool.execute(input, { ...ctx, signal, ...(call.function.name === 'create_file' ? { photosOk: !tainted } : {}) })
+                        // A publish is an effect, not a disposable read. Its settlement belongs to
+                        // the turn deadline, never the generic 15s race.
+                        if (call.function.name === 'create_file') return work
+                        let timer: ReturnType<typeof setTimeout> | undefined
+                        try {
+                            return await Promise.race([work, new Promise<never>((_, reject) => {
+                                timer = setTimeout(() => reject(new Error(`tool timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS)
+                            })])
+                        } finally { if (timer) clearTimeout(timer) }
+                    })
                     content = JSON.stringify(result.success ? result.data ?? {} : { error: result.error ?? 'tool failed' })
                     if (result.success && call.function.name === 'find_places') placesMismatch = unmatchedPlacesReply(result.data)
                     if (result.success && call.function.name === 'web_search') {
