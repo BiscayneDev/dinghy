@@ -590,6 +590,7 @@ export async function chatWithTools(
     }
     const mapSources = mapArtifact ? mapSourceUrls(history) : []
     let mapResearchRead = false
+    let itineraryReadAttempted = false
     const retailAvailability = !mapArtifact && isRetailAvailability(currentRetailRequest)
     const contextualResearch = !mapArtifact && researchFollowup(history)
     if (retailAvailability || contextualResearch || mapArtifact || itineraryResearch) tools = tools.filter(t => t.name !== 'find_places')
@@ -665,6 +666,34 @@ export async function chatWithTools(
             completionMode = true
             messages.push({ role: 'system', content: RESEARCH_FINISH })
         }
+        // A required read is an execution dependency, not a suggestion to the model.
+        // Only observed public URLs; the same account, egress and deadline gates apply.
+        if(itineraryResearch&&foundSources.length&&!mapResearchRead&&!itineraryReadAttempted){
+            itineraryReadAttempted=true
+            const reader=tools.find(t=>t.name==='web_fetch')!
+            for(const source of foundSources.slice(0,2)){
+                const args=JSON.stringify({url:source.url})
+                const blocked=egressRejection('web_fetch',args,tainted,corpus)
+                if(blocked){await opts.onStage?.('tool','research:read_blocked');break}
+                if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<18000){await opts.onStage?.('tool','research:read_budget');break}
+                await assertAccountActive(ctx.userId,ctx.chatGuid)
+                await opts.onStage?.('tool','research:read_step')
+                toolCallCount++
+                let result
+                try{result=await withinTurn(opts.deadlineAt,async signal=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([reader.execute({url:source.url},{...ctx,signal}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Public read timed out')),TOOL_TIMEOUT_MS)})])}finally{if(timer)clearTimeout(timer)}})}
+                catch(err){if(err instanceof TurnDeadlineExceeded)throw err;result={success:false,error:'Public source read failed.'}}
+                const captured=result.success?sourceRecords.capture('web_fetch',result.data,new Date().toISOString()):[]
+                if(captured.some(r=>r.content)){
+                    mapResearchRead=true
+                    await opts.onStage?.('tool','research:read_ok')
+                    const id=`required_read_${iteration}`
+                    messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
+                    break
+                }
+                await opts.onStage?.('tool',result.success?'research:read_empty':'research:read_failed')
+            }
+            if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
+        }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
         const forceTool = (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
@@ -708,6 +737,7 @@ export async function chatWithTools(
         const choice = data.choices?.[0]
         const msg = choice?.message
         const calls = msg?.tool_calls ?? []
+        if(itineraryResearch&&forceTool&&!calls.some(c=>c.function.name===forceTool))await opts.onStage?.('tool',`research:choice_missed:${forceTool}`)
 
         if (choice?.finish_reason !== 'tool_calls' || calls.length === 0) {
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
@@ -801,7 +831,8 @@ export async function chatWithTools(
                     const captured = result.success ? sourceRecords.capture(call.function.name, result.data, new Date().toISOString()) : []
                     content = captured.length ? sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP) : JSON.stringify(result.success ? result.data ?? {} : {error:result.error??'tool failed'})
                     if (result.success && call.function.name === 'create_file') deliverableCompleted = true
-                    if (result.success && call.function.name === 'web_fetch') mapResearchRead = true
+                    if(call.function.name==='web_search')await opts.onStage?.('tool',result.success?'research:search_ok':'research:search_failed')
+                    if (result.success && call.function.name === 'web_fetch') mapResearchRead = !itineraryResearch||captured.some(r=>Boolean(r.content))
                     if (result.success && call.function.name === 'find_places') placesMismatch = unmatchedPlacesReply(result.data)
                     if (result.success && call.function.name === 'web_search') {
                         successfulSearches++
