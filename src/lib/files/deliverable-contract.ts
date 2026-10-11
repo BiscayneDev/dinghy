@@ -1,3 +1,4 @@
+import {itineraryPageError,ITINERARY_NOTE} from './itinerary-contract'
 import { mapArtifactTurn, mapPageError } from './map-artifact'
 import { weeklyListRequest, weeklyPageError } from './weekly-standard'
 type Line = { role: string; content: string }
@@ -32,7 +33,7 @@ export function contractNote(c: DeliverableContract): string {
         itinerary: 'A day/stop sequence with headings or :::route rows, not a generic travel essay. Unknown dates and times stay unknown.',
         note: 'The requested note/document body, not an announcement that a file exists.',
     }[c.kind]
-    return `Deliverable contract: ${c.kind}. ${shape} Use create_file with the full body. A chat answer alone does not complete this requested deliverable. Existing confirmations and privacy rules still apply. Ask only for information that actually blocks the requested work. Never claim completion before the file tool succeeds.`
+    return `Deliverable contract: ${c.kind}. ${shape} ${c.kind==='itinerary'?ITINERARY_NOTE:''} Use create_file with the full body. A chat answer alone does not complete this requested deliverable. Existing confirmations and privacy rules still apply. Ask only for information that actually blocks the requested work. Never claim completion before the file tool succeeds.`
 }
 function blockRows(body: string, kinds: string): number {
     const block = body.match(new RegExp(`(?:^|\\n)\\s*:::(?:${kinds})\\s*\\n([\\s\\S]*?)\\n\\s*:::`, 'i'))?.[1] ?? ''
@@ -61,6 +62,7 @@ export function deliverablePageError(c: DeliverableContract | null, input: unkno
     }
     if (c.kind === 'list' && !listRows(body) && !blockRows(body, 'media|options|places|briefing')) return 'List contract: supply actual list/checklist items or structured rows, not a generic paragraph.'
     if (c.kind === 'itinerary' && !blockRows(body, 'route') && !/(?:^|\n)\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i.test(body)) return 'Itinerary contract: organize by day or numbered stop headings, or use :::route legs. Unknown timings stay unknown.'
+    if(c.kind==='itinerary'){const error=itineraryPageError(body,c.request,urls);if(error)return error}
     return weeklyPageError(input, c.request, urls)
 }
 /** Successful tool settlement, not an attempt or model-written assertion. */
