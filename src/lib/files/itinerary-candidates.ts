@@ -1,5 +1,5 @@
 import {SourceRecords,type SourceRef} from './source-records'
-export const ITINERARY_CANDIDATE_NOTE='For researched recommendation itineraries, itinerary_candidates is REQUIRED. Supply itinerary_candidates: [{kind:"hotel"|"restaurant"|"activity",name:{source:"src2",field:"content",start:0,end:10},reason:"your stated selection reason",catch:"your stated caveat",price?:SourceRef,rating?:SourceRef,area?:SourceRef}]. Names and optional facts must be exact complete excerpts from a successful page read, not search snippets or page titles. Only include explicitly selected and typed candidates; never invent a venue or infer its kind from a title. Omit absent optional facts; the server writes unknown. Keep reason/catch as your own selection judgments, not unsupported factual claims. The server builds stay/options columns and sources. Body keeps the supplied agenda/day headings/working sessions; do NOT write :::stay, :::options or :::sources when supplying candidates. Do NOT include sources as an argument. Do NOT bind null/absent fields (including published_date); write unknown instead. Use only fields listed as available in source_records.'
+export const ITINERARY_CANDIDATE_NOTE='For researched recommendation itineraries, itinerary_candidates is REQUIRED. Supply itinerary_candidates: [{kind:"hotel"|"restaurant"|"activity",name:{source:"src2",field:"content",excerpt:"Exact venue name from page content"},reason:"your stated selection reason",catch:"your stated caveat",price?:SourceRef,rating?:SourceRef,area?:SourceRef}]. Names and optional facts must be exact complete excerpts from a successful page read, not search snippets or page titles. Only include explicitly selected and typed candidates; never invent a venue or infer its kind from a title. Omit absent optional facts; the server writes unknown. Keep reason/catch as your own selection judgments, not unsupported factual claims. The server builds stay/options columns and sources. Body keeps the supplied agenda/day headings/working sessions; do NOT write :::stay, :::options or :::sources when supplying candidates. Do NOT include sources as an argument. Do NOT bind null/absent fields (including published_date); write unknown instead. Prefer literal excerpt over counting offsets. Excerpt must occur exactly once in the selected page content; numeric start/end remain supported. Use only fields listed as available in source_records.'
 const escapeCell=(s:string)=>s.replace(/&/g,'&amp;').replace(/[<>\\`*_{}\[\]()!#|:]/g,c=>`&#${c.charCodeAt(0)};`).replace(/[\r\n]/g,' ')
 /** No prose parsing or semantic guessing. Typed model selections stay selections,
  * page-bound facts stay literal source text, renderer columns are server-owned. */
@@ -13,8 +13,14 @@ export function compileItineraryCandidates(input:unknown,records:SourceRecords):
  const refToken=(v:unknown,required=false):string|{error:string}=>{
   if(v===undefined&&!required)return 'unknown'
   if(!v||typeof v!=='object'||Array.isArray(v))return {error:'Candidate facts require exact page-content source references.'}
-  if(Object.keys(v).some(k=>!['source','field','start','end'].includes(k)))return {error:'Unknown candidate reference field.'}
-  const r=v as SourceRef
+  if(Object.keys(v).some(k=>!['source','field','start','end','excerpt'].includes(k)))return {error:'Unknown candidate reference field.'}
+  let r=v as SourceRef & {excerpt?:unknown}
+  if(r.excerpt!==undefined){
+   if(r.start!==undefined||r.end!==undefined||typeof r.excerpt!=='string'||!r.excerpt.trim()||r.excerpt.length>500)return {error:'Candidate excerpt must be one exact nonempty string, without offsets.'}
+   const located=records.locate(r.source,r.excerpt)
+   if('error'in located)return located
+   r={source:r.source,field:r.field,start:located.start,end:located.end}
+  }
   if(r.field!=='content'||!Number.isInteger(r.start)||!Number.isInteger(r.end))return {error:'Candidate facts require exact page-content excerpt offsets, not titles or snippets.'}
   const result=records.resolve(r)
   if('error'in result)return result
