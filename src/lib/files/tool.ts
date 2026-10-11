@@ -71,6 +71,7 @@ export interface FileToolset {
     tools: Tool[]
     /** Files made during this turn, in order. */
     files(): MadeFile[]
+    close(): void
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
@@ -143,7 +144,7 @@ async function addOgTag(hosted: HostedFile, files: SiteFile[], doc: DinghyDoc, c
     }
 }
 
-async function host(input: DinghyDoc, format: FileFormat, userId: string, replyLine?: string, photosOk = false): Promise<{ hosted: HostedFile; pdf: RenderedFile | null; card: Buffer | null }> {
+async function host(input: DinghyDoc, format: FileFormat, userId: string, replyLine?: string, photosOk = false, signal?: AbortSignal): Promise<{ hosted: HostedFile; pdf: RenderedFile | null; enrich: () => Promise<Buffer | null> }> {
     // Free credited photos, only on a clean turn, never longer than 12s in total. A miss keeps the colour card.
     const found = await Promise.race([
         attachPhotos(input.body, { allowed: photosOk }),
@@ -162,15 +163,18 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
     // Share image from the page's own hero, inside the private site. Clean turns only; a miss keeps today's image.
     const og = photosOk ? await renderHeroOg({ title: doc.title, subtitle: doc.subtitle, body: doc.body }, found.photos).catch(() => null) : null
     if (og) files.push({ path: 'og.png', bytes: og, contentType: 'image/png' })
+    signal?.throwIfAborted()
     const hosted = await publishSite(files, { title: doc.title, userId })
-    if (og) await addOgTag(hosted, files, doc, { format, userId, replyLine, pdf })
-    // Best effort and clean turns only: a card that fails to draw never blocks the page.
-    const card = photosOk ? await renderKindCard({ title: doc.title, subtitle: doc.subtitle, body: doc.body }, found.photos).catch(() => null) : null
-    return { hosted, pdf, card }
+    // Publication is settled before optional site/card enrichment.
+    return { hosted, pdf, enrich: async () => {
+        if (og) await addOgTag(hosted, files, doc, { format, userId, replyLine, pdf })
+        return photosOk ? renderKindCard({ title: doc.title, subtitle: doc.subtitle, body: doc.body }, found.photos).catch(() => null) : null
+    } }
 }
 
 export function fileToolsFor(): FileToolset {
     const made: MadeFile[] = []
+    let closed = false
 
     const createFile: Tool = {
         name: 'create_file',
@@ -202,11 +206,14 @@ export function fileToolsFor(): FileToolset {
             let hostError: string | undefined
             if (wantsPage && shareEnabled()) {
                 try {
-                    const { hosted, pdf, card } = await host(parsed.doc, parsed.format, ctx.userId, await replyLineFor(ctx.chatGuid), ctx.photosOk === true)
+                    const { hosted, pdf, enrich } = await host(parsed.doc, parsed.format, ctx.userId, await replyLineFor(ctx.chatGuid), ctx.photosOk === true, ctx.signal)
                     const file = pdf ?? (await renderFile(parsed.doc, 'html'))
-                    const entry: MadeFile = { ...file, format: parsed.format, kind, title: parsed.doc.title, subtitle: parsed.doc.subtitle, link: null, hosted, ...(card ? { card } : {}), markdown: parsed.doc.body }
-                    made.push(entry)
+                    const entry: MadeFile = { ...file, format: parsed.format, kind, title: parsed.doc.title, subtitle: parsed.doc.subtitle, link: null, hosted, markdown: parsed.doc.body }
                     await remember(ctx, entry)
+                    if (closed || ctx.signal?.aborted) return { success: false, error: 'Publication completed after the turn ended; the saved page can be recovered.' }
+                    made.push(entry)
+                    const card = await enrich()
+                    if (!closed && !ctx.signal?.aborted && card) entry.card = card
                     return {
                         success: true,
                         data: {
@@ -221,6 +228,7 @@ export function fileToolsFor(): FileToolset {
                     hostError = 'could not make the file link, sending the file instead'
                 }
             }
+            if (closed || ctx.signal?.aborted) return { success: false, error: 'Turn ended; no fallback file was started.' }
             const format: FileFormat = wantsPage && parsed.format === 'html' ? 'pdf' : parsed.format
             let file: RenderedFile
             try {
@@ -235,8 +243,9 @@ export function fileToolsFor(): FileToolset {
                 console.error('[dinghy] file upload failed', err instanceof Error ? err.message : err)
             }
             const entry: MadeFile = { ...file, format, kind, title: parsed.doc.title, subtitle: parsed.doc.subtitle, link, markdown: parsed.doc.body }
-            made.push(entry)
             await remember(ctx, entry)
+            if (closed || ctx.signal?.aborted) return { success: false, error: 'Turn ended; the saved file can be recovered.' }
+            made.push(entry)
             return {
                 success: true,
                 data: {
@@ -377,7 +386,7 @@ export function fileToolsFor(): FileToolset {
         },
     }
 
-    return { tools: shareEnabled() ? [createFile, findPlaces, recallFile, revokeFile] : [createFile, findPlaces, recallFile], files: () => [...made] }
+    return { tools: shareEnabled() ? [createFile, findPlaces, recallFile, revokeFile] : [createFile, findPlaces, recallFile], files: () => [...made], close: () => { closed = true } }
 }
 
 /** Remove "[sent file: x]" markers the model may copy into its reply text. */
