@@ -47,16 +47,19 @@ describe('production iMessage itinerary research wiring',()=>{
   const seq=[call('web_search',{query:'Harbor visitor official guide'}),call('web_fetch',{url}),call('create_file',{title:'Harbor founders visit',body:body.replace('Visitor directory | '+url,'{{source:src2.title}} | {{source:src2.url}}')}),stop()]
   vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
    if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor guide',url,content:'Visitor listings'}]}))
-   if(String(u)===url)return new Response('<html><title>Harbor visitors</title><body>Hotel, dining and museum listings. Prices and hours unknown.</body></html>')
+   if(String(u)===url)return new Response('<html><title>Harbor visitors</title><body>Hotel, dining and museum listings. Prices and hours unknown.'+' Repeated public visitor text.'.repeat(400)+'</body></html>')
    const r=JSON.parse(init.body);requests.push(r);return new Response(JSON.stringify(seq[requests.length-1]??stop()))
   }))
   const result=await chatWithTools([{role:'user',content:ask}],{...opts,deadlineAt:Date.now()+55_000},[...toolsFor(ctx),file],ctx)
   expect(requests[0].tools.map((t:any)=>t.function.name)).toContain('web_fetch')
   expect(requests[1].tool_choice.function.name).toBe('web_fetch')
   expect(requests[1].messages.at(-1).content).toContain('source_records')
+  const readResult=JSON.parse(requests[2].messages.filter((m:any)=>m.role==='tool').at(-1).content)
+  expect(readResult.source_records[0].id).toBe('src2');expect(readResult.source_records[0].content_truncated).toBe(true)
+  expect(requests[2].messages.filter((m:any)=>m.role==='tool').at(-1).content.length).toBeLessThanOrEqual(4000)
   expect(file.execute).toHaveBeenCalledTimes(1)
   expect(result.deliverable?.state).toBe('completed')
-  expect(JSON.stringify(file.execute.mock.calls[0][0])).toContain('Source provenance')
+  expect(JSON.stringify((file.execute.mock.calls as unknown[][])[0][0])).toContain('Source provenance')
  })
  it('identifies missing page-reader once without repeated gateway/file attempts',async()=>{
   const search=tool('web_search'),file=tool('create_file'),onStage=vi.fn(async()=>{})
