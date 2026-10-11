@@ -1,0 +1,38 @@
+import {expect,it,describe,vi,afterEach} from 'vitest'
+import {SourceRecords,bindFileSources,compileItinerarySources,sourceResultEnvelope} from '@/lib/files/source-records'
+import {compileItineraryCandidates,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
+import {itineraryPageError} from '@/lib/files/itinerary-contract'
+import {chatWithTools} from '@/lib/spectrum/dinghy'
+vi.mock('@/lib/data-portability/erasure-state',()=>({assertAccountActive:async()=>{}}))
+afterEach(()=>vi.unstubAllGlobals())
+const url='https://harbor.test/guide',text='Harbor Inn. Harbor Cafe. Harbor Museum.'
+const ref=(start:number,end:number,source='src2')=>({source,field:'content',start,end})
+const candidates=[{kind:'hotel',name:ref(0,10),reason:'Selected for this plan',catch:'Availability unverified'},{kind:'restaurant',name:ref(12,23),reason:'Dining choice',catch:'Hours unverified'},{kind:'activity',name:ref(25,38),reason:'Weekend choice',catch:'Tickets unverified'}]
+const body='## Friday\n-10:00 User supplied office visit.\n- Working sessions: venue and duration to confirm.\n## Weekend\nPlans to confirm.'
+const ask='Make an itinerary for fictional founders on an unspecified Friday. Office10am then working sessions. Hotel and restaurant recommendations and weekend activities.'
+const input={title:'Fictional Harbor',body,itinerary_candidates:candidates}
+function registry(){const r=new SourceRecords();r.capture('web_search',{results:[{url,title:'Harbor directory',content:'search snippet'}]},'2030-01-01');r.capture('web_fetch',{url,title:'Harbor directory',content:text},'2030-01-01');return r}
+describe('typed itinerary candidate compiler',()=>{
+ it('builds exact columns from page excerpts, preserves reasons/catches and leaves absentfactsunknown',()=>{
+  const r=registry(),compiled=compileItineraryCandidates(input,r);expect('error'in compiled).toBe(false);if('error'in compiled)return
+  const bound=bindFileSources(compiled.input,r,true);if('error'in bound)throw Error(bound.error)
+  const sourced=compileItinerarySources(bound.input,bound.usedSources,[url]);if('error'in sourced)throw Error(sourced.error)
+  const b=(sourced.input as any).body;expect(b).toContain('Harbor Inn | unknown | unknown | unknown | Availability unverified | | '+url);expect(b).toContain('Harbor Cafe | unknown | Dining choice | Hours unverified '+url);expect(b).toContain('Selected for this plan');expect(itineraryPageError(b,ask,[url])).toBeNull();expect((compiled.input as any).itinerary_candidates).toBeUndefined()
+ })
+ it.each([
+  ['nonhotel discarded fact',[{kind:'restaurant',name:ref(12,23),area:ref(0,10)}]],['missing name',[{kind:'hotel'}]],['ambiguous kind',[{kind:'place',name:ref(0,10)}]],['snippet',[{kind:'hotel',name:ref(0,6,'src1')}]],['page title',[{kind:'hotel',name:{source:'src2',field:'title'}}]],['unknown source',[{kind:'hotel',name:ref(0,10,'src99')}]],['cut name',[{kind:'hotel',name:ref(1,10)}]],['bad optional',[{kind:'hotel',name:ref(0,10),price:'$50'}]],['null optional',[{kind:'hotel',name:ref(0,10),rating:null}]],['unknown key',[{kind:'hotel',name:ref(0,10),book:true}]],['empty',[]],['overflow',Array(7).fill(candidates[0])]
+ ])('rejects %s without guessing',(_label,value)=>expect(compileItineraryCandidates({...input,itinerary_candidates:value},registry())).toHaveProperty('error'))
+ it('rejects mixing typed candidates with handwritten renderer blocks',()=>expect(compileItineraryCandidates({...input,body:body+'\n:::stay\nmalformed\n:::'},registry())).toHaveProperty('error'))
+ it('escapes literal reason/catch controls without creating links or newblocks',()=>{const compiled=compileItineraryCandidates({...input,itinerary_candidates:[{...candidates[0],reason:'one|two\n:::stay <b>keep</b>',catch:'{{source:src9.url}}'}]},registry());if('error'in compiled)throw Error(compiled.error);const b=(compiled.input as any).body;expect(b).toContain('one&#124;two');expect(b).not.toContain('<b>');expect(b).not.toContain('{{source:src9.url}}');expect((b.match(/:::stay/g)??[])).toHaveLength(1)})
+ it('legacy omission leaves strict handwritten input untouched',()=>{const v={title:'Fictional',body};expect(compileItineraryCandidates(v,registry())).toEqual({input:v,compiled:false})})
+})
+const tool=(name:string,data:unknown={})=>({name,description:'fictional',inputSchema:{type:'object'},execute:vi.fn(async()=>({success:true,data}))})
+const call=(name:string,i:unknown={})=>({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:name,function:{name,arguments:JSON.stringify(i)}}]}}]})
+const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Fictional',timezone:'UTC',tokens:{}}
+async function run(seq:unknown[]){let n=0;const req:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_u,init)=>{req.push(JSON.parse(init.body));return new Response(JSON.stringify(seq[n++]??{choices:[{finish_reason:'stop',message:{content:'Done'}}]}))}));const file=tool('create_file'),stage=vi.fn(async()=>{}),result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'fictional',onStage:stage},[tool('web_search',{results:[{url,title:'Harbor',content:'lead'}]}),tool('web_fetch',{url,title:'Harbor',content:text}),file],ctx);return{file,stage,result,req}}
+it('first-attempt typed candidates compile, bind, sourcecompile and pass existing gate',async()=>{const {file,stage,result,req}=await run([call('web_search'),call('create_file',input)]);expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','itinerary:candidates_compiled');expect(stage).toHaveBeenCalledWith('tool','itinerary:sources_compiled');expect(stage).not.toHaveBeenCalledWith('tool','repair:file_once');expect(result.deliverable?.state).toBe('completed');expect(req).toHaveLength(2)})
+it('invalid typed candidate uses exactly onecreate_file repair then succeeds',async()=>{const {file,stage,result,req}=await run([call('web_search'),call('create_file',{...input,itinerary_candidates:[{kind:'unknown',name:ref(0,10)}]}),call('create_file',input)]);expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','invalid:itinerary_candidates');expect(stage).toHaveBeenCalledWith('tool','repair:file_once');expect(req[2].tools.map((t:any)=>t.function.name)).toEqual(['create_file']);expect(result.deliverable?.state).toBe('completed')})
+it('second invalid typed call exhausts repair without output',async()=>{const bad={...input,itinerary_candidates:[]};const {file,stage,result}=await run([call('web_search'),call('create_file',bad),call('create_file',bad)]);expect(file.execute).not.toHaveBeenCalled();expect(stage).toHaveBeenCalledWith('tool','repair:file_exhausted');expect(result.deliverable?.state).toBe('unfulfilled')})
+it('primary spec explicitly omits sources and nullable bindingfields',async()=>{const {fileToolsFor}=await import('@/lib/files/tool');const f=fileToolsFor(),t=f.tools.find(t=>t.name==='create_file')!;expect(t.description).toContain(ITINERARY_CANDIDATE_NOTE);expect((t.inputSchema as any).properties.body.description).toContain('Do NOT bind null/absent');expect((t.inputSchema as any).properties.itinerary_candidates).toBeDefined();f.close()})
+
+it('read envelope lists only nonnull availablefields to avoid wasting firstattempt',()=>{const r=registry();const added=r.capture('web_fetch',{url,content:text},'2030-01-01');const e=JSON.parse(sourceResultEnvelope(added));expect(e.source_records[0].available_fields).toEqual(['url','content']);expect(e.source_records[0].published_date).toBeNull()})
