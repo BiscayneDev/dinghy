@@ -794,7 +794,7 @@ export async function chatWithTools(
             }
             if(selecting&&selectionFailures<3){
                 selectionFailures++;await opts.onStage?.('tool','invalid:selection:no_call')
-                messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with {kind,name,line} using the numbered page lines. Do not answer in text.'});continue
+                messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with {kind,line} using the candidate line numbers. Do not answer in text.'});continue
             }
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
             if(contextualResearch&&!recoveryUsed&&(!mapResearchRead||prematureResearchReply(reply))&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=20000)){
@@ -857,7 +857,8 @@ export async function chatWithTools(
                 {const acc={hotel:0,restaurant:0,activity:0};for(const c of ('candidates' in picked?picked.candidates:[]) as {kind:'hotel'|'restaurant'|'activity'}[])acc[c.kind]++
                 const rej:Record<string,number>={};for(const d of picked.dropped)rej[d]=(rej[d]??0)+1
                 await opts.onStage?.('tool',`itinerary:accepted:h${acc.hotel}_r${acc.restaurant}_a${acc.activity}`)
-                await opts.onStage?.('tool',('itinerary:rejected:'+(Object.entries(rej).map(([k,v])=>`${k}-${v}`).join(',')||'none')).slice(0,80))}
+                await opts.onStage?.('tool',('itinerary:rejected:'+(Object.entries(rej).map(([k,v])=>`${k}-${v}`).join(',')||'none')).slice(0,80))
+                if(picked.previews.length)await opts.onStage?.('tool',('itinerary:rej_names:'+picked.previews.slice(0,4).map(x=>x.slice(0,14)).join(',')).slice(0,80))}
                 if('error' in picked){
                     selectionFailures++;await opts.onStage?.('tool','invalid:selection:'+picked.dropped[0])
                     if(selectionFailures>=3){
@@ -877,7 +878,7 @@ export async function chatWithTools(
                         await enablePartial()
                         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:pickedSoFar.length,unsupported:missing,next:'Recommendations are attached server-side; no pick could be verified for '+missing.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
                     }
-                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,name,line} from the numbered page lines for the missing kind(s) only.'})});continue
+                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,line} from the candidate lines for the missing kind(s) only.'})});continue
                 }
                 selectedCandidates=pickedSoFar
                 await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
@@ -1037,4 +1038,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                                                            }
+}

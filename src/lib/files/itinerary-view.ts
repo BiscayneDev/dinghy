@@ -6,8 +6,36 @@ type Kind='hotel'|'restaurant'|'activity'
 const GROUP_LIMITS={hotel:6,restaurant:5,activity:5}
 const NAV=/^(?:home|about(?: us)?|contact(?: us)?|menu|sign ?in|log ?in|search|cart|book now|privacy policy|terms(?: of use)?|cookies?|skip to content|subscribe|follow us|share|read more|next|previous)$/i
 
-export type ViewLine={n:number;source:string;start:number;end:number;text:string}
+export type ViewLine={n:number;source:string;start:number;end:number;text:string;name:string}
 const VENUE_LIKE=/\p{Lu}[\p{L}'’]+(?:\s+(?:&\s+)?\p{Lu}[\p{L}'’]+)+/u
+const NAME_CONNECT=new Set(['of','the','de','la','le','les','el','del','du','von','van','and','y','&','da','di','der'])
+const SKIP_RUN=new Set('sunday monday tuesday wednesday thursday friday saturday weekend brunch dinner lunch breakfast happy hour menu menus reservations reservation tickets admission book check booking open daily'.split(' '))
+const NEWS_LINE=/\b(?:breaks?\s+ground|announces?|announced|unveils?|set to open|will open|to open in|plans? to|proposed|redevelop\w*|demolish\w*|closes?\s+its|has closed|permanently closed|under construction)\b/i
+/** The venue name is taken from the line by the server: the leading proper-name run before the first dash, colon, comma, parenthesis or sentence end. */
+export function extractLineName(text:string):string|null{
+ if(NEWS_LINE.test(text))return null
+ const head=text.split(/\s[-–—]\s|[–—:,(|·.!?]/)[0].trim()
+ const words=head.split(/\s+/).filter(Boolean)
+ const isCapW=(w:string)=>/^[\p{Lu}\d]/u.test(w)&&!/^\d+$/.test(w)
+ const runs:{from:number;ws:string[]}[]=[]
+ for(let i=0;i<words.length;){
+  if(!isCapW(words[i])){i++;continue}
+  const ws=[words[i]];let j=i+1
+  while(j<words.length&&ws.length<8){
+   if(isCapW(words[j])){ws.push(words[j]);j++;continue}
+   let k=j;while(k<words.length&&NAME_CONNECT.has(words[k].toLowerCase()))k++
+   if(k>j&&k<words.length&&isCapW(words[k])){ws.push(...words.slice(j,k+1));j=k+1;continue}
+   break
+  }
+  runs.push({from:i,ws});i=j
+ }
+ const usable=runs.filter(r=>!r.ws.every(w=>SKIP_RUN.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))
+ const pick=usable.find(r=>r.ws.length>=2)??usable.find(r=>r.from>0&&r.ws[0].length>=5)??(usable.length===1&&words.length<=3&&usable[0].from===0&&usable[0].ws[0].length>=4?usable[0]:undefined)
+ if(!pick)return null
+ const name=pick.ws.join(' ').replace(/[.\-]+$/,'')
+ if(name.length<4||name.length>80||!nameShapeOk(name)||isNonVenueName(name)||isCategoryPhrase(name.split(/\s+/)))return null
+ return name
+}
 /** A clean, bounded, numbered view of each usable page: headings, list items and sentences. The server keeps the literal span of every line. */
 export function buildPageView(records:SourceRecords,perPage=4500,total=13000):{text:string;lines:number;pages:number;venueLines:number;entries:ViewLine[]}{
  const entries:ViewLine[]=[];let used=0,pages=0,venueLines=0
@@ -24,8 +52,9 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000):{t
     const lit=m[0].slice(0,260),flatS=lit.replace(/\s+/g,' ').trim()
     if(flatS.length<8||flatS.split(' ').length<2)continue
     if(size+flatS.length>perPage||used+size+flatS.length>total){full=true;break}
+    const name=extractLineName(flatS);if(!name)continue
     const start=lineStart+lead+m.index!
-    entries.push({n:entries.length+1,source:id,start,end:start+lit.length,text:flatS});size+=flatS.length+8;added++
+    entries.push({n:entries.length+1,source:id,start,end:start+lit.length,text:flatS,name});size+=flatS.length+name.length+12;added++
     if(VENUE_LIKE.test(flatS))venueLines++
    }
   }
@@ -36,13 +65,13 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000):{t
  const perSource=new Map<string,number>();for(const e of entries)if(VENUE_LIKE.test(e.text))perSource.set(e.source,(perSource.get(e.source)??0)+1)
  let kept=entries
  if([...perSource.values()].some(v=>v>=5)){kept=entries.filter(e=>(perSource.get(e.source)??0)>=5);kept.forEach((e,i)=>{e.n=i+1});venueLines=kept.filter(e=>VENUE_LIKE.test(e.text)).length;pages=new Set(kept.map(e=>e.source)).size}
- return {text:kept.map(e=>`L${e.n} ${e.text}`).join('\n'),lines:kept.length,pages,venueLines,entries:kept}
+ return {text:kept.map(e=>`L${e.n} | ${e.name} | ${e.text}`).join('\n'),lines:kept.length,pages,venueLines,entries:kept}
 }
 export function viewNote(v:{text:string}):string{
- return 'Numbered lines from the pages read (headings, list items and sentences). Name specific hotels, restaurants and attractions that appear in them. For each give kind, the exact name as written on a line, and that line number (for example 12 for L12). The server takes the supporting quote from that line itself. Do not name cities, countries, neighborhoods, websites, meals or categories. Do not use names from memory.\n\n'+v.text
+ return 'Candidate lines from the pages read. Each line is: L<number> | venue name found by the server | the text of that line. Choose lines whose venue is a real hotel, restaurant or attraction a traveler can use now. For each, give kind (hotel, restaurant or activity) and the line number only; never type a name. Skip cities, neighborhoods, websites, news items and categories.\n\n'+v.text
 }
 export function quoteToolDef(maxLine:number){
- return {type:'function' as const,function:{name:SELECT_CANDIDATES_TOOL,description:'Select hotel, restaurant and activity recommendations for this itinerary from the numbered page lines shown. Each candidate: kind (hotel|restaurant|activity), name (exactly as written on a line), line (optional: the line number, e.g. 12 for L12, where the name appears; the server finds the line from the name). The server checks the name against that line and takes the quote from the page itself.',parameters:{type:'object',additionalProperties:false,properties:{candidates:{type:'array',minItems:1,maxItems:12,items:{type:'object',additionalProperties:false,properties:{kind:{type:'string',enum:['hotel','restaurant','activity']},name:{type:'string',maxLength:80},line:{type:'integer',minimum:1,maximum:Math.max(1,maxLine)}},required:['kind','name']}}},required:['candidates']}}}
+ return {type:'function' as const,function:{name:SELECT_CANDIDATES_TOOL,description:'Select hotel, restaurant and activity recommendations for this itinerary by line number from the candidate lines shown. Each candidate: kind (hotel|restaurant|activity) and line (the number after L). The server takes the venue name and quote from that line and verifies them. Never type a venue name.',parameters:{type:'object',additionalProperties:false,properties:{candidates:{type:'array',minItems:1,maxItems:12,items:{type:'object',additionalProperties:false,properties:{kind:{type:'string',enum:['hotel','restaurant','activity']},line:{type:'integer',minimum:1,maximum:Math.max(1,maxLine)}},required:['kind','line']}}},required:['candidates']}}}
 }
 const norm=(t:string)=>t.replace(/\s+/g,' ').trim()
 const CONNECT_LC=new Set(['of','the','at','de','la','le','les','el','del','du','von','van','by','on','in','and','y','&','a','as','der','da','di','do','dos'])
@@ -67,49 +96,46 @@ export function destinationTokens(request:string):string[]{
 const normKey=(t:string)=>t.toLowerCase().replace(/^the\s+/,'').replace(/[^\p{L}\p{N}]+/gu,'')
 export type Verify=(name:string,kind:Kind,quote:string)=>Promise<boolean>
 /** Mechanical checks (literal quote, name inside the quote, not a brand/place/category) then one bounded yes/no verification per pick. */
-export async function compileQuoteSelection(input:unknown,records:SourceRecords,request:string,verify:Verify,entries:ViewLine[],already:string[]=[]):Promise<{candidates:Record<string,unknown>[];dropped:string[]}|{error:string;dropped:string[]}>{
+export type SelectionResult={candidates:Record<string,unknown>[];dropped:string[];previews:string[]}|{error:string;dropped:string[];previews:string[]}
+const preview=(t:string)=>t.replace(/[^A-Za-z0-9]/g,'').slice(0,20)
+export async function compileQuoteSelection(input:unknown,records:SourceRecords,request:string,verify:Verify,entries:ViewLine[],already:string[]=[]):Promise<SelectionResult>{
  const list=input&&typeof input==='object'?(input as {candidates?:unknown}).candidates:undefined
- if(!Array.isArray(list)||!list.length)return {error:'Supply candidates: at least one {kind,name,line}, with line numbers from the numbered page lines.',dropped:['empty']}
- const place=placeWordsFrom(request),dropped:string[]=[],hints:string[]=[],pending:{kind:Kind;c:Record<string,unknown>;name:string;quote:string}[]=[],seen=new Set<string>(already.map(normKey)),dest=destinationTokens(request)
+ if(!Array.isArray(list)||!list.length)return {error:'Supply candidates: at least one {kind,line}, with line numbers from the candidate lines.',dropped:['empty'],previews:[]}
+ const place=placeWordsFrom(request),dropped:string[]=[],previews:string[]=[],pending:{kind:Kind;c:Record<string,unknown>;name:string;quote:string}[]=[],seen=new Set<string>(already.map(normKey)),dest=destinationTokens(request)
+ const reject=(code:string,name:string)=>{dropped.push(code);if(name)previews.push(preview(name))}
  for(const raw of list.slice(0,12)){
   if(!raw||typeof raw!=='object'||Array.isArray(raw)){dropped.push('candidate_type');continue}
   const r=raw as Record<string,unknown>,kind=r.kind
   if(kind!=='hotel'&&kind!=='restaurant'&&kind!=='activity'){dropped.push('kind');continue}
-  const name=typeof r.name==='string'?norm(r.name):'',ln=typeof r.line==='number'?r.line:Number(String(r.line??'').replace(/^L/i,''))
-  if(name.length<3||name.length>80){dropped.push('name');continue}
-  // The server resolves the line: the model's number is a hint. Any view line holding the literal name is valid evidence; the nearest one to the hint wins.
-  const holding=entries.filter(e=>e.text.includes(name))
-  const hint=Number.isFinite(ln)?ln:0
-  const line=holding.length?holding.slice().sort((a,b)=>Math.abs(a.n-hint)-Math.abs(b.n-hint)||a.n-b.n)[0]:undefined
-  if(!line){dropped.push(hint&&!entries.some(e=>e.n===hint)?'line_unknown':'name_not_on_line');hints.push(`"${name}" does not appear on any numbered line; copy the name exactly as written on a line`);continue}
-  if(hint&&line.n!==hint&&holding.length>1)hints.push(`"${name}" resolved to L${line.n}`)
-  const text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
-  if(off<0){dropped.push('name_not_on_line');continue}
-  // Quote is server-taken: the line itself (a bare heading also takes the next line, so a reason never borrows another venue's sentence).
-  const nxt=entries.find(e=>e.n===line!.n+1&&e.source===line!.source)
+  const ln=typeof r.line==='number'?r.line:Number(String(r.line??'').replace(/^L/i,''))
+  const line=entries.find(e=>e.n===ln)
+  if(!line){dropped.push('line_unknown');continue}
+  // The name is the server's: extracted from the line, so the model cannot invent or mis-copy one.
+  const name=line.name,text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
+  if(off<0){reject('name_not_on_line',name);continue}
+  const nxt=entries.find(e=>e.n===line.n+1&&e.source===line.source)
   const quote=norm(text.slice(line.start,(nxt&&line.end-line.start<40&&nxt.end-line.start<=300?nxt.end:line.end)))
-  const loc={source:line.source,start:line.start}
-  if(!nameShapeOk(name)){dropped.push('name_shape');hints.push(`"${name}" reads like a headline or clause; give only the venue's own name`);continue}
+  if(!nameShapeOk(name)){reject('name_shape',name);continue}
   if(dest.length){
-   const pageText=records.pageText(line.source)||'',head=(records.pageTitle(line.source)||'').toLowerCase(),lc=line.text.toLowerCase(),pl=pageText.toLowerCase()
+   const head=(records.pageTitle(line.source)||'').toLowerCase(),lc=line.text.toLowerCase(),pl=text.toLowerCase()
    const near=dest.some(d=>lc.includes(d)||head.includes(d))||dest.some(d=>pl.split(d).length-1>=3)
-   if(!near){dropped.push('off_destination');hints.push(`"${name}" is not tied to ${dest.join('/')} on its line or page`);continue}
+   if(!near){reject('off_destination',name);continue}
   }
   const ws=name.toLowerCase().split(/[^\p{L}'’]+/u).filter(Boolean)
-  if(isNonVenueName(name)||isCategoryPhrase(name.split(/\s+/))||(ws.length&&ws.every(w=>place.has(w)))){dropped.push('not_a_venue_name');continue}
-  const key=normKey(name);if(seen.has(key)){dropped.push('duplicate');continue}
+  if(isNonVenueName(name)||isCategoryPhrase(name.split(/\s+/))||(ws.length&&ws.every(w=>place.has(w)))){reject('not_a_venue_name',name);continue}
+  const key=normKey(name);if(seen.has(key)){reject('duplicate',name);continue}
   seen.add(key)
-  const start=loc.start+off
-  const c:Record<string,unknown>={kind,name:{source:loc.source,field:'content',start,end:start+name.length},reason:quote.slice(0,300),catch:'Hours, prices and availability unverified'}
+  const start=line.start+off
+  const c:Record<string,unknown>={kind,name:{source:line.source,field:'content',start,end:start+name.length},reason:quote.slice(0,300),catch:'Hours, prices and availability unverified'}
   const out=compileItineraryCandidates({body:'x',itinerary_candidates:[c]},records)
-  if('error' in out){dropped.push(itineraryCandidateErrorCode(out.error));continue}
+  if('error' in out){reject(itineraryCandidateErrorCode(out.error),name);continue}
   pending.push({kind,c,name,quote})
  }
  const verdicts=await Promise.all(pending.map(p=>verify(p.name,p.kind,p.quote).catch(()=>false)))
  const kept:Record<string,unknown>[]=[],counts={hotel:0,restaurant:0,activity:0}
- pending.forEach((p,i)=>{if(!verdicts[i]){dropped.push('not_verified');return};if(counts[p.kind]>=GROUP_LIMITS[p.kind]){dropped.push('group_limit');return};counts[p.kind]++;kept.push(p.c)})
- if(!kept.length)return {error:'No valid candidate. Give kind, the name exactly as written on the line, and that line number. Names must be specific venues (not a city, site, meal or category). Dropped: '+[...new Set(dropped)].join(', ')+(hints.length?'. '+hints.slice(0,4).join('; '):''),dropped}
- return {candidates:kept,dropped}
+ pending.forEach((p,i)=>{if(!verdicts[i]){reject('not_verified',p.name);return};if(counts[p.kind]>=GROUP_LIMITS[p.kind]){reject('group_limit',p.name);return};counts[p.kind]++;kept.push(p.c)})
+ if(!kept.length)return {error:'No valid candidate. Give kind and a line number from the candidate lines (never a name). Pick lines whose venue is a real hotel, restaurant or attraction open now, not a city, site, news item or category. Dropped: '+[...new Set(dropped)].join(', '),dropped,previews}
+ return {candidates:kept,dropped,previews}
 }
 export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):string{
  const what=kind==='hotel'?'hotel or lodging property to stay at':kind==='restaurant'?'restaurant, cafe or bar to eat or drink at':'attraction, venue or activity provider to visit'
