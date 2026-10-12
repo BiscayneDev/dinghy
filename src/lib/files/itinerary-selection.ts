@@ -111,6 +111,7 @@ const wordsOf=(t:string)=>(t.toLowerCase().match(/[\p{L}][\p{L}'’]*/gu)||[])
 /** The server cards are the only venue recommendations. A freehand body line that contains any capitalized proper-name word
  * (not sentence-initial, not from the user's request, not a pick, not a generic agenda word) is removed. Lines claiming that
  * no hotels/restaurants/activities are recommended are removed too: the server states real gaps itself. */
+const DESC_RE=/\b(?:offering|offers|stunning|renowned|famous|known for|features?|boasts?|located|situated|nestled|historic|iconic|charming|elegant|luxurious|breathtaking|estate|insight|world-class|must-see|popular)\b/i
 const UNIT_GENERIC=new Set('am pm et est edt local time times meeting meetings call team coffee flight arrival drive transfer rest wrap wrapup evening tonight lunch dinner breakfast brunch morning afternoon'.split(' '))
 /** The server cards are the only venue recommendations. A freehand body line is removed when it names an unpicked proper noun
  * (a run of 2+ unfamiliar capitalized words, or one unfamiliar capitalized word mid-sentence), claims that no hotels/restaurants/activities
@@ -122,6 +123,7 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
  const headKinds=unsupported.map(k=>k==='activity'?'activit(?:y|ies)|things to do|events?|nightlife|sightseeing|evening':k==='restaurant'?'restaurants?|dining|dinner|lunch|brunch|breakfast|eats|food':'hotels?|stays?|lodging|accommodations?')
  const headRe=headKinds.length?new RegExp('\\b(?:'+headKinds.join('|')+')\\b','i'):null
  const reqLc=request.toLowerCase()
+ const reqWords=new Set(wordsOf(request))
  const lines=body.split('\n'),keep:string[]=[];let removed=0,skipUnder=false
  for(const line of lines){
   const heading=/^\s*#/.test(line)
@@ -132,6 +134,14 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
   if(heading&&headRe&&headRe.test(line)&&!headRe.test(request)){removed++;skipUnder=true;continue}
   if(!heading&&/\b(?:weekend events?|local events?|events? (?:this|happening|nearby)|festivals?|concerts?|live music|happening (?:this|in))\b/i.test(line)&&!/\b(?:events?|festivals?|concerts?|live music)\b/.test(reqLc)){removed++;continue}
   if(/\b(?:no|not|none|zero)\b[^.\n]*\b(?:hotels?|restaurants?|dining|activities|venues?)\b[^.\n]*\b(?:recommend\w*|verified|found|available)\b/i.test(line)||/\b(?:no|not)\s+(?:\w+\s+){0,2}recommend\w*\b/i.test(line)||(refRe&&refRe.test(line))){removed++;continue}
+  if(!heading){
+   const lw=wordsOf(line),lcl=line.toLowerCase()
+   const mentions=pickNames.some(n=>n&&lcl.includes(n.toLowerCase()))
+   if(!mentions&&lw.length>=8){
+    const ov=lw.filter(w=>reqWords.has(w)).length/lw.length
+    if(DESC_RE.test(line)||(lw.length>=12&&ov<0.5)){removed++;continue}
+   }
+  }
   let bad=false,atStart=true,run=0
   for(const m of line.matchAll(/[\p{L}\d][\p{L}\d'’&.\-]*|[.!?:;,]/gu)){
    const w=m[0]

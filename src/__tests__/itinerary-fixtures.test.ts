@@ -358,3 +358,15 @@ it('bare-label lines and a bare-name reason',async()=>{
 it('meal label before a bold activity label is still empty',()=>{
  expect(cleanEmptyHeadings(['## Friday','**Dinner**','**Activities**','- Harbor Museum tickets']).join('\n')).toBe('## Friday\n**Activities**\n- Harbor Museum tickets')
 })
+describe('areas and orphan prose',()=>{
+ it('rejects streets and neighborhoods as names, keeps own-word venues',()=>{
+  expect(extractLineName('Calle Nueve')).toBeNull()
+  expect(extractLineName('Little Harbor District')).toBeNull()
+  expect(extractLineName('Calle Nueve Museum')).toBe('Calle Nueve Museum')
+ })
+ it('drops descriptive prose that mentions no kept pick, keeps request-derived and pick lines',()=>{
+  const body='## Friday\n- 10:00 Office visit with the team\nA stunning estate offering insight into the history of the region.\nTide Museum is a quick stop before dinner.\n'
+  const r=nuv(body,['Tide Museum'],'Friday office visit with the team in Harbor',[])
+  expect(r.body).not.toContain('stunning');expect(r.body).toContain('Tide Museum');expect(r.body).toContain('Office visit')
+ })
+})
