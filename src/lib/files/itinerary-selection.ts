@@ -158,6 +158,7 @@ export function cleanEmptyHeadings(lines:string[]):string[]{
  for(let i=0;i<keep.length;i++){
   const d=depth(keep[i]);let j=i+1;while(j<keep.length&&!keep[j].trim())j++
   if(!d){
+   if(/^\s*(?:[-*•]\s*)?(?:\*\*)?(?:(?:\d{1,2}(?::\d{2})?\s?(?:am|pm)\s*[-–:]?\s*)?(?:breakfast|brunch|lunch|dinner|drinks|coffee|morning|afternoon|evening|night(?:life)?))(?:\*\*)?\s*:?\s*$/i.test(keep[i])&&(j>=keep.length||depth(keep[j])||/^\s*:::/.test(keep[j])||/^\s*\*\*[^*]+\*\*\s*:?[\s]*$/.test(keep[j]))){continue}
    if(!/^\s*:::/.test(keep[i])&&/[\p{L}\d][^:]*:\s*$/u.test(keep[i])&&(j>=keep.length||depth(keep[j]))){continue}
    fin.push(keep[i]);continue
   }
