@@ -63,8 +63,8 @@ export function compileMentionSelection(input:unknown,menu:Mention[],records:Sou
   if(seen.has(m.id)){dropped.push('duplicate');continue}
   const kind=r.kind
   if(kind!=='hotel'&&kind!=='restaurant'&&kind!=='activity'){dropped.push('kind');continue}
-  // Soft kind check: a strong wording hint for another kind is a veto only while the menu still has unpicked mentions hinted as the requested kind.
-  if(m.hint&&m.hint!==kind&&menu.some(x=>x.hint===kind&&!pickedIds.has(x.id))){dropped.push('kind_conflict');continue}
+  // Hard evidence rule: the entry's own sentence must support the chosen kind. No hint or another kind is a rejection, never a relabel.
+  if(m.hint!==kind){dropped.push(m.hint?'kind_conflict':'no_kind_evidence');continue}
   const c:Record<string,unknown>={kind,name:{source:m.source,field:'content',start:m.start,end:m.end},reason:typeof r.reason==='string'?r.reason.slice(0,300):'unknown',catch:typeof r.catch==='string'?r.catch.slice(0,300):'unknown'}
   const out=compileItineraryCandidates({body:'x',itinerary_candidates:[c]},records)
   if('error' in out){dropped.push(itineraryCandidateErrorCode(out.error));continue}
@@ -101,25 +101,36 @@ export function relaxedContract<T extends {request:string}|null>(c:T,unsupported
  return {...c,request:r+' recommendations'}
    }
 
-import {extractMentions,placeWordsFrom} from './itinerary-mentions'
 import {SourceRecords as SR} from './source-records'
 const normName=(t:string)=>t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()
 /** The server cards are the only venue recommendations. Freehand body lines that name another venue-like entity
  * (own-name wording such as Hotel/Inn/Cafe/Museum) not among the picks and not in the user's own request are removed. */
+const GENERIC_CAPS=new Set('monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december hotel restaurant dinner lunch breakfast brunch office visit working session sessions morning afternoon evening night day weekend check checkin arrival departure airport free time agenda plans plan optional weekend sightseeing activities activity option options not found notes summary overview schedule itinerary stay stays dining things to do see eat'.split(' '))
+const wordsOf=(t:string)=>(t.toLowerCase().match(/[\p{L}][\p{L}'’]*/gu)||[])
+/** The server cards are the only venue recommendations. A freehand body line that contains any capitalized proper-name word
+ * (not sentence-initial, not from the user's request, not a pick, not a generic agenda word) is removed. Lines claiming that
+ * no hotels/restaurants/activities are recommended are removed too: the server states real gaps itself. */
 export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:string):{body:string;removed:number}{
- const tmp=new SR();tmp.capture('web_fetch',{url:'https://body.invalid/agenda',title:null,content:body},'1970-01-01T00:00:00Z')
- const picks=pickNames.map(normName).filter(Boolean),req=normName(request)
- const bad=new Set<number>()
- const lines=body.split('\n'),starts:number[]=[];let pos=0;for(const l of lines){starts.push(pos);pos+=l.length+1}
- for(const m of extractMentions(tmp,300,[],{evidence:false,placeWords:placeWordsFrom(request)})){
-  const n=normName(m.text)
-  if(!n||req.includes(n)||picks.some(p=>p.includes(n)||n.includes(p)))continue
-  let li=0;while(li+1<lines.length&&starts[li+1]<=m.start)li++
-  if(!m.text.includes(' ')&&!lines[li].slice(0,m.start-starts[li]).replace(/[\s#>*•\-\d:.)]|\b[ap]m\b/gi,''))continue
-  if(!/^\s*#/.test(lines[li]))bad.add(li)
+ const allowed=new Set<string>([...wordsOf(request),...pickNames.flatMap(wordsOf),...GENERIC_CAPS])
+ const lines=body.split('\n'),keep:string[]=[];let removed=0,skipUnder=false
+ for(const line of lines){
+  const heading=/^\s*#/.test(line)
+  if(!heading&&skipUnder){if(!line.trim()){keep.push(line)}else removed++;continue}
+  if(heading)skipUnder=false
+  if(!line.trim()){keep.push(line);continue}
+  if(/\b(?:no|not|none|zero)\b[^.\n]*\b(?:hotels?|restaurants?|dining|activities|venues?)\b[^.\n]*\b(?:recommend\w*|verified|found|available)\b/i.test(line)||/\b(?:no|not)\s+(?:\w+\s+){0,2}recommend\w*\b/i.test(line)){removed++;continue}
+  let bad=false,atStart=true
+  for(const m of line.matchAll(/[\p{L}\d][\p{L}\d'’&.\-]*|[.!?:;]/gu)){
+   const w=m[0]
+   if(/^[.!?:;]$/.test(w)){atStart=true;continue}
+   if(!/^\p{L}/u.test(w)){continue}
+   const first=atStart&&!heading;atStart=false
+   if(!/^\p{Lu}/u.test(w)||first||w.length<3)continue
+   if(!allowed.has(w.toLowerCase().replace(/['’]s$/,'').replace(/[.\-]+$/,'')))bad=true
+  }
+  if(bad){removed++;if(heading)skipUnder=true}else keep.push(line)
  }
- if(!bad.size)return {body,removed:0}
- return {body:lines.filter((_,i)=>!bad.has(i)).join('\n'),removed:bad.size}
+ return removed?{body:keep.join('\n'),removed}:{body,removed:0}
 }
 export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[]{
  return picks.flatMap((c:any)=>{const t=records.pageText(c.name.source);return t?[t.slice(c.name.start,c.name.end)]:[]})

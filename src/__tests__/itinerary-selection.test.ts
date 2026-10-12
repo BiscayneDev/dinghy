@@ -48,9 +48,9 @@ it('relaxed contract drops only unsupported kinds and keeps research-needed',()=
  expect(relaxedContract(c,['restaurant']).request).toMatch(/hotel.*meals.*activities.*recommendations/)
 })
 
-it('hints are advisory: a pick whose hint differs is still accepted when the span is literal',()=>{
+it('hints are binding: a pick whose hint differs is rejected even when the span is literal',()=>{
  const r=new SourceRecords();r.capture('web_fetch',{url:'https://site.test/p',title:'T',content:'Dinner at Salt & Vine restaurant, a seafood bistro with cocktails.'},'2026-01-01T00:00:00Z')
  const menu=extractMentions(r,60,['activity'],{evidence:false});const sv=menu.find(m=>m.text==='Salt & Vine')!
  const out=compileMentionSelection({candidates:[{kind:'activity',id:sv.id,reason:'r',catch:'c'}]},menu,r)
- expect('error' in out).toBe(false)
+ expect('error' in out).toBe(true)
 })
