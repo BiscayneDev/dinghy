@@ -352,6 +352,17 @@ export function renderTable(t: Tokens.Table): string {
     return `<table class="tbl"><thead>${head}</thead><tbody>${rows}</tbody></table>`
 }
 
+/** Source-bound hotel names are a useful cover when no verified venue photo was captured. */
+export function itineraryCover(doc:DinghyDoc):{name:string;destination:string}|null{
+ if(!/Selection reasons:/i.test(doc.body))return null
+ const stay=splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='stay')
+ if(!stay||stay.kind!=='block')return null
+ const name=stay.lines.find(l=>l.trim())?.split(' | ')[0]?.trim()
+ return name?{name,destination:doc.title}:null
+}
+function coverHtml(cover:{name:string;destination:string}):string{
+ return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">Researched itinerary</span><span class="hero-n hero-title">${esc(cover.name)}</span><span class="hero-s">${esc(cover.destination)}</span></div></div>`
+}
 export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const body: string[] = []
     for (const seg of splitBlocks(doc.body)) {
@@ -432,6 +443,7 @@ h3.day{margin:30px 0 4px;padding-top:14px;border-top:1px solid var(--line);font:
 code{font:14px 'DM Mono',monospace;background:var(--sand);padding:1px 6px;border-radius:6px}
 hr{border:0;border-top:1px solid var(--line);margin:32px 0}
 ${KINDS_CSS}
+.itinerary-cover{background:#0E1A33}.itinerary-cover .hero-title{font-size:42px;max-width:700px}.itinerary-cover .hero-s{font-size:16px;max-width:650px}@media(max-width:600px){.itinerary-cover .hero-title{font-size:30px}.itinerary-cover .hero-s{font-size:14px}.itinerary-cover .hero-in{bottom:88px}}
 .dl{margin:14px 0 0;font:500 11px/1 'DM Mono',monospace;letter-spacing:.14em;text-transform:uppercase}.dl a{text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:8px 14px;display:inline-block}
 .foot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;max-width:720px;margin:0 auto;padding:36px 24px 44px;font:500 10px 'DM Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}.foot a{color:inherit;text-decoration:none}
 @media (max-width:600px){table.tbl,table.tbl tbody,table.tbl tr,table.tbl td{display:block;width:100%}table.tbl thead{display:none}table.tbl tr{margin:12px 0;padding:6px 14px;border:1px solid var(--line);border-radius:16px}table.tbl td{border:0;padding:6px 0}table.tbl td::before{content:attr(data-label);display:block;font:500 10px/1.6 'DM Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}table.tbl td:first-child{font:500 19px/1.3 Fraunces,Georgia,serif;color:var(--ink)}table.tbl td:first-child::before{display:none}.band{height:220px}.card{margin-top:-52px;padding:28px 22px 26px}h1{font-size:36px}h2{font-size:24px}body{font-size:16px}.row{grid-template-columns:84px 1fr}}
@@ -482,7 +494,7 @@ th{background:var(--sand);color:var(--ink)}
 @media print{.band{display:none}.card{margin:0;box-shadow:none;width:100%;max-width:none}.card>*,.band svg{animation:none}.reply,.pa,.dl{display:none}}
 </style></head>
 <body${opts.imageryState ? ` data-imagery="${opts.imageryState}"` : ''}>
-${pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? `<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`}
+${itineraryCover(doc)?coverHtml(itineraryCover(doc)!):pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? `<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`}
 <main class="card">
 <div class="brand">${anchorSvg(BRAND.ink, 18)}<span>dinghy</span></div>
 <h1>${esc(doc.title)}</h1>
@@ -570,7 +582,14 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
         }
         paint()
         const STRIP = 150
-        drawSunriseStrip(pdf, pdf.page.width, STRIP)
+        const cover=itineraryCover(doc)
+        if(cover){
+            pdf.save().rect(0,0,pdf.page.width,STRIP).fill(BRAND.ink)
+            pdf.lineWidth(0.8).strokeColor(BRAND.accent).circle(530,58,62).stroke().restore()
+            pdf.font('mono').fontSize(8).fillColor(BRAND.accent).text('RESEARCHED ITINERARY',L,26,{width:W})
+            pdf.font('display').fontSize(24).fillColor(BRAND.paper).text(plain(cover.name),L,48,{width:W-70,height:60})
+            pdf.font('body').fontSize(9).fillColor(BRAND.paper).text(plain(cover.destination),L,116,{width:W,height:28})
+        }else drawSunriseStrip(pdf, pdf.page.width, STRIP)
         pdf.on('pageAdded', () => {
             paint()
             pdf.x = L
@@ -602,7 +621,9 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
         }
         pdf.moveDown(0.8)
 
-        for (const t of tokens(doc.body)) {
+        const bodyTokens=tokens(doc.body)
+        for (let ti=0;ti<bodyTokens.length;ti++) {
+            const t=bodyTokens[ti]
             pdf.x = L
             if (t.type === 'heading') {
                 const h = t as Tokens.Heading
@@ -618,7 +639,8 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
                     pdf.moveDown(0.2)
                 }
             } else if (t.type === 'paragraph') {
-                ensure(30)
+                const next=bodyTokens.slice(ti+1).find(x=>x.type!=='space')
+                if(/^Selection reasons:$/i.test(plain((t as Tokens.Paragraph).text).trim())&&next?.type==='list'){const first=(next as Tokens.List).items[0];const height=first?pdf.font('body').fontSize(11).heightOfString(plain(first.text),{width:W-20,lineGap:3}):24;ensure(38+height)}else ensure(30)
                 inline((t as Tokens.Paragraph).text, L, W)
                 pdf.moveDown(0.5)
             } else if (t.type === 'list') {
