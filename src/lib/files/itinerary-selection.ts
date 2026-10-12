@@ -89,7 +89,8 @@ export function mergePicks(prior:Record<string,unknown>[],next:Record<string,unk
  const out=[...prior],key=(c:any)=>`${c.name.source}:${c.name.start}`,seen=new Set(out.map(key)),counts:Record<string,number>={hotel:0,restaurant:0,activity:0}
  for(const c of out)counts[c.kind as string]++
  for(const c of next){if(seen.has(key(c))||counts[c.kind as string]>=GROUP_LIMITS[c.kind as keyof typeof GROUP_LIMITS])continue;seen.add(key(c));counts[c.kind as string]++;out.push(c)}
- return out
+ const order:Record<string,number>={hotel:0,restaurant:1,activity:2}
+ return out.sort((x:any,y:any)=>order[x.kind]-order[y.kind])
 }
 /** When the sources genuinely lack a requested kind, the contract must not demand rows for it (the page says so honestly instead). */
 export function relaxedContract<T extends {request:string}|null>(c:T,unsupported:string[]):T{
@@ -130,7 +131,16 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
   }
   if(bad){removed++;if(heading)skipUnder=true}else keep.push(line)
  }
- return removed?{body:keep.join('\n'),removed}:{body,removed:0}
+ // A heading with nothing left under it (before a heading of the same or shallower level, or the end) is dropped.
+ const depth=(l:string)=>/^\s*(#+)/.exec(l)?.[1].length??0
+ const fin:string[]=[]
+ for(let i=0;i<keep.length;i++){
+  const d=depth(keep[i]);if(!d){fin.push(keep[i]);continue}
+  let j=i+1;while(j<keep.length&&!keep[j].trim())j++
+  if(j>=keep.length||(depth(keep[j])&&depth(keep[j])<=d)){removed++;continue}
+  fin.push(keep[i])
+ }
+ return removed?{body:fin.join('\n'),removed}:{body,removed:0}
 }
 export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[]{
  return picks.flatMap((c:any)=>{const t=records.pageText(c.name.source);return t?[t.slice(c.name.start,c.name.end)]:[]})
