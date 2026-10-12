@@ -121,3 +121,40 @@ it('headings naming unpicked venues are removed with their orphaned lines; gener
  for(const bad of ['Dilmar','Wolfe','Sunset drinks','Cabanas','Steaks'])expect(out).not.toContain(bad)
  for(const ok of ['## Agenda','Harbor Tower','## Day 1','your hotel','## Working sessions','venue and duration','## Salt & Vine','Dinner at 8','## Not found'])expect(out).toContain(ok)
 })
+import {buildPageView,compileQuoteSelection} from '@/lib/files/itinerary-view'
+const LONG='Intro about the harbor and its history. '.repeat(40)+'\nHarbor City has many rooms from $90 per night.\n## Where to stay\nThe Kestrel Lodge is a quiet harbor hotel with rooms from $150 per night.\n## Eat\nSunday Brunch is served all weekend at Rook & Thistle, a seafood kitchen on Quay Street.\nBook a table at Fenn Social Club for late dinners.\n## Do\nThe Maritime Museum opens daily with harbor exhibits.\n'
+const guide=()=>cap('https://guide.test/long',LONG)
+const judge=(yes:Record<string,string>)=>async(name:string,kind:string)=>yes[name]===kind
+const ask='Plan Friday in Harbor City with hotel, restaurants and activities'
+it('page view shows venue text that sits far beyond a short truncation, and skips hub pages',()=>{
+ const r=guide();r.capture('web_fetch',{url:'https://www.google.com/travel/hotels',title:'t',content:'Aggregator Hub rooms from $99 per night near you.\nSecond line of the hub page.'},'2026-01-01T00:00:00Z')
+ const v=buildPageView(r);expect(v.text).toContain('Kestrel Lodge');expect(v.text).toContain('Maritime Museum');expect(v.text).not.toContain('Aggregator Hub')
+})
+it('quote selection: literal quote, name inside quote, and per-pick verification bind entity to kind',async()=>{
+ const r=guide(),yes={'Kestrel Lodge':'hotel','Rook & Thistle':'restaurant','Maritime Museum':'activity'}
+ const out=await compileQuoteSelection({candidates:[
+  {kind:'hotel',name:'Kestrel Lodge',quote:'The Kestrel Lodge is a quiet harbor hotel with rooms from $150 per night.'},
+  {kind:'restaurant',name:'Rook & Thistle',quote:'Sunday Brunch is served all weekend at Rook & Thistle, a seafood kitchen on Quay Street.'},
+  {kind:'activity',name:'Maritime Museum',quote:'The Maritime Museum opens daily with harbor exhibits.'}]},r,ask,judge(yes))
+ expect('error' in out).toBe(false);if('error' in out)return
+ expect(out.candidates.map((c:any)=>c.kind)).toEqual(['hotel','restaurant','activity']);expect(out.dropped).toEqual([])
+ const c:any=out.candidates[1];expect(r.pageText(c.name.source)!.slice(c.name.start,c.name.end)).toBe('Rook & Thistle');expect(c.reason).toContain('seafood kitchen')
+})
+it('quote selection rejects a meal as a venue, a hotel relabeled as an activity, a quote about a different entity, and invented quotes',async()=>{
+ const r=guide(),yes={'Kestrel Lodge':'hotel','Rook & Thistle':'restaurant'}
+ const cases:[string,any][]=[
+  ['not_verified',{kind:'restaurant',name:'Sunday Brunch',quote:'Sunday Brunch is served all weekend at Rook & Thistle, a seafood kitchen on Quay Street.'}],
+  ['not_verified',{kind:'activity',name:'Kestrel Lodge',quote:'The Kestrel Lodge is a quiet harbor hotel with rooms from $150 per night.'}],
+  ['name_not_in_quote',{kind:'hotel',name:'Kestrel Lodge',quote:'The Maritime Museum opens daily with harbor exhibits.'}],
+  ['quote_not_on_page',{kind:'hotel',name:'Kestrel Lodge',quote:'Kestrel Lodge sits beside a festival ground with live music.'}],
+  ['not_a_venue_name',{kind:'hotel',name:'Harbor City',quote:'Harbor City has many rooms from $90 per night.'}]]
+ for(const [code,cand] of cases){const o=await compileQuoteSelection({candidates:[cand,{kind:'hotel',name:'Kestrel Lodge',quote:'The Kestrel Lodge is a quiet harbor hotel with rooms from $150 per night.'}]},r,ask,judge(yes));expect('error' in o,code).toBe(false);if('error' in o)continue;expect(o.dropped,code).toContain(code);expect(o.candidates).toHaveLength(1)}
+})
+it('quote selection with nothing verifiable is an error so the honest partial path takes over',async()=>{
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge',quote:'The Kestrel Lodge is a quiet harbor hotel with rooms from $150 per night.'}]},guide(),ask,async()=>false)
+ expect('error' in o&&o.dropped).toEqual(['not_verified'])
+})
+it('empty headings left after stripping are dropped, headings with content stay',()=>{
+ const out=neutralizeUnpickedVenues('# Trip\n## Recommendations for the Day\n- Dinner at Dilmar Beach Club\n## Day 1\n- Check in at your hotel\n## Weekend','x'.split(','),'Plan Friday').body
+ expect(out).not.toContain('Recommendations');expect(out).not.toContain('## Weekend');expect(out).toContain('## Day 1');expect(out).toContain('your hotel')
+})
