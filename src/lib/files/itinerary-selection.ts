@@ -148,6 +148,8 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
   if(!heading){
    const lw=wordsOf(line),lcl=line.toLowerCase()
    const mentions=pickNames.some(n=>n&&lcl.includes(n.toLowerCase()))
+   const lastHead=keep.filter(l=>/^\s*#/.test(l)||/^\s*\*\*/.test(l)).at(-1)||''
+   if(!mentions&&/\b(?:morning|afternoon|evening|night|lunch|dinner|breakfast|brunch)\b/i.test(lastHead)&&/\b(?:reservations?[^.]*hard|expect[^.]*wait|wait(?:ing)? (?:time|list)|fully booked|sold out|availability|popular spot|book (?:early|ahead))\b/i.test(line)){removed++;continue}
    if(!mentions&&lw.length>=8){
     const ov=lw.filter(w=>reqWords.has(w)).length/lw.length
     if(DESC_RE.test(line)||(lw.length>=12&&ov<0.5)){removed++;continue}

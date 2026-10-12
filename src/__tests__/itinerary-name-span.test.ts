@@ -34,3 +34,10 @@ it('a dedicated venue page with matching title still supplies a real descriptive
  const r=new SourceRecords();r.capture('web_fetch',{url:'https://fictional.test/inn',title:'Harbor Inn | Official Site',content:'Harbor Inn has rooms beside the quay.'},'2026-01-01T00:00:00Z')
  expect(buildPageView(r).entries.some(e=>e.name==='Harbor Inn')).toBe(true)
 })
+it('a possessive paragraph alias prefers the literal preceding venue heading',async()=>{
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://fictional.test/dining',title:'Harbor dining',content:"### The Tide Club Restaurant - Harbor\nIra Sedgewick's Tide Club serves dinner by the water in Harbor."},'2026-01-01T00:00:00Z')
+ const v=buildPageView(r),line=v.entries.find(e=>e.name.includes("Sedgewick's"))!.n
+ const o=await compileQuoteSelection({candidates:[{kind:'restaurant',line}]},r,'restaurants in Harbor',async()=>true,v.entries)
+ if('error' in o)throw new Error(o.error)
+ const ref=o.candidates[0].name as any;expect(r.pageText(ref.source)!.slice(ref.start,ref.end)).toBe('The Tide Club Restaurant')
+})
