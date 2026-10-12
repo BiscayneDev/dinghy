@@ -63,13 +63,15 @@ export function compileMentionSelection(input:unknown,menu:Mention[],records:Sou
   if(seen.has(m.id)){dropped.push('duplicate');continue}
   const kind=r.kind
   if(kind!=='hotel'&&kind!=='restaurant'&&kind!=='activity'){dropped.push('kind');continue}
+  // A pick whose own wording evidence points at a different kind is not accepted just to fill a requested kind.
+  if(m.hint&&m.hint!==kind){dropped.push('kind_conflict');continue}
   const c:Record<string,unknown>={kind,name:{source:m.source,field:'content',start:m.start,end:m.end},reason:typeof r.reason==='string'?r.reason.slice(0,300):'unknown',catch:typeof r.catch==='string'?r.catch.slice(0,300):'unknown'}
   const out=compileItineraryCandidates({body:'x',itinerary_candidates:[c]},records)
   if('error' in out){dropped.push(itineraryCandidateErrorCode(out.error));continue}
   if(counts[kind]>=GROUP_LIMITS[kind]){dropped.push('group_limit');continue}
   counts[kind]++;seen.add(m.id);kept.push(c)
  }
- if(!kept.length)return {error:'No valid candidate. Use ids exactly as listed in the menu, with kind chosen from the context. Dropped: '+[...new Set(dropped)].join(', '),dropped}
+ if(!kept.length)return {error:'No valid candidate. Use ids exactly as listed in the menu, with kind chosen from the context; a pick is rejected when the menu hint names a different kind. Dropped: '+[...new Set(dropped)].join(', '),dropped}
  return {candidates:kept,dropped}
 }
 

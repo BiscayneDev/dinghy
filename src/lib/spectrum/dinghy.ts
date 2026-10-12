@@ -868,6 +868,8 @@ export async function chatWithTools(
                         else if(!selectedCandidates||!input||typeof input!=='object'){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Recommendations are not selected yet. No file was created.'})});continue}
                         else{
                             input=injectCandidates(input,selectedCandidates)
+                            // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
+                            if(/\bworking sessions?\b/i.test(currentRequest)&&typeof (input as {body?:unknown}).body==='string'&&!/working sessions?/i.test((input as {body:string}).body)){await opts.onStage?.('tool','itinerary:working_sessions_added');input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\nWorking sessions: venue and duration to confirm.'}}
                             if(unsupportedKinds.length&&typeof (input as {body?:unknown}).body==='string'&&!/## Not found/i.test((input as {body:string}).body))input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\n## Not found\nI couldn\'t verify a pick for '+unsupportedKinds.map(k=>k==='activity'?'activities':k==='restaurant'?'restaurants':'hotels').join(' or ')+' from the pages I read. None are recommended here; the agenda above is unchanged.'}
                             const b=(input as {body?:unknown}).body
                             // The server renders stay/options/sources from the stored picks; any model-authored copies are dropped, not errors.
@@ -988,4 +990,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                }
+}
