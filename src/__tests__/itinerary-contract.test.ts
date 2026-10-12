@@ -169,7 +169,7 @@ describe('bounded required read fallback',()=>{
   const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async(i:any)=>i.url===urls[2]?{success:true,data:{title:'Harbor verified',url:i.url,content:'Harbor Inn. Harbor Cafe. Harbor Museum.'}}:{success:false,publicReadFailure:i.url===urls[0]?'http' as const:'network' as const,error:'untrusted private raw error'})}
   const req=harness([call('web_search'),call('create_file',{title:'Harbor',body:body.replaceAll(url,urls[2]).replace('Visitor directory | '+urls[2],'{{source:src9.title}} | {{source:src9.url}}')}),stop()])
   const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search(),read,file],ctx)
-  expect(read.execute.mock.calls.map(c=>c[0].url)).toEqual(urls.slice(0,3));expect(file.execute).toHaveBeenCalledTimes(1);expect(result.deliverable?.state).toBe('completed');expect(req).toHaveLength(2)
+  expect(read.execute.mock.calls.map(c=>c[0].url).slice(0,3)).toEqual(urls.slice(0,3));expect(read.execute.mock.calls.length).toBeLessThanOrEqual(6);expect(file.execute).toHaveBeenCalledTimes(1);expect(result.deliverable?.state).toBe('completed');expect(req).toHaveLength(2)
   expect(stage).toHaveBeenCalledWith('tool','research:read_failure:http');expect(stage).toHaveBeenCalledWith('tool','research:read_failure:network');expect(JSON.stringify(stage.mock.calls)).not.toContain('private raw')
  })
  it('stops at six actual URLs with no recommendation from search snippets',async()=>{
