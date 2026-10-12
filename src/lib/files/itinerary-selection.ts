@@ -111,32 +111,43 @@ const wordsOf=(t:string)=>(t.toLowerCase().match(/[\p{L}][\p{L}'’]*/gu)||[])
 /** The server cards are the only venue recommendations. A freehand body line that contains any capitalized proper-name word
  * (not sentence-initial, not from the user's request, not a pick, not a generic agenda word) is removed. Lines claiming that
  * no hotels/restaurants/activities are recommended are removed too: the server states real gaps itself. */
-export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:string):{body:string;removed:number}{
- const allowed=new Set<string>([...wordsOf(request),...pickNames.flatMap(wordsOf),...GENERIC_CAPS])
+const UNIT_GENERIC=new Set('am pm et est edt local time times meeting meetings call team coffee flight arrival drive transfer rest wrap wrapup evening tonight lunch dinner breakfast brunch morning afternoon'.split(' '))
+/** The server cards are the only venue recommendations. A freehand body line is removed when it names an unpicked proper noun
+ * (a run of 2+ unfamiliar capitalized words, or one unfamiliar capitalized word mid-sentence), claims that no hotels/restaurants/activities
+ * are recommended, or refers to a "recommended restaurant/hotel/activity" for a kind the server could not verify. Plain agenda text is kept. */
+export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:string,unsupported:string[]=[]):{body:string;removed:number}{
+ const allowed=new Set<string>([...wordsOf(request),...pickNames.flatMap(wordsOf),...GENERIC_CAPS,...UNIT_GENERIC])
+ const kindRe=unsupported.map(k=>k==='activity'?'activit(?:y|ies)':k==='restaurant'?'(?:restaurants?|dining|meals?)':'(?:hotels?|stays?|lodging)')
+ const refRe=kindRe.length?new RegExp('\\b(?:recommended|suggested|selected|chosen|picked|our|the)\\s+(?:\\w+\\s+)?(?:'+kindRe.join('|')+')\\b','i'):null
  const lines=body.split('\n'),keep:string[]=[];let removed=0,skipUnder=false
  for(const line of lines){
   const heading=/^\s*#/.test(line)
   if(!heading&&skipUnder){if(!line.trim()){keep.push(line)}else removed++;continue}
   if(heading)skipUnder=false
   if(!line.trim()){keep.push(line);continue}
-  if(/\b(?:no|not|none|zero)\b[^.\n]*\b(?:hotels?|restaurants?|dining|activities|venues?)\b[^.\n]*\b(?:recommend\w*|verified|found|available)\b/i.test(line)||/\b(?:no|not)\s+(?:\w+\s+){0,2}recommend\w*\b/i.test(line)){removed++;continue}
-  let bad=false,atStart=true
-  for(const m of line.matchAll(/[\p{L}\d][\p{L}\d'’&.\-]*|[.!?:;]/gu)){
+  if(/\b(?:no|not|none|zero)\b[^.\n]*\b(?:hotels?|restaurants?|dining|activities|venues?)\b[^.\n]*\b(?:recommend\w*|verified|found|available)\b/i.test(line)||/\b(?:no|not)\s+(?:\w+\s+){0,2}recommend\w*\b/i.test(line)||(refRe&&refRe.test(line))){removed++;continue}
+  let bad=false,atStart=true,run=0
+  for(const m of line.matchAll(/[\p{L}\d][\p{L}\d'’&.\-]*|[.!?:;,]/gu)){
    const w=m[0]
-   if(/^[.!?:;]$/.test(w)){atStart=true;continue}
+   if(/^[.!?:;]$/.test(w)){atStart=true;run=0;continue}
+   if(w===','){run=0;continue}
    if(!/^\p{L}/u.test(w)){continue}
    const first=atStart&&!heading;atStart=false
-   if(!/^\p{Lu}/u.test(w)||first||w.length<3)continue
-   if(!allowed.has(w.toLowerCase().replace(/['’]s$/,'').replace(/[.\-]+$/,'')))bad=true
+   const cap=/^\p{Lu}/u.test(w)&&w.length>=3&&!first
+   const unknown=cap&&!allowed.has(w.toLowerCase().replace(/['’]s$/,'').replace(/[.\-]+$/,''))
+   if(unknown){run++;if(run>=2||w.length>=4)bad=true}else if(!cap)run=0
   }
   if(bad){removed++;if(heading)skipUnder=true}else keep.push(line)
  }
- // A heading with nothing left under it (before a heading of the same or shallower level, or the end) is dropped.
+ // A heading with nothing left under it, and a line that ends in a colon with nothing after it, are dropped.
  const depth=(l:string)=>/^\s*(#+)/.exec(l)?.[1].length??0
  const fin:string[]=[]
  for(let i=0;i<keep.length;i++){
-  const d=depth(keep[i]);if(!d){fin.push(keep[i]);continue}
-  let j=i+1;while(j<keep.length&&!keep[j].trim())j++
+  const d=depth(keep[i]);let j=i+1;while(j<keep.length&&!keep[j].trim())j++
+  if(!d){
+   if(!/^\s*:::/.test(keep[i])&&/[\p{L}\d][^:]*:\s*$/u.test(keep[i])&&(j>=keep.length||depth(keep[j]))){removed++;continue}
+   fin.push(keep[i]);continue
+  }
   if(j>=keep.length||(depth(keep[j])&&depth(keep[j])<=d)){removed++;continue}
   fin.push(keep[i])
  }
@@ -144,4 +155,28 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
 }
 export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[]{
  return picks.flatMap((c:any)=>{const t=records.pageText(c.name.source);return t?[t.slice(c.name.start,c.name.end)]:[]})
+   }
+
+const TIME_RE=/\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b/gi
+const LEAD_FILL=new Set(['plus','but','or','plan','make','with','then','and','include','including','add','also','a','an','the','my','our','on','friday','saturday','sunday','monday','tuesday','wednesday','thursday','to','for','by','at'])
+/** User-supplied time-anchored agenda items (e.g. "office visit 10am") are facts the user gave; when the model's body drops one, the server restates it from the request text. */
+export function ensureRequestAgenda(body:string,request:string):{body:string;added:number}{
+ const items:{time:string;hour:string;mins:string;what:string}[]=[]
+ for(const m of request.matchAll(TIME_RE)){
+  const before=request.slice(0,m.index).replace(/\s+$/,'').replace(/\b(?:at|@|by|from)$/i,'').replace(/\s+$/,'')
+  const words=(before.split(/[.;:!?\n,]/).pop()||'').trim().split(/\s+/).filter(Boolean).slice(-4)
+  while(words.length&&LEAD_FILL.has(words[0].toLowerCase()))words.shift()
+  while(words.length&&LEAD_FILL.has(words[words.length-1].toLowerCase()))words.pop()
+  const what=words.join(' ')
+  if(what.length>=3)items.push({time:`${m[1]}${m[2]?':'+m[2]:''}${m[3].toLowerCase()}`,hour:m[1],mins:m[2]??'00',what})
+ }
+ const add:string[]=[]
+ for(const it of items){
+  const present=new RegExp('\\b0?'+it.hour+'(?::'+it.mins+')?\\s?(?:am|pm)?\\b','i').test(body)&&new RegExp(it.what.split(/\s+/)[0],'i').test(body)
+  if(!present)add.push(`- ${it.time}: ${it.what}`)
+ }
+ if(!add.length)return {body,added:0}
+ const lines=body.split('\n'),h=lines.findIndex(l=>/^\s*#/.test(l))
+ lines.splice(h>=0?h+1:0,0,...add)
+ return {body:lines.join('\n'),added:add.length}
    }
