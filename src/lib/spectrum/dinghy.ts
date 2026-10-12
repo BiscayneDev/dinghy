@@ -1,4 +1,5 @@
-import {compileItineraryCandidates,itineraryCandidateErrorCode} from '@/lib/files/itinerary-candidates'
+import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
+import {SELECT_CANDIDATES_TOOL,selectionToolDef,compileSelection,injectCandidates} from '@/lib/files/itinerary-selection'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
@@ -597,16 +598,19 @@ export async function chatWithTools(
     if (retailAvailability || contextualResearch || mapArtifact || itineraryResearch) tools = tools.filter(t => t.name !== 'find_places')
     if(itineraryResearch)tools=tools.map(t=>{
         if(t.name!=='create_file')return t
+        // Candidates are selected by a separate forced call and attached by the server; the file call never carries them.
         const schema=t.inputSchema as {required?:string[];properties?:Record<string,unknown>}
-        return {...t,description:'For this researched itinerary, itinerary_candidates is REQUIRED. No handwritten stay/options/sources blocks. '+t.description,inputSchema:{...schema,required:[...new Set([...(schema.required??[]),'itinerary_candidates'])]}}
+        const {itinerary_candidates:_dropped,...properties}=schema.properties??{}
+        return {...t,description:'Itinerary recommendations are already selected and attached server-side. Supply title, body (the supplied agenda and day headings only, no stay/options/sources blocks), format and kind "itinerary". '+t.description.split(ITINERARY_CANDIDATE_NOTE).join(''),inputSchema:{...schema,properties,required:(schema.required??[]).filter(k=>k!=='itinerary_candidates')}}
     })
-    const defsNow = () => tools.map((t) => {
+    let selectedCandidates:Record<string,unknown>[]|undefined
+    let selectionFailures=0
+    let bypassCandidates:Record<string,unknown>[]|undefined
+    const defsNow = () => {
+        const defs=tools.map((t) => ({type:'function' as const,function:{name:t.name,description:t.description,parameters:t.inputSchema as Record<string,unknown>}}))
         const ids=sourceRecords.pageIds()
-        const schema=t.inputSchema as {properties?:Record<string,any>}
-        const candidates=schema.properties?.itinerary_candidates
-        const parameters=itineraryResearch&&t.name==='create_file'&&ids.length&&candidates ? {...schema,properties:{...schema.properties,itinerary_candidates:{...candidates,items:{...candidates.items,properties:Object.fromEntries(Object.entries(candidates.items.properties).map(([key,value])=>{const v=value as any;return [key,['name','price','rating','area'].includes(key)?{...v,required:['source','field','excerpt'],properties:{source:{type:'string',enum:ids,description:'Successful page-read ID only, never a search snippet'},field:{type:'string',enum:['content']},excerpt:{type:'string',minLength:1,maxLength:500,description:'Copy a complete exact literal excerpt from this page content. Do not count offsets. Omit optional facts if absent.'}}}:v]}))}}}} : t.inputSchema
-        return {type:'function' as const,function:{name:t.name,description:t.description,parameters}}
-    })
+        return itineraryResearch&&ids.length&&!selectedCandidates ? [...defs,selectionToolDef(ids)] : defs
+    }
     let messages: Record<string, unknown>[] = [
         {
             role: 'system',
@@ -712,8 +716,9 @@ export async function chatWithTools(
         }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
-        const forceTool = (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
-        const offered = fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
+        const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates
+        const forceTool = (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
+        const offered = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const t0 = Date.now()
         // Bound a post-search generation, not tools or actions. Preserve honest
         // source-only progress when the gateway stalls, with transport headroom.
@@ -756,6 +761,11 @@ export async function chatWithTools(
         if(itineraryResearch&&forceTool&&!calls.some(c=>c.function.name===forceTool))await opts.onStage?.('tool',`research:choice_missed:${forceTool}`)
 
         if (choice?.finish_reason !== 'tool_calls' || calls.length === 0) {
+            // The gateway may not honor tool_choice; the offered set (one tool) is the real constraint. Bounded nudge, never a text answer.
+            if(selecting&&selectionFailures<3){
+                selectionFailures++;await opts.onStage?.('tool','invalid:selection:no_call')
+                messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with candidates copied from the page reads. Do not answer in text.'});continue
+            }
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
             if(contextualResearch&&!recoveryUsed&&(!mapResearchRead||prematureResearchReply(reply))&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=20000)){
                 const next=successfulSearches>0&&!mapResearchRead?'web_fetch':!successfulSearches?'web_search':undefined
@@ -790,6 +800,20 @@ export async function chatWithTools(
         for (const call of calls) {
             toolCallCount++
             if (call.function.name !== 'find_places') independentTool = true
+            if(itineraryResearch&&call.function.name===SELECT_CANDIDATES_TOOL){
+                await opts.onStage?.('tool',SELECT_CANDIDATES_TOOL)
+                let parsed:unknown=null
+                try{parsed=JSON.parse(call.function.arguments||'{}')}catch{await opts.onStage?.('tool','invalid:selection:arguments_json')}
+                const picked=selectedCandidates?{error:'Candidates are already selected. Call create_file now.',dropped:['repeat']}:compileSelection(parsed,sourceRecords)
+                if('error' in picked){
+                    selectionFailures++;await opts.onStage?.('tool','invalid:selection:'+picked.dropped[0])
+                    if(selectionFailures>=3)return finish({reply:'I read the public sources but could not tie any hotel, restaurant or activity name to an exact passage, so no researched recommendations were published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
+                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:picked.error})});continue
+                }
+                selectedCandidates=picked.candidates
+                await opts.onStage?.('tool',`itinerary:candidates_selected:${picked.candidates.length}`)
+                messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:picked.candidates.length,dropped:picked.dropped.length,next:'Recommendations are attached server-side. Now call create_file with title, body (agenda and day headings only), format and kind itinerary. Do not include candidates, stay, options or sources blocks.'})});continue
+            }
             const tool = tools.find((t) => t.name === call.function.name)
             let content: string
             if ((fileRepairAttempted&&pageAttempted&&call.function.name==='create_file') || completionMode && (call.function.name === 'web_search' || (pageAttempted && call.function.name === 'create_file'))) {
@@ -813,8 +837,12 @@ export async function chatWithTools(
                         await opts.onStage?.('tool','research:page_read_required')
                         content=JSON.stringify({error:'This itinerary needs current recommendations. Use web_search then web_fetch first. If research is blocked, return only supplied facts and explicit gaps, not invented recommendations.'});messages.push({role:'tool',tool_call_id:call.id,content});continue
                     }
-                    if(call.function.name==='create_file'&&itineraryResearch&&!(input&&typeof input==='object'&&Array.isArray((input as {itinerary_candidates?:unknown}).itinerary_candidates))){
-                        validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'itinerary_candidates is required for this researched recommendation itinerary. Supply explicit typed page-content candidates, leave absent facts unknown; body is the supplied agenda only, no stay/options/sources blocks. Correct this call once.'})});continue
+                    if(call.function.name==='create_file'&&itineraryResearch){
+                        const own=input&&typeof input==='object'?(input as {itinerary_candidates?:unknown}).itinerary_candidates:undefined
+                        // If the gateway ignored the offered set and the call carries its own candidates, the compiler still validates them in full below.
+                        if(Array.isArray(own)){await opts.onStage?.('tool','itinerary:inline_candidates');bypassCandidates=own as Record<string,unknown>[]}
+                        else if(!selectedCandidates||!input||typeof input!=='object'){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Recommendations are not selected yet. No file was created.'})});continue}
+                        else input=injectCandidates(input,selectedCandidates)
                     }
                     const schemaError=inputSchemaError(input,tool.inputSchema)
                     if(schemaError){validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
@@ -822,7 +850,7 @@ export async function chatWithTools(
                         if(contract?.kind==='itinerary'&&itineraryResearch){
                             const candidates=compileItineraryCandidates(input,sourceRecords)
                             if('error' in candidates){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates');await opts.onStage?.('tool','invalid:itinerary_candidate:'+itineraryCandidateErrorCode(candidates.error));messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:candidates.error})});continue}
-                            input=candidates.input;if(candidates.compiled)await opts.onStage?.('tool','itinerary:candidates_compiled')
+                            input=candidates.input;if(candidates.compiled)await opts.onStage?.('tool','itinerary:candidates_compiled');if(bypassCandidates){selectedCandidates=bypassCandidates;bypassCandidates=undefined}
                         }
                         const linked=sourceRecords.bindObservedLinks(input)
                         if(linked.count)await opts.onStage?.('tool','binding:observed_links')
@@ -930,4 +958,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+                                      }
