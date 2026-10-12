@@ -1,6 +1,6 @@
-import {widenQuery,widenSourceScore,diningPageEvidence} from '@/lib/files/itinerary-research'
+import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
-import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
+import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
 import {isHubUrl,sourceScore} from '@/lib/files/itinerary-mentions'
 import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt,destinationTokens} from '@/lib/files/itinerary-view'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
@@ -619,7 +619,8 @@ export async function chatWithTools(
     }
     let pickedSoFar:Record<string,unknown>[]=[]
     let unsupportedKinds:string[]=[]
-    let menuShown=false,widened=false
+    let menuShown=false
+    const widenAttempts:Record<string,number>={}
     // Itinerary searches are steered to guides and roundups that list several venues, not single news stories.
     const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;return itineraryResearch&&name==='web_search'&&typeof q==='string'&&!/\b(guide|best|top)\b/i.test(q)?{...(i as Record<string,unknown>),query:q+' best hotels restaurants things to do guide'}:i}
     let bypassCandidates:Record<string,unknown>[]|undefined
@@ -825,8 +826,7 @@ export async function chatWithTools(
 
         // Missing kinds reopen research on the server: kind-specific searches and page reads feed a fresh view, then selection is offered again.
         const widenForMissing=async(missing:string[]):Promise<boolean>=>{
-            if(widened||!missing.length||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<50000))return false
-            widened=true
+            if(!missing.length||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<50000))return false
             const searcher=tools.find(t=>t.name==='web_search'),reader=tools.find(t=>t.name==='web_fetch')
             if(!searcher||!reader)return false
             const destTok=destinationTokens(currentRequest),dest=destTok.join(' ')
@@ -835,8 +835,10 @@ export async function chatWithTools(
             let reads=0
             const searched:string[]=[]
             for(const kind of missing){
+                const attempt=widenAttempts[kind]||0;if(attempt>=2)continue
+                widenAttempts[kind]=attempt+1
                 if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<30000)break
-                const q=widenQuery(kind,dest),sargs=JSON.stringify({query:q})
+                const q=widenQuery(kind,dest,attempt),sargs=JSON.stringify({query:q})
                 searched.push(kind)
                 if(egressRejection('web_search',sargs,tainted,corpus))continue
                 await assertAccountActive(ctx.userId,ctx.chatGuid)
@@ -852,7 +854,7 @@ export async function chatWithTools(
                 hits=hits.map(x=>({x,sc:widenSourceScore(kind,x.url,x.title)})).filter(y=>y.sc>-3).sort((a,b)=>b.sc-a.sc).map(y=>y.x).slice(0,5)
                 let good=0,venueLines=0
                 for(const h of hits){
-                    if(kind==='restaurant'?good>=2&&venueLines>=4:good>=2)break
+                    if(kind==='restaurant'||kind==='activity'?good>=2&&venueLines>=4:good>=2)break
                     if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<22000)break
                     if(egressRejection('web_fetch',JSON.stringify({url:h.url}),tainted,corpus))continue
                     toolCallCount++
@@ -864,7 +866,7 @@ export async function chatWithTools(
                         const fresh=sourceRecords.pageIds().filter(id=>!before.has(id))
                         const onDest=fresh.some(id=>{const t=((sourceRecords.pageTitle(id)||'')+' '+(sourceRecords.pageText(id)||'').slice(0,2500)).toLowerCase();return destTok.some(d=>t.includes(d))})
                         if(fresh.length&&!onDest){for(const id of fresh)seenIds.add(id);continue}
-                        if(kind==='restaurant'&&fresh.length){const evidence=diningPageEvidence(sourceRecords,fresh);await opts.onStage?.('tool',`itinerary:dining_page:${evidence.venueLines}_${evidence.usable?'keep':'skip'}`);if(!evidence.usable){for(const id of fresh)seenIds.add(id);continue}venueLines+=evidence.venueLines}
+                        if((kind==='restaurant'||kind==='activity')&&fresh.length){const evidence=(kind==='restaurant'?diningPageEvidence:activityPageEvidence)(sourceRecords,fresh);await opts.onStage?.('tool',`itinerary:${kind==='restaurant'?'dining':'activity'}_page:${evidence.venueLines}_${evidence.usable?'keep':'skip'}`);if(!evidence.usable){for(const id of fresh)seenIds.add(id);continue}venueLines+=evidence.venueLines}
                         if(cap.some(x=>x.content)){reads++;good++;if(!foundSources.some(x=>x.url===h.url))foundSources.push({title:h.title.replace(/[\r\n]/g,' ').slice(0,100),url:h.url})}
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err}
                 }
@@ -976,6 +978,7 @@ export async function chatWithTools(
                             {const names=pickNameTexts(selectedCandidates,sourceRecords),pl=selectedCandidates.map((c,x)=>({kind:String((c as {kind?:unknown}).kind),name:names[x]??''})).filter(p=>p.name);const pp=ensurePlanFromPicks((input as {body:string}).body,currentRequest,pl);if(pp.added){await opts.onStage?.('tool',`itinerary:plan_from_picks:${pp.added}`);input={...(input as Record<string,unknown>),body:pp.body}}}
                             // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
                             if(typeof (input as {body?:unknown}).body==='string'){const d=dedupePickBullets((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords));if(d.removed){await opts.onStage?.('tool',`itinerary:pick_bullets_deduped:${d.removed}`);input={...(input as Record<string,unknown>),body:d.body}}}
+                            if(typeof (input as {body?:unknown}).body==='string')input={...(input as Record<string,unknown>),body:ensureWeekendGap((input as {body:string}).body,currentRequest,unsupportedKinds)}
                             if(typeof (input as {body?:unknown}).body==='string'){const ws=ensureWorkingSessions((input as {body:string}).body,currentRequest);if(ws.added){await opts.onStage?.('tool','itinerary:working_sessions_added');input={...(input as Record<string,unknown>),body:ws.body}}}
                             if(unsupportedKinds.length&&typeof (input as {body?:unknown}).body==='string'&&!/## Not found/i.test((input as {body:string}).body))input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\n## Not found\nI couldn\'t verify a pick for '+unsupportedKinds.map(k=>k==='activity'?'activities':k==='restaurant'?'restaurants':'hotels').join(' or ')+' from the pages I read. None are recommended here; the agenda above is unchanged.'}
                             {const bb=(input as {body?:unknown}).body;if(typeof bb==='string'){const cl=cleanEmptyHeadings(bb.split('\n')).join('\n');if(cl!==bb)input={...(input as Record<string,unknown>),body:cl}}}
@@ -1098,4 +1101,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                    }
+            }
