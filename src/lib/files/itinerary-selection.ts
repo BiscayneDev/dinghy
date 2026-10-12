@@ -46,3 +46,29 @@ export function injectCandidates(input:unknown,candidates:unknown[]):unknown{
  if(!input||typeof input!=='object')return input
  return {...(input as Record<string,unknown>),itinerary_candidates:candidates}
 }
+
+import type {Mention} from './itinerary-mentions'
+/** Id-only selection: the model picks mention ids and kinds; the server owns every excerpt and offset. */
+export function mentionToolDef(menuIds:string[]){
+ return {type:'function' as const,function:{name:SELECT_CANDIDATES_TOOL,description:'Select hotel, restaurant and activity recommendations for this itinerary. Pick mention ids ONLY from the server menu in the system message; never type venue names. Each candidate: kind (hotel|restaurant|activity) chosen from the mention context, id, reason and catch in your own words. Pick 1-3 per kind the pages support; skip anything the context does not support as that kind.',parameters:{type:'object',required:['candidates'],additionalProperties:false,properties:{candidates:{type:'array',minItems:1,maxItems:12,items:{type:'object',required:['kind','id','reason','catch'],additionalProperties:false,properties:{kind:{type:'string',enum:['hotel','restaurant','activity']},id:{type:'string',enum:menuIds},reason:{type:'string',maxLength:300},catch:{type:'string',maxLength:300}}}}}}}}
+}
+export function compileMentionSelection(input:unknown,menu:Mention[],records:SourceRecords):Selection|{error:string;dropped:string[]}{
+ const list=input&&typeof input==='object'?(input as {candidates?:unknown}).candidates:undefined
+ if(!Array.isArray(list)||!list.length)return {error:'Supply candidates: at least one {kind,id,reason,catch} using ids from the menu.',dropped:['empty']}
+ const byId=new Map(menu.map(m=>[m.id,m])),seen=new Set<string>(),kept:Record<string,unknown>[]=[],dropped:string[]=[],counts={hotel:0,restaurant:0,activity:0}
+ for(const raw of list.slice(0,12)){
+  if(!raw||typeof raw!=='object'||Array.isArray(raw)){dropped.push('candidate_type');continue}
+  const r=raw as Record<string,unknown>,m=typeof r.id==='string'?byId.get(r.id):undefined
+  if(!m){dropped.push('unknown_id');continue}
+  if(seen.has(m.id)){dropped.push('duplicate');continue}
+  const kind=r.kind
+  if(kind!=='hotel'&&kind!=='restaurant'&&kind!=='activity'){dropped.push('kind');continue}
+  const c:Record<string,unknown>={kind,name:{source:m.source,field:'content',start:m.start,end:m.end},reason:typeof r.reason==='string'?r.reason.slice(0,300):'unknown',catch:typeof r.catch==='string'?r.catch.slice(0,300):'unknown'}
+  const out=compileItineraryCandidates({body:'x',itinerary_candidates:[c]},records)
+  if('error' in out){dropped.push(itineraryCandidateErrorCode(out.error));continue}
+  if(counts[kind]>=GROUP_LIMITS[kind]){dropped.push('group_limit');continue}
+  counts[kind]++;seen.add(m.id);kept.push(c)
+ }
+ if(!kept.length)return {error:'No valid candidate. Use ids exactly as listed in the menu, with kind chosen from the context. Dropped: '+[...new Set(dropped)].join(', '),dropped}
+ return {candidates:kept,dropped}
+}

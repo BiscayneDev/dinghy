@@ -1,5 +1,6 @@
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
-import {SELECT_CANDIDATES_TOOL,selectionToolDef,compileSelection,injectCandidates} from '@/lib/files/itinerary-selection'
+import {SELECT_CANDIDATES_TOOL,mentionToolDef,compileMentionSelection,injectCandidates} from '@/lib/files/itinerary-selection'
+import {extractMentions,menuNote,type Mention} from '@/lib/files/itinerary-mentions'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
@@ -605,11 +606,13 @@ export async function chatWithTools(
     })
     let selectedCandidates:Record<string,unknown>[]|undefined
     let selectionFailures=0
+    let mentionMenu:Mention[]=[]
+    let menuShown=false
     let bypassCandidates:Record<string,unknown>[]|undefined
     const defsNow = () => {
         const defs=tools.map((t) => ({type:'function' as const,function:{name:t.name,description:t.description,parameters:t.inputSchema as Record<string,unknown>}}))
         const ids=sourceRecords.pageIds()
-        return itineraryResearch&&ids.length&&!selectedCandidates ? [...defs,selectionToolDef(ids)] : defs
+        return itineraryResearch&&ids.length&&!selectedCandidates&&mentionMenu.length ? [...defs,mentionToolDef(mentionMenu.length?mentionMenu.map(m=>m.id):['none'])] : defs
     }
     let messages: Record<string, unknown>[] = [
         {
@@ -714,9 +717,14 @@ export async function chatWithTools(
             }
             if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
         }
+        if(itineraryResearch&&mapResearchRead&&!selectedCandidates&&!menuShown){
+            menuShown=true;mentionMenu=extractMentions(sourceRecords)
+            await opts.onStage?.('tool',`itinerary:mention_menu:${mentionMenu.length}`)
+            if(mentionMenu.length)messages.push({role:'system',content:menuNote(mentionMenu)})
+        }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
-        const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates
+        const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates&&mentionMenu.length>0
         const forceTool = (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
         const offered = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const t0 = Date.now()
@@ -804,7 +812,7 @@ export async function chatWithTools(
                 await opts.onStage?.('tool',SELECT_CANDIDATES_TOOL)
                 let parsed:unknown=null
                 try{parsed=JSON.parse(call.function.arguments||'{}')}catch{await opts.onStage?.('tool','invalid:selection:arguments_json')}
-                const picked=selectedCandidates?{error:'Candidates are already selected. Call create_file now.',dropped:['repeat']}:compileSelection(parsed,sourceRecords)
+                const picked=selectedCandidates?{error:'Candidates are already selected. Call create_file now.',dropped:['repeat']}:compileMentionSelection(parsed,mentionMenu,sourceRecords)
                 if('error' in picked){
                     selectionFailures++;await opts.onStage?.('tool','invalid:selection:'+picked.dropped[0])
                     if(selectionFailures>=3)return finish({reply:'I read the public sources but could not tie any hotel, restaurant or activity name to an exact passage, so no researched recommendations were published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
@@ -958,4 +966,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                      }
+            }
