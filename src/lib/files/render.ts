@@ -646,8 +646,10 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
             } else if (t.type === 'list') {
                 const l = t as Tokens.List
                 l.items.forEach((it, i) => {
-                    ensure(24)
                     const tr = splitTimeRow(it.text)
+                    // Measure the full item including its URL before drawing. Bold is a conservative width bound.
+                    const itemHeight=pdf.font('bodyBold').fontSize(11).heightOfString(plain(tr?tr.rest:it.text),{width:tr?W-88:W-20,lineGap:3})
+                    ensure(Math.max(24,itemHeight+10))
                     const y = pdf.y
                     if (tr) {
                         pdf.font('mono').fontSize(9.5).fillColor(BRAND.accent).text(tr.time, L, y + 1.5, { width: 80 })
