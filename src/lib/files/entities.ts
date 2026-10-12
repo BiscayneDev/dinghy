@@ -2,9 +2,9 @@ const NAMED_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quo
 /** Decode named and numeric entities, repeatedly, so double-encoded text like &amp;amp; ends up as a single &. */
 export function decodeEntities(input: string): string {
   let out = input
-  for (let i = 0; i < 4; i++) {
-    const next = out.replace(/&(?:#(\d{1,6})|#[xX]([0-9a-fA-F]{1,5})|([a-zA-Z]{2,8}));/g, (m, dec, hex, name) => {
-      if (dec || hex) { const n = dec ? parseInt(dec, 10) : parseInt(hex, 16); return n > 0 && n < 0x110000 && !(n >= 0xd800 && n < 0xe000) ? String.fromCodePoint(n) : m }
+  for (let i = 0; i < 6; i++) {
+    const next = out.replace(/&(?:#(\d{1,6})(?![\d;])|#(\d{1,6});|#[xX]([0-9a-fA-F]{1,5});|([a-zA-Z]{2,8});)/g, (m, dec0, dec, hex, name) => {
+      if (dec0 || dec || hex) { const n = (dec0 || dec) ? parseInt((dec0 || dec) as string, 10) : parseInt(hex, 16); return n > 0 && n < 0x110000 && !(n >= 0xd800 && n < 0xe000) ? String.fromCodePoint(n) : m }
       return NAMED_ENTITIES[name] ?? NAMED_ENTITIES[name.toLowerCase()] ?? m
     })
     if (next === out) break

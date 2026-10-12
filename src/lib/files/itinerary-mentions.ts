@@ -54,6 +54,7 @@ export function sentenceAround(text:string,start:number,end:number):string {
 
 const GEO=new Set(('united states,usa,america,united kingdom,england,scotland,wales,ireland,canada,mexico,brazil,argentina,chile,peru,colombia,france,germany,spain,portugal,italy,greece,turkey,netherlands,belgium,switzerland,austria,sweden,norway,denmark,finland,poland,czechia,hungary,croatia,iceland,morocco,egypt,south africa,kenya,israel,uae,dubai,india,china,japan,korea,thailand,vietnam,indonesia,singapore,malaysia,philippines,australia,new zealand,cuba,jamaica,bahamas,caribbean,europe,asia,africa,north america,south america,latin america,'+'alabama,alaska,arizona,arkansas,california,colorado,connecticut,delaware,florida,georgia,hawaii,idaho,illinois,indiana,iowa,kansas,kentucky,louisiana,maine,maryland,massachusetts,michigan,minnesota,mississippi,missouri,montana,nebraska,nevada,new hampshire,new jersey,new mexico,new york,north carolina,north dakota,ohio,oklahoma,oregon,pennsylvania,rhode island,south carolina,south dakota,tennessee,texas,utah,vermont,virginia,washington,west virginia,wisconsin,wyoming,'+'new york city,los angeles,san francisco,san diego,las vegas,chicago,boston,seattle,portland,denver,austin,dallas,houston,atlanta,miami,orlando,nashville,new orleans,philadelphia,washington dc,london,paris,rome,madrid,barcelona,berlin,amsterdam,lisbon,vienna,prague,tokyo,kyoto,bangkok,sydney,toronto,vancouver,montreal,mexico city,key west,palm beach,fort lauderdale,miami beach,south beach').split(','))
 const BRAND=/\.(?:com|net|org|io|co)\b|\b(?:booking|expedia|tripadvisor|airbnb|trivago|yelp|opentable|agoda|priceline|orbitz|hotwire|viator|getyourguide|lonely planet|wikipedia|google|facebook|reddit|hotels)\b/i
+export const GEO_NAMES=[...GEO].filter(g=>g.length>=4)
 export const isNonVenueName=(t:string):boolean=>{const l=t.toLowerCase().replace(/[^\p{L} .]/gu,'').trim();return BRAND.test(t)||GEO.has(l)||l.split(' ').every(w=>GEO.has(w))}
 const PLACE_SUFFIX=new Set(['district','neighborhood','neighbourhood','quarter','downtown','county','city','area','village'])
 export const placeWordsFrom=(request:string):Set<string>=>new Set((request.match(/\p{Lu}[\p{L}'’-]+/gu)||[]).map(w=>w.toLowerCase()))
@@ -140,4 +141,13 @@ export function menuNote(menu:Mention[]):string {
 export function hintCounts(menu:Mention[]):string {
  const n=(k:Kind)=>menu.filter(m=>m.hint===k).length
  return `h${n('hotel')}_r${n('restaurant')}_a${n('activity')}_n${menu.filter(m=>!m.hint).length}`
+}
+
+/** Guides and roundups list several venues; single news stories do not. */
+export function sourceScore(url:string,title:string):number{
+ const t=(url+' '+title).toLowerCase()
+ let sc=0
+ if(/\b(best|guide|where-to|where to|things-to-do|things to do|top-\d+|top \d+|itinerary|roundup|restaurants?|hotels?)\b/.test(t.replace(/[-_/]/g,' ')))sc+=2
+ if(/\/news\/|\/20\d\d\/\d\d\/|press-release|breaking|breaks-ground|-opens-|-announces|\/article\/|\bground\b|\bannounce/.test(t))sc-=3
+ return sc
 }

@@ -68,6 +68,7 @@ export class SourceRecords {
     }
     /** Literal page text for a successful page read, else null. */
     pageText(source:string):string|null { const r=this.records.find(x=>x.id===source&&x.origin==='page'); return r?.content??null }
+    pageTitle(source:string):string|null { return this.records.find(x=>x.id===source)?.title??null }
     pageUrl(source:string):string|null { return this.records.find(x=>x.id===source)?.url??null }
     pageIds() { return this.records.filter(r=>r.origin==='page' && r.content).map(r=>r.id) }
     size() { return this.records.length }
