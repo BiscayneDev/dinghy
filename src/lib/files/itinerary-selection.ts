@@ -101,7 +101,7 @@ export function relaxedContract<T extends {request:string}|null>(c:T,unsupported
  return {...c,request:r+' recommendations'}
    }
 
-import {extractMentions,hintFor} from './itinerary-mentions'
+import {extractMentions,placeWordsFrom} from './itinerary-mentions'
 import {SourceRecords as SR} from './source-records'
 const normName=(t:string)=>t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()
 /** The server cards are the only venue recommendations. Freehand body lines that name another venue-like entity
@@ -111,11 +111,11 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
  const picks=pickNames.map(normName).filter(Boolean),req=normName(request)
  const bad=new Set<number>()
  const lines=body.split('\n'),starts:number[]=[];let pos=0;for(const l of lines){starts.push(pos);pos+=l.length+1}
- for(const m of extractMentions(tmp,200,[])){
-  if(!m.text.includes(' ')||!hintFor(m.text,''))continue
+ for(const m of extractMentions(tmp,300,[],{evidence:false,placeWords:placeWordsFrom(request)})){
   const n=normName(m.text)
   if(!n||req.includes(n)||picks.some(p=>p.includes(n)||n.includes(p)))continue
   let li=0;while(li+1<lines.length&&starts[li+1]<=m.start)li++
+  if(!m.text.includes(' ')&&!lines[li].slice(0,m.start-starts[li]).replace(/[\s#>*•\-\d:.)]|\b[ap]m\b/gi,''))continue
   if(!/^\s*#/.test(lines[li]))bad.add(li)
  }
  if(!bad.size)return {body,removed:0}
