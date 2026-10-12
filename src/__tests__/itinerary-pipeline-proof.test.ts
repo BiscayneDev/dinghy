@@ -112,3 +112,25 @@ it('verification accepts only a bare yes, caches verdicts across retries, and an
  await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
  expect(verifies).toBeLessThanOrEqual(1);expect(published).not.toHaveBeenCalled();expect(stages.filter(s=>s==='invalid:selection:not_verified').length).toBeGreaterThan(0)
 })
+
+it('verified picks survive later failed attempts and publish as an honest partial with a safe trace',async()=>{
+ vi.stubEnv('TAVILY_API_KEY','fictional-key')
+ const url='https://harbor.test/visitors',ask='Make an itinerary for fictional founders visiting Harbor on Friday. Hotel and restaurant recommendations.'
+ const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
+ const files=fileToolsFor(),stages:string[]=[];let n=0
+ published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
+ vi.stubGlobal('fetch',vi.fn(async(u:any,init:any)=>{
+  if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel listings.'}]}))
+  if(String(u)===url)return new Response('<html><title>Harbor</title><body>Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served.</body></html>')
+  const b=JSON.parse(init.body)
+  if(b.max_tokens===8)return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))
+  n++;const name=n===1?'web_search':n<=4?'select_itinerary_candidates':'create_file'
+  const args=n===1?{query:'Harbor listings'}:n===2?{candidates:[{kind:'hotel',name:'Harbor Inn',line:1}]}:n<=4?{candidates:[{kind:'restaurant',name:'Nowhere Bistro',line:2}]}:{title:'Synthetic Harbor itinerary',body:'## Friday\n- 10:00 User supplied office visit.\n## Weekend\nPlans to confirm.',format:'pdf',kind:'itinerary'}
+  return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(n),function:{name,arguments:JSON.stringify(args)}}]}}]}))
+ }))
+ const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
+ await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ expect(stages).toContain('itinerary:accepted:h1_r0_a0');expect(stages.some(x=>x.startsWith('itinerary:rejected:name_not_on_line-1'))).toBe(true)
+ expect(stages).toContain('itinerary:partial_unverified:restaurant');expect(published).toHaveBeenCalledTimes(1)
+ for(const x of stages)expect(x.length).toBeLessThanOrEqual(80)
+})

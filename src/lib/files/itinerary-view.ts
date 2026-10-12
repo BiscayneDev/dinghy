@@ -35,10 +35,10 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000):{t
  return {text:entries.map(e=>`L${e.n} ${e.text}`).join('\n'),lines:entries.length,pages,venueLines,entries}
 }
 export function viewNote(v:{text:string}):string{
- return 'Numbered lines from the pages read (headings, list items and sentences). Name specific hotels, restaurants and attractions that appear in them. For each give kind, the exact name as written on that line, and the line number (for example 12 for L12). The server takes the supporting quote from that line itself. Do not name cities, countries, neighborhoods, websites, meals or categories. Do not use names from memory.\n\n'+v.text
+ return 'Numbered lines from the pages read (headings, list items and sentences). Name specific hotels, restaurants and attractions that appear in them. For each give kind, the exact name as written on a line, and that line number (for example 12 for L12). The server takes the supporting quote from that line itself. Do not name cities, countries, neighborhoods, websites, meals or categories. Do not use names from memory.\n\n'+v.text
 }
 export function quoteToolDef(maxLine:number){
- return {type:'function' as const,function:{name:SELECT_CANDIDATES_TOOL,description:'Select hotel, restaurant and activity recommendations for this itinerary from the numbered page lines shown. Each candidate: kind (hotel|restaurant|activity), name (exactly as written on the line), line (the line number, e.g. 12 for L12, where the name appears). The server checks the name against that line and takes the quote from the page itself.',parameters:{type:'object',additionalProperties:false,properties:{candidates:{type:'array',minItems:1,maxItems:12,items:{type:'object',additionalProperties:false,properties:{kind:{type:'string',enum:['hotel','restaurant','activity']},name:{type:'string',maxLength:80},line:{type:'integer',minimum:1,maximum:Math.max(1,maxLine)}},required:['kind','name','line']}}},required:['candidates']}}}
+ return {type:'function' as const,function:{name:SELECT_CANDIDATES_TOOL,description:'Select hotel, restaurant and activity recommendations for this itinerary from the numbered page lines shown. Each candidate: kind (hotel|restaurant|activity), name (exactly as written on a line), line (optional: the line number, e.g. 12 for L12, where the name appears; the server finds the line from the name). The server checks the name against that line and takes the quote from the page itself.',parameters:{type:'object',additionalProperties:false,properties:{candidates:{type:'array',minItems:1,maxItems:12,items:{type:'object',additionalProperties:false,properties:{kind:{type:'string',enum:['hotel','restaurant','activity']},name:{type:'string',maxLength:80},line:{type:'integer',minimum:1,maximum:Math.max(1,maxLine)}},required:['kind','name']}}},required:['candidates']}}}
 }
 const norm=(t:string)=>t.replace(/\s+/g,' ').trim()
 export type Verify=(name:string,kind:Kind,quote:string)=>Promise<boolean>
@@ -53,15 +53,12 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   if(kind!=='hotel'&&kind!=='restaurant'&&kind!=='activity'){dropped.push('kind');continue}
   const name=typeof r.name==='string'?norm(r.name):'',ln=typeof r.line==='number'?r.line:Number(String(r.line??'').replace(/^L/i,''))
   if(name.length<3||name.length>80){dropped.push('name');continue}
-  const at=entries.find(e=>e.n===ln)
-  if(!at){dropped.push('line_unknown');hints.push(`line ${String(r.line)} does not exist`);continue}
-  // The name must be literally on the chosen line; an adjacent line holding the literal name is accepted, anything else is rejected with the lines that do contain it.
-  const has=(e:ViewLine)=>e.text.includes(name)
-  let line=has(at)?at:[entries.find(e=>e.n===ln-1),entries.find(e=>e.n===ln+1)].find(e=>e&&e.source===at.source&&has(e))
-  if(!line){
-   const where=entries.filter(has).slice(0,5).map(e=>'L'+e.n)
-   dropped.push('name_not_on_line');hints.push(where.length?`"${name}" is not on L${ln}; it appears on ${where.join(', ')}`:`"${name}" does not appear on any line; copy the name exactly as written`);continue
-  }
+  // The server resolves the line: the model's number is a hint. Any view line holding the literal name is valid evidence; the nearest one to the hint wins.
+  const holding=entries.filter(e=>e.text.includes(name))
+  const hint=Number.isFinite(ln)?ln:0
+  const line=holding.length?holding.slice().sort((a,b)=>Math.abs(a.n-hint)-Math.abs(b.n-hint)||a.n-b.n)[0]:undefined
+  if(!line){dropped.push(hint&&!entries.some(e=>e.n===hint)?'line_unknown':'name_not_on_line');hints.push(`"${name}" does not appear on any numbered line; copy the name exactly as written on a line`);continue}
+  if(hint&&line.n!==hint&&holding.length>1)hints.push(`"${name}" resolved to L${line.n}`)
   const text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
   if(off<0){dropped.push('name_not_on_line');continue}
   // Quote is server-taken: the line itself (a bare heading also takes the next line, so a reason never borrows another venue's sentence).
