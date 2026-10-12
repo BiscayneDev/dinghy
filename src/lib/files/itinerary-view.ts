@@ -7,6 +7,7 @@ const GROUP_LIMITS={hotel:6,restaurant:5,activity:5}
 const NAV=/^(?:home|about(?: us)?|contact(?: us)?|menu|sign ?in|log ?in|search|cart|book now|privacy policy|terms(?: of use)?|cookies?|skip to content|subscribe|follow us|share|read more|next|previous)$/i
 
 export type ViewLine={n:number;source:string;start:number;end:number;text:string;name:string;ctx?:Kind}
+const FOODISH=/\b(?:restaurant|cafe|caf[eé]|bistro|bar|grill|kitchen|steakhouse|pizzeria|trattoria|taqueria|brasserie|eatery|diner|bakery|tavern|pub|hotel|inn|resort|museum|gallery|garden|park|tour|aquarium|zoo|theater|theatre)\b/i
 const AREA_WORDS=/\b(?:calle|avenida|rue|via|paseo|calzada|district|neighbou?rhood|quarter|barrio|downtown|midtown|uptown|corridor|strip|row|walk|mile|waterfront|boardwalk|promenade|old town|little [A-Z]\w+)\b/i
 const OWN_WORD=/\b(?:museum|gallery|park|garden|gardens|hotel|inn|resort|cafe|caf[eé]|restaurant|bar|grill|kitchen|house|club|hall|theater|theatre|tower|castle|zoo|aquarium|beach club|spa|trekking|tours?)\b/i
 const STREET_END=/^(?:street|st|avenue|ave|boulevard|blvd|road|rd|drive|dr|lane|ln|highway|hwy|parkway|pkwy|way|court|ct|causeway|trail|terrace|suite|ste)$/i
@@ -58,7 +59,7 @@ function extractFromHead(head:string,text:string):string|null{
  const usable=runs.filter(r=>!r.ws.every(w=>SKIP_RUN.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))
  const longLine=text.length>120
  const pool=longLine?usable.filter(r=>r.from===0):usable
- const cands=[...pool.filter(r=>r.ws.length>=2),...pool.filter(r=>r.ws.length<2&&r.from>0&&r.ws[0].length>=5),...(usable.length===1&&words.length<=3&&usable[0].from===0&&usable[0].ws[0].length>=4&&usable[0].ws.length<2?usable:[])]
+ const cands=[...pool.filter(r=>r.ws.length>=2),...(FOODISH.test(text)?pool.filter(r=>r.ws.length<2&&r.from>0&&r.ws[0].length>=5):[]),...(usable.length===1&&words.length<=3&&usable[0].from===0&&usable[0].ws[0].length>=4&&usable[0].ws.length<2?usable:[])]
  for(const pick of cands){const n=validRun(pick);if(n)return n}
  return null
  function validRun(pick:{from:number;ws:string[]}):string|null{
@@ -70,6 +71,9 @@ function extractFromHead(head:string,text:string):string|null{
  if(pick.from>0&&/^\d+[a-z]?$/i.test(words[pick.from-1]))return null
  if(STREET_END.test(ws[ws.length-1].replace(/[^\p{L}]/gu,''))||ws.every(w=>GENERIC_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))return null
  const name=ws.join(' ').replace(/[.\-]+$/,'')
+ // Run-together or camel-case tokens (PoweredBy, HotList, SearchHack) are page UI, and a lone common word needs a venue word on its line.
+ if(ws.length<2&&/\p{Ll}\p{Lu}/u.test(ws[0])&&!/^(?:Mc|Mac|O['’]|De|La|Le|Di|Van)/.test(ws[0]))return null
+ if(ws.length<2&&!FOODISH.test(text)&&!/\d/.test(name))return null
  // A neighborhood, street or district is an area, not a venue.
  if(AREA_WORDS.test(name)&&!OWN_WORD.test(name))return null
  // A phrase, not a name: leads with a preposition or ranking word, is an all-caps category heading, or is a service category.
@@ -182,6 +186,9 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   }
   if(quote.length<name.length+30){
    // Nothing of its own to say: state only what the page shows, that it lists this name under this kind.
+   {const sents=(records.pageText(line.source)||'').split(/(?<=[.!?])\s+|\n+/).map(x=>stripUi(norm(x)));const own=sents.find(x=>x.includes(name)&&x!==line.text&&x.split(' ').length>=5&&x.length<=260&&!NEWS_LINE.test(x)&&!mentionsOther(x));if(own)quote=own}
+  }
+  if(quote.length<name.length+30){
    const title=stripUi(norm(records.pageTitle(line.source)||'')).slice(0,100),label=kind==='hotel'?'a place to stay':kind==='restaurant'?'a place to eat or drink':'something to do'
    quote=`${quote||name}. Listed as ${label}${title?' on "'+title+'"':' on the source page'}.`.slice(0,300)
   }
