@@ -198,32 +198,67 @@ export function ensurePlanFromPicks(body:string,request:string,picks:{kind:strin
  if(do_.length)rows.push(`- Do: ${do_.slice(0,3).join(', ')}`)
  if(!rows.length)return {body,added:0}
  rows.push(`- ${days.length?days.join(' / '):'Day'} timing for these is not set.`)
- const lines=body.split('\n'),h=lines.findIndex(l=>/^\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i.test(l))
- if(h>=0)lines.splice(h+1,0,...rows)
- else{const t=lines.findIndex(l=>/^\s*#\s/.test(l));lines.splice(t>=0?t+1:0,0,`## ${days[0]??'Day 1'}`,...rows)}
- return {body:lines.join('\n'),added:rows.length}
+ const lines=body.split('\n')
+ const timing=rows.pop()!
+ const first=days[0]
+ // Stay and Eat go under the first requested day; Do goes under a weekend/activities/Sat/Sun heading when the body has one.
+ const doRows=rows.filter(r=>r.startsWith('- Do:')),mainRows=rows.filter(r=>!r.startsWith('- Do:'))
+ const weekendIdx=lines.findIndex(l=>/^\s*#{2,3}\s+(?:.*\b(?:weekend|activit\w*|things to do)\b|sat|sun)/i.test(l)&&!(first&&new RegExp('^\\s*#{2,3}\\s+'+first.slice(0,3),'i').test(l)))
+ if(doRows.length&&weekendIdx>=0){lines.splice(weekendIdx+1,0,...doRows)}else mainRows.push(...doRows)
+ insertUnderDay(lines,first,[...mainRows,timing],false)
+ return {body:lines.join('\n'),added:rows.length+1}
+}
+const DAYS_RE=/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i
+const dayName=(d:string)=>d[0].toUpperCase()+d.slice(1).toLowerCase()
+/** Insert rows under the heading of a named weekday (top of the day, or at the end of its section). With no such heading, a heading for that day is created before the first day heading, else after the title. */
+export function insertUnderDay(lines:string[],day:string|undefined,rows:string[],top:boolean):void{
+ const dayHead=/^\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i
+ let h=day?lines.findIndex(l=>new RegExp('^\\s*#{2,3}\\s+'+day.slice(0,3),'i').test(l)):lines.findIndex(l=>dayHead.test(l))
+ if(h<0){
+  const f=lines.findIndex(l=>dayHead.test(l)),t=lines.findIndex(l=>/^\s*#\s/.test(l))
+  const at=f>=0?f:t>=0?t+1:0
+  lines.splice(at,0,`## ${day??'Day 1'}`,...rows,'');return
+ }
+ if(top){lines.splice(h+1,0,...rows);return}
+ let e=h+1;while(e<lines.length&&!/^\s*#{1,3}\s/.test(lines[e]))e++
+ while(e>h+1&&!lines[e-1].trim())e--
+ lines.splice(e,0,...rows)
+}
+/** The weekday a request item belongs to: the last weekday named before it in its own sentence, else the request's first weekday. */
+export function dayForItem(request:string,index:number):string|undefined{
+ const before=request.slice(0,index).split(/[.;!?\n]/).pop()||''
+ const m=[...before.matchAll(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi)].pop()
+ if(m)return dayName(m[0])
+ const f=request.match(DAYS_RE);return f?dayName(f[0]):undefined
+}
+/** The requested working sessions are stated under the day the request names, as unknowns, never invented detail. */
+export function ensureWorkingSessions(body:string,request:string):{body:string;added:number}{
+ const m=/\bworking sessions?\b/i.exec(request)
+ if(!m||/working sessions?/i.test(body))return {body,added:0}
+ const lines=body.split('\n');insertUnderDay(lines,dayForItem(request,m.index),['- Working sessions: venue and duration to confirm.'],false)
+ return {body:lines.join('\n'),added:1}
 }
 const TIME_RE=/\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b/gi
 const LEAD_FILL=new Set(['plus','but','or','plan','make','with','then','and','include','including','add','also','a','an','the','my','our','on','friday','saturday','sunday','monday','tuesday','wednesday','thursday','to','for','by','at'])
 /** User-supplied time-anchored agenda items (e.g. "office visit 10am") are facts the user gave; when the model's body drops one, the server restates it from the request text. */
 export function ensureRequestAgenda(body:string,request:string):{body:string;added:number}{
- const items:{time:string;hour:string;mins:string;what:string}[]=[]
+ const items:{time:string;hour:string;mins:string;what:string;day?:string}[]=[]
  for(const m of request.matchAll(TIME_RE)){
   const before=request.slice(0,m.index).replace(/\s+$/,'').replace(/\b(?:at|@|by|from)$/i,'').replace(/\s+$/,'')
   const words=(before.split(/[.;:!?\n,]/).pop()||'').trim().split(/\s+/).filter(Boolean).slice(-4)
   while(words.length&&LEAD_FILL.has(words[0].toLowerCase()))words.shift()
   while(words.length&&LEAD_FILL.has(words[words.length-1].toLowerCase()))words.pop()
   const what=words.join(' ')
-  if(what.length>=3)items.push({time:`${m[1]}${m[2]?':'+m[2]:''}${m[3].toLowerCase()}`,hour:m[1],mins:m[2]??'00',what})
+  if(what.length>=3)items.push({time:`${m[1]}${m[2]?':'+m[2]:''}${m[3].toLowerCase()}`,hour:m[1],mins:m[2]??'00',what,day:dayForItem(request,m.index!)})
  }
- const add:string[]=[]
+ const add:string[]=[],groups:{day?:string;rows:string[]}[]=[]
  for(const it of items){
   const tre=new RegExp('\\b0?'+it.hour+'(?::'+it.mins+')?\\s?(?:am|pm)?\\b','i'),wds=it.what.toLowerCase().split(/\s+/).filter(w=>w.length>=3)
   const present=body.split('\n').some(l=>tre.test(l)&&wds.some(w=>l.toLowerCase().includes(w)))
-  if(!present)add.push(`- ${it.time}: ${it.what}`)
+  if(!present){const row=`- ${it.time}: ${it.what}`;add.push(row);const g=groups.find(x=>x.day===it.day);if(g)g.rows.push(row);else groups.push({day:it.day,rows:[row]})}
  }
  if(!add.length)return {body,added:0}
- const lines=body.split('\n'),h=lines.findIndex(l=>/^\s*#/.test(l))
- lines.splice(h>=0?h+1:0,0,...add)
+ const lines=body.split('\n')
+ for(const g of groups){insertUnderDay(lines,g.day,g.rows,true)}
  return {body:lines.join('\n'),added:add.length}
    }
