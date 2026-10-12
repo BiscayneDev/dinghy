@@ -137,14 +137,15 @@ it('verified picks survive later failed attempts and publish as an honest partia
 
 it('a missing kind reopens research on the server and the new pages feed a second selection',async()=>{
  vi.stubEnv('TAVILY_API_KEY','fictional-key')
- const u1='https://harbor.test/stays',u2='https://harbor.test/eats',ask='Make an itinerary for fictional founders visiting Harbor on Friday. Hotel and restaurant recommendations.'
+ const u1='https://harbor.test/stays',u2='https://harbor.test/eats',junk1='https://harbor.test/chrome-one',junk2='https://harbor.test/chrome-two',ask='Make an itinerary for fictional founders visiting Harbor on Friday. Hotel and restaurant recommendations.'
  const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
  const files=fileToolsFor(),stages:string[]=[],queries:string[]=[];let n=0
  published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
  const find=(b:any,nm:string)=>{const ls=b.messages.filter((m:any)=>m.role==='system'&&/\nL\d+ \| /.test('\n'+String(m.content))).flatMap((m:any)=>String(m.content).split('\n'));const l=[...ls].reverse().find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' ')[0].slice(1)):9999}
  vi.stubGlobal('fetch',vi.fn(async(u:any,init:any)=>{
-  if(String(u)==='https://api.tavily.com/search'){const q=JSON.parse(init.body).query;queries.push(q);return new Response(JSON.stringify({results:[/^best restaurants/.test(q)?{title:'Harbor eats guide',url:u2,content:'Dining.'}:{title:'Harbor stays guide',url:u1,content:'Hotels.'}]}))}
+  if(String(u)==='https://api.tavily.com/search'){const q=JSON.parse(init.body).query;queries.push(q);return new Response(JSON.stringify({results:[...(/^best restaurants/.test(q)?[{title:'Harbor best restaurants guide one',url:junk1,content:'Dining.'},{title:'Harbor best restaurants guide two',url:junk2,content:'Dining.'},{title:'Harbor eats guide',url:u2,content:'Dining.'}]:[{title:'Harbor stays guide',url:u1,content:'Hotels.'}])]}))}
   if(String(u)===u1)return new Response('<html><title>Harbor stays</title><body><h2>Harbor Inn</h2><p>Harbor Inn has quiet rooms near the water in Harbor.</p></body></html>')
+  if(String(u)===junk1||String(u)===junk2)return new Response('<html><title>Harbor guide</title><body><h2>Season Menus</h2><p>Savor the Stories in Harbor.</p></body></html>')
   if(String(u)===u2)return new Response('<html><title>Harbor eats</title><body><h2>Lantern Table</h2><p>Lantern Table serves seafood dinners in Harbor.</p></body></html>')
   const b=JSON.parse(init.body)
   if(b.max_tokens===8)return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))
@@ -155,6 +156,8 @@ it('a missing kind reopens research on the server and the new pages feed a secon
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
  await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+90000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
  expect(stages.some(x=>x.startsWith('itinerary:widen:r_'))).toBe(true)
+ expect(stages.filter(s=>s==='itinerary:dining_page:0_skip')).toHaveLength(2)
+ expect(queries.some(q=>q.startsWith('best restaurants in harbor'))).toBe(true)
  expect(stages).toContain('itinerary:accepted:h0_r1_a0');expect(stages.some(x=>x.startsWith('itinerary:partial_unverified'))).toBe(false)
  expect(published).toHaveBeenCalledTimes(1)
 })
