@@ -197,8 +197,14 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   const r=raw as Record<string,unknown>,kind=r.kind
   if(kind!=='hotel'&&kind!=='restaurant'&&kind!=='activity'){dropped.push('kind');continue}
   const ln=typeof r.line==='number'?r.line:Number(String(r.line??'').replace(/^L/i,''))
-  const line=entries.find(e=>e.n===ln)
-  if(!line){dropped.push('line_unknown');continue}
+  let chosenLine=entries.find(e=>e.n===ln)
+  if(!chosenLine){dropped.push('line_unknown');continue}
+  if(/['’]s\s/.test(chosenLine.name)){
+   const core=chosenLine.name.replace(/^.*?['’]s\s+/,'').replace(/^The\s+/i,'').toLowerCase()
+   const heading=entries.filter(e=>e.source===chosenLine!.source&&e.start<chosenLine!.start&&/^\s*#{1,6}\s/.test((records.pageText(e.source)||'').slice(0,e.start).split('\n').pop()||'')).reverse().find(e=>e.name.replace(/^The\s+/i,'').toLowerCase().startsWith(core))
+   if(heading)chosenLine=heading
+  }
+  const line=chosenLine
   // The name is the server's: extracted from the line, so the model cannot invent or mis-copy one.
   const name=line.name,text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
   if(off<0){reject('name_not_on_line',name);continue}
@@ -223,7 +229,7 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   // Drop whole unsafe sentences. Cutting them before another venue leaves misleading fragments.
   let quote=sentences(text.slice(line.start,line.end)).filter(usable).join(' ')
   if(!quote){
-   const nextVenue=entries.find(e=>e.source===line.source&&e.start>=line.end&&e.name!==name)
+   const nextVenue=entries.find(e=>e.source===line!.source&&e.start>=line!.end&&e.name!==name&&!e.name.includes(name))
    const limit=Math.min(sectionEnd,nextVenue?nextVenue.start:Infinity)
    quote=sentences(text.slice(line.end,limit)).find(usable)||''
   }
@@ -262,4 +268,4 @@ export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):
  const what=kind==='hotel'?'a hotel or lodging property':kind==='restaurant'?'a restaurant, cafe or bar':'an attraction, museum, tour, venue or activity provider'
  const wrong=kind==='hotel'?'a restaurant, attraction or other non-lodging place':kind==='restaurant'?'a hotel, attraction or other non-food place':'a hotel or a restaurant'
  return `Name: "${name}"\nSource context (including surrounding prose): "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the source context identifies the complete name as a ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} rather than an area or category. A named entry in an explicit restaurant/hotel/attraction list is type evidence even without a descriptive sentence. This checks venue identity and kind, not proof of live hours, availability or prices. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, a chopped or incomplete heading fragment, or if you are unsure. The name must be the full proper-name run in its source line, not a suffix or substring of a longer venue name. A bare heading with no venue category or descriptive context is not evidence; use its page title, category and surrounding prose. Never use another entry to supply evidence about this name. Answer with exactly one word: yes or no.`
-}
+ }
