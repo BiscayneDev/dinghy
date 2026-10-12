@@ -74,6 +74,7 @@ function extractFromHead(head:string,text:string):string|null{
  if(pick.from>0&&/^\d+[a-z]?$/i.test(words[pick.from-1]))return null
  if(STREET_END.test(ws[ws.length-1].replace(/[^\p{L}]/gu,''))||ws.every(w=>GENERIC_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))return null
  const name=ws.join(' ').replace(/[.\-]+$/,'')
+ if(!OWN_WORD.test(name)&&(/\b(?:menus?|months?|through|powered by)\b/i.test(name)||ws.every(w=>GEO_NAMES.includes(w.toLowerCase())||NAME_CONNECT.has(w.toLowerCase()))))return null
  // Run-together or camel-case tokens (PoweredBy, HotList, SearchHack) are page UI, and a lone common word needs a venue word on its line.
  if(ws.length<2&&/\p{Ll}\p{Lu}/u.test(ws[0])&&!/^(?:Mc|Mac|O['’]|De|La|Le|Di|Van)/.test(ws[0]))return null
  if(ws.length<2&&!FOODISH.test(text)&&!/\d/.test(name))return null
@@ -119,10 +120,8 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000,ski
   if(added){pages++;used+=size}
   if(used>=total)break
  }
- // Prefer list-like pages: when some page has real venue density, drop single-story pages with few venue-like lines.
- const perSource=new Map<string,number>();for(const e of entries)if(VENUE_LIKE.test(e.text))perSource.set(e.source,(perSource.get(e.source)??0)+1)
- let kept=entries
- if([...perSource.values()].some(v=>v>=5)){kept=entries.filter(e=>(perSource.get(e.source)??0)>=5);kept.forEach((e,i)=>{e.n=i+1});venueLines=kept.filter(e=>VENUE_LIKE.test(e.text)).length;pages=new Set(kept.map(e=>e.source)).size}
+ // Keep sparse venue pages too: page density is not a reason to discard a supported restaurant or attraction.
+ const kept=entries
  return {text:kept.map(e=>`L${e.n} | ${e.name} | ${e.text}`).join('\n'),lines:kept.length,pages,venueLines,entries:kept}
 }
 export function viewNote(v:{text:string}):string{
@@ -156,6 +155,20 @@ export type Verify=(name:string,kind:Kind,quote:string)=>Promise<boolean>
 /** Mechanical checks (literal quote, name inside the quote, not a brand/place/category) then one bounded yes/no verification per pick. */
 export type SelectionResult={candidates:Record<string,unknown>[];dropped:string[];previews:string[]}|{error:string;dropped:string[];previews:string[]}
 const preview=(t:string)=>t.replace(/[^A-Za-z0-9]/g,'').slice(0,20)
+/** A literal page title/category plus this pick's section. Never a synthesized kind claim. */
+export function verificationContext(line:ViewLine,records:SourceRecords,entries:ViewLine[]):string{
+ const text=records.pageText(line.source)||''
+ let category=''
+ for(const raw of text.slice(0,line.start).split('\n')){
+  const flat=raw.replace(/^[\s#>*•\-\d.)]*/,'').trim()
+  if(sectionKind(flat))category=flat
+  else if(/^\s*#{1,2}\s/.test(raw))category=''
+ }
+ const nextHeading=/\n\s*#{1,3}\s/.exec(text.slice(line.end))
+ const nextVenue=entries.find(e=>e.source===line.source&&e.start>=line.end&&e.name!==line.name)
+ const end=Math.min(line.end+700,nextHeading?line.end+nextHeading.index:Infinity,nextVenue?nextVenue.start:Infinity)
+ return [records.pageTitle(line.source)?'Page title: '+records.pageTitle(line.source):'',category?'Page section: '+category:'','Pick section: '+norm(text.slice(line.start,end))].filter(Boolean).join('\n')
+}
 export async function compileQuoteSelection(input:unknown,records:SourceRecords,request:string,verify:Verify,entries:ViewLine[],already:string[]=[]):Promise<SelectionResult>{
  const list=input&&typeof input==='object'?(input as {candidates?:unknown}).candidates:undefined
  if(!Array.isArray(list)||!list.length)return {error:'Supply candidates: at least one {kind,line}, with line numbers from the candidate lines.',dropped:['empty'],previews:[]}
@@ -177,7 +190,7 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   // Include prose following a heading so a neighborhood cannot become an attraction by losing its context.
   const nextHeading=/\n\s*#{1,3}\s/.exec(text.slice(line.end))
   const sectionEnd=Math.min(line.end+700,nextHeading?line.end+nextHeading.index:Infinity)
-  const evidence=norm(text.slice(line.start,sectionEnd))
+  const evidence=verificationContext(line,records,entries)
   const others=[...entries.filter(e=>e.source===line.source).map(e=>e.name),...mentions.filter(m=>m.source===line.source).map(m=>m.text)]
    .filter(n=>n!==name&&!n.includes(name)&&!name.includes(n)&&!STREET_END.test(n.split(/\s+/).pop()||'')&&!n.split(/\s+/).every(w=>SKIP_RUN.has(w.toLowerCase())))
   const mentionsOther=(t:string)=>others.some(o=>t.toLowerCase().includes(o.toLowerCase()))
@@ -224,5 +237,5 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
 export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):string{
  const what=kind==='hotel'?'a hotel or lodging property':kind==='restaurant'?'a restaurant, cafe or bar':'an attraction, museum, tour, venue or activity provider'
  const wrong=kind==='hotel'?'a restaurant, attraction or other non-lodging place':kind==='restaurant'?'a hotel, attraction or other non-food place':'a hotel or a restaurant'
- return `Name: "${name}"\nSource context (including surrounding prose): "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the source context shows the complete name identifies an operating ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} that a traveler can use now. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, a chopped or incomplete heading fragment, or if you are unsure. A heading alone is not evidence; use its surrounding prose. Answer with exactly one word: yes or no.`
-}
+ return `Name: "${name}"\nSource context (including surrounding prose): "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the source context identifies the complete name as a ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} rather than an area or category. A named entry in an explicit restaurant/hotel/attraction list is type evidence even without a descriptive sentence. This checks venue identity and kind, not proof of live hours, availability or prices. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, a chopped or incomplete heading fragment, or if you are unsure. A bare heading with no venue category or descriptive context is not evidence; use its page title, category and surrounding prose. Never use another entry to supply evidence about this name. Answer with exactly one word: yes or no.`
+ }
