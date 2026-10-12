@@ -16,9 +16,9 @@ const HINTS:Record<Kind,RegExp>={
  restaurant:/\b(?:restaurants?|cafe|caf\u00e9|bistro|grill|kitchen|bar|pub|tavern|eatery|diner|pizzeria|steakhouse|brasserie|bakery|dining|dinner|lunch|brunch|breakfast|cuisine|chef|menu|tacos?|sushi|seafood|oysters?|cocktails?)\b/gi,
  activity:/\b(?:museum|park|garden|gardens|tour|tours|gallery|beach|trail|zoo|aquarium|theat(?:er|re)|market|festival|cruise|hike|boat|kayak|paddle|walk|concert|stadium|monument|island|bridge|cathedral|castle|spa|tickets?|admission|exhibits?)\b/gi}
 export function hintFor(text:string,context:string):Kind|undefined {
- let best:Kind|undefined,top=0
- for(const k of Object.keys(HINTS) as Kind[]){HINTS[k].lastIndex=0;const own=(text.match(HINTS[k])||[]).length*2;HINTS[k].lastIndex=0;const near=(context.match(HINTS[k])||[]).length;const sc=own+near;if(sc>top){top=sc;best=k}}
- return best
+ const sc=(Object.keys(HINTS) as Kind[]).map(k=>{HINTS[k].lastIndex=0;const own=(text.match(HINTS[k])||[]).length*3;HINTS[k].lastIndex=0;return {k,v:own+(context.match(HINTS[k])||[]).length}}).sort((a,b)=>b.v-a.v)
+ // A tie gives no hint rather than a wrong one.
+ return sc[0].v>0&&sc[0].v-sc[1].v>=1?sc[0].k:undefined
 }
 export function extractMentions(records:SourceRecords,max=48,need:Kind[]=[]):Mention[] {
  const found=new Map<string,{source:string;start:number;end:number;text:string;count:number;multi:boolean}>()
@@ -48,7 +48,7 @@ export function extractMentions(records:SourceRecords,max=48,need:Kind[]=[]):Men
   }
  }
  const all=[...found.values()].sort((a,b)=>(Number(b.multi)-Number(a.multi))||b.count-a.count||a.start-b.start)
- const scored=all.map(m=>{const t=records.pageText(m.source)!;const wide=t.slice(Math.max(0,m.start-120),Math.min(t.length,m.end+160)).replace(/\s+/g,' ');return {m,hint:hintFor(m.text,wide)}})
+ const scored=all.map(m=>{const t=records.pageText(m.source)!;const wide=t.slice(Math.max(0,m.start-50),Math.min(t.length,m.end+70)).replace(/\s+/g,' ');return {m,hint:hintFor(m.text,wide)}})
  // Kind-balanced: reserve slots for each requested kind (best hint evidence first, then rank), fill the rest by rank.
  const chosen=new Set<typeof scored[number]>(),per=Math.max(6,Math.floor(max/ Math.max(1,need.length)/1.5))
  for(const k of need)for(const x of scored.filter(x=>x.hint===k).slice(0,per))chosen.add(x)
