@@ -831,7 +831,7 @@ export async function chatWithTools(
                     verifyCalls++
                     try{
                         const ac=new AbortController();const timer=setTimeout(()=>ac.abort(),8000)
-                        const r=await withinTurn(opts.deadlineAt,(signal)=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:AbortSignal.any([signal,ac.signal]),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You verify venue names against page text. Reply with exactly one word.'},{role:'user',content:verifyPrompt(name,kind,quote)}],stream:false,max_tokens:8})}))
+                        const r=await withinTurn(opts.deadlineAt,(signal)=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,ac.signal]):ac.signal,method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You verify venue names against page text. Reply with exactly one word.'},{role:'user',content:verifyPrompt(name,kind,quote)}],stream:false,max_tokens:8})}))
                         if(!r.ok){clearTimeout(timer);return false}
                         const j=await r.json() as {choices?:{message?:{content?:unknown}}[]}
                         const c=j.choices?.[0]?.message?.content
@@ -1016,4 +1016,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                            }
+}
