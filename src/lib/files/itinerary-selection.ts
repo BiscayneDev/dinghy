@@ -89,3 +89,12 @@ export function mergePicks(prior:Record<string,unknown>[],next:Record<string,unk
  for(const c of next){if(seen.has(key(c))||counts[c.kind as string]>=GROUP_LIMITS[c.kind as keyof typeof GROUP_LIMITS])continue;seen.add(key(c));counts[c.kind as string]++;out.push(c)}
  return out
 }
+/** When the sources genuinely lack a requested kind, the contract must not demand rows for it (the page says so honestly instead). */
+export function relaxedContract<T extends {request:string}|null>(c:T,unsupported:string[]):T{
+ if(!c||!unsupported.length)return c
+ let r=c.request
+ if(unsupported.includes('hotel'))r=r.replace(/\b(?:hotels?|places? to stay)\b/gi,'lodging')
+ if(unsupported.includes('restaurant'))r=r.replace(/\brestaurants?\b/gi,'meals')
+ if(unsupported.includes('activity'))r=r.replace(/\b(?:activities|things to do|fun things)\b/gi,'plans')
+ return {...c,request:r+' recommendations'}
+   }
