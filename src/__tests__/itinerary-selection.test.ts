@@ -47,3 +47,10 @@ it('relaxed contract drops only unsupported kinds and keeps research-needed',()=
  expect(requiredKinds(c.request)).toEqual(['hotel','restaurant','activity'])
  expect(relaxedContract(c,['restaurant']).request).toMatch(/hotel.*meals.*activities.*recommendations/)
 })
+
+it('rejects a pick whose own hint names another kind, so a requested kind cannot be filled by relabeling',()=>{
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://x.test/p',title:'T',content:'Dinner at Salt & Vine restaurant, a seafood bistro with cocktails. Stay at Harborview Inn, rooms per night.'},'2026-01-01T00:00:00Z')
+ const menu=extractMentions(r,48,['activity']);const sv=menu.find(m=>m.text==='Salt & Vine')!
+ const out=compileMentionSelection({candidates:[{kind:'activity',id:sv.id,reason:'r',catch:'c'}]},menu,r)
+ expect('error' in out&&out.dropped).toEqual(['kind_conflict'])
+})
