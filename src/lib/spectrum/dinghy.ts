@@ -1,7 +1,7 @@
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
-import {SELECT_CANDIDATES_TOOL,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,pickNameTexts} from '@/lib/files/itinerary-selection'
-import {isHubUrl} from '@/lib/files/itinerary-mentions'
-import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt} from '@/lib/files/itinerary-view'
+import {SELECT_CANDIDATES_TOOL,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
+import {isHubUrl,sourceScore} from '@/lib/files/itinerary-mentions'
+import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt,destinationTokens} from '@/lib/files/itinerary-view'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
@@ -619,6 +619,8 @@ export async function chatWithTools(
     let pickedSoFar:Record<string,unknown>[]=[]
     let unsupportedKinds:string[]=[]
     let menuShown=false
+    // Itinerary searches are steered to guides and roundups that list several venues, not single news stories.
+    const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;return itineraryResearch&&name==='web_search'&&typeof q==='string'&&!/\b(guide|best|top)\b/i.test(q)?{...(i as Record<string,unknown>),query:q+' best hotels restaurants things to do guide'}:i}
     let bypassCandidates:Record<string,unknown>[]|undefined
     const defsNow = () => {
         const defs=tools.map((t) => ({type:'function' as const,function:{name:t.name,description:t.description,parameters:t.inputSchema as Record<string,unknown>}}))
@@ -700,7 +702,7 @@ export async function chatWithTools(
             const reader=tools.find(t=>t.name==='web_fetch')!
             // At most six actual search URLs; preserve synthesis headroom on every try.
             let readsOk=0
-            for(const source of foundSources.filter(x=>!isHubUrl(x.url)).slice(0,6)){
+            for(const source of (()=>{const ok=foundSources.filter(x=>!isHubUrl(x.url)).map(x=>({x,sc:sourceScore(x.url,x.title)}));const keep=ok.filter(y=>y.sc>-3);return (keep.length?keep:ok).sort((a,b)=>b.sc-a.sc).map(y=>y.x)})().slice(0,6)){
                 const args=JSON.stringify({url:source.url})
                 const blocked=egressRejection('web_fetch',args,tainted,corpus)
                 if(blocked){await opts.onStage?.('tool','research:read_blocked');break}
@@ -842,7 +844,7 @@ export async function chatWithTools(
                     verifyCalls++
                     try{
                         const ac=new AbortController();const timer=setTimeout(()=>ac.abort(),8000)
-                        const r=await withinTurn(opts.deadlineAt,(signal)=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,ac.signal]):ac.signal,method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You verify venue names against page text. Reply with exactly one word.'},{role:'user',content:verifyPrompt(name,kind,quote)}],stream:false,max_tokens:8})}))
+                        const r=await withinTurn(opts.deadlineAt,(signal)=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,ac.signal]):ac.signal,method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You verify venue names against page text. Reply with exactly one word.'},{role:'user',content:verifyPrompt(name,kind,quote,destinationTokens(currentRequest).join(' '))}],stream:false,max_tokens:8})}))
                         if(!r.ok){clearTimeout(timer);return false}
                         const j=await r.json() as {choices?:{message?:{content?:unknown}}[]}
                         const c=j.choices?.[0]?.message?.content
@@ -851,7 +853,7 @@ export async function chatWithTools(
                         verdicts.set(vkey,ok);return ok
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
                 }
-                const picked=await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries)
+                const picked=await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
                 {const acc={hotel:0,restaurant:0,activity:0};for(const c of ('candidates' in picked?picked.candidates:[]) as {kind:'hotel'|'restaurant'|'activity'}[])acc[c.kind]++
                 const rej:Record<string,number>={};for(const d of picked.dropped)rej[d]=(rej[d]??0)+1
                 await opts.onStage?.('tool',`itinerary:accepted:h${acc.hotel}_r${acc.restaurant}_a${acc.activity}`)
@@ -911,7 +913,8 @@ export async function chatWithTools(
                         else if(!selectedCandidates||!input||typeof input!=='object'){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Recommendations are not selected yet. No file was created.'})});continue}
                         else{
                             input=injectCandidates(input,selectedCandidates)
-                            if(typeof (input as {body?:unknown}).body==='string'){const n=neutralizeUnpickedVenues((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords),currentRequest);if(n.removed){await opts.onStage?.('tool',`itinerary:body_venues_removed:${n.removed}`);input={...(input as Record<string,unknown>),body:n.body}}}
+                            if(typeof (input as {body?:unknown}).body==='string'){const n=neutralizeUnpickedVenues((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords),currentRequest,unsupportedKinds);if(n.removed){await opts.onStage?.('tool',`itinerary:body_venues_removed:${n.removed}`);input={...(input as Record<string,unknown>),body:n.body}}}
+                            {const ag=ensureRequestAgenda((input as {body:string}).body,currentRequest);if(ag.added){await opts.onStage?.('tool',`itinerary:request_agenda_added:${ag.added}`);input={...(input as Record<string,unknown>),body:ag.body}}}
                             // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
                             if(/\bworking sessions?\b/i.test(currentRequest)&&typeof (input as {body?:unknown}).body==='string'&&!/working sessions?/i.test((input as {body:string}).body)){await opts.onStage?.('tool','itinerary:working_sessions_added');input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\nWorking sessions: venue and duration to confirm.'}}
                             if(unsupportedKinds.length&&typeof (input as {body?:unknown}).body==='string'&&!/## Not found/i.test((input as {body:string}).body))input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\n## Not found\nI couldn\'t verify a pick for '+unsupportedKinds.map(k=>k==='activity'?'activities':k==='restaurant'?'restaurants':'hotels').join(' or ')+' from the pages I read. None are recommended here; the agenda above is unchanged.'}
@@ -952,7 +955,7 @@ export async function chatWithTools(
                     if (call.function.name === 'create_file') {pageAttempted = true;fileValidationPending=false}
                     if (!['web_search', 'web_fetch'].includes(call.function.name)) sourceOnly = false
                     const result = await withinTurn(opts.deadlineAt, async (signal) => {
-                        const work = tool.execute(input, { ...ctx, signal, ...(call.function.name === 'create_file' ? { photosOk: !tainted } : {}) })
+                        const work = tool.execute(searchInput(call.function.name,input), { ...ctx, signal, ...(call.function.name === 'create_file' ? { photosOk: !tainted } : {}) })
                         // A publish is an effect, not a disposable read. Its settlement belongs to
                         // the turn deadline, never the generic 15s race.
                         if (call.function.name === 'create_file') return work
@@ -1034,4 +1037,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+                                                                            }
