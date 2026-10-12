@@ -6,7 +6,11 @@ type Kind='hotel'|'restaurant'|'activity'
 const GROUP_LIMITS={hotel:6,restaurant:5,activity:5}
 const NAV=/^(?:home|about(?: us)?|contact(?: us)?|menu|sign ?in|log ?in|search|cart|book now|privacy policy|terms(?: of use)?|cookies?|skip to content|subscribe|follow us|share|read more|next|previous)$/i
 
-export type ViewLine={n:number;source:string;start:number;end:number;text:string;name:string}
+export type ViewLine={n:number;source:string;start:number;end:number;text:string;name:string;ctx?:Kind}
+const STREET_END=/^(?:street|st|avenue|ave|boulevard|blvd|road|rd|drive|dr|lane|ln|highway|hwy|parkway|pkwy|way|court|ct|causeway|trail|terrace|suite|ste)$/i
+const GENERIC_WORDS=new Set('coral reef beach park bay island river lake garden gardens downtown district old new north south east west central grand main ocean sea harbor harbour marina bridge pier point cove key keys city town village center centre square plaza avenue view views sunset sunrise tropical paradise golden blue green white royal'.split(' '))
+const SECTION_CTX:[RegExp,Kind][]=[[/\b(?:hotels|hotel (?:suggestions|recommendations|options|picks)|stays|lodging|accommodations?|where to stay|places to stay)\b/i,'hotel'],[/\b(?:restaurants|restaurant (?:suggestions|recommendations|options|picks)|dining|eateries|where to eat|places to eat|cafes|bars)\b/i,'restaurant'],[/\b(?:things to do|(?:activity|attraction) (?:suggestions|recommendations|options|picks)|attractions|activities|sights|museums|experiences|sightseeing)\b/i,'activity']]
+const sectionKind=(h:string):Kind|undefined=>{if(h.split(/\s+/).length>8)return undefined;for(const [re,k] of SECTION_CTX)if(re.test(h))return k;return undefined}
 const VENUE_LIKE=/\p{Lu}[\p{L}'’]+(?:\s+(?:&\s+)?\p{Lu}[\p{L}'’]+)+/u
 const NAME_CONNECT=new Set(['of','the','de','la','le','les','el','del','du','von','van','and','y','&','da','di','der'])
 const SKIP_RUN=new Set('sunday monday tuesday wednesday thursday friday saturday weekend brunch dinner lunch breakfast happy hour menu menus reservations reservation tickets admission book check booking open daily'.split(' '))
@@ -49,7 +53,14 @@ export function extractLineName(text:string):string|null{
  const pool=longLine?usable.filter(r=>r.from===0):usable
  const pick=pool.find(r=>r.ws.length>=2)??pool.find(r=>r.from>0&&r.ws[0].length>=5)??(usable.length===1&&words.length<=3&&usable[0].from===0&&usable[0].ws[0].length>=4?usable[0]:undefined)
  if(!pick)return null
- const name=pick.ws.join(' ').replace(/[.\-]+$/,'')
+ let ws=pick.ws
+ // A name continued by "at <Place>" (e.g. "Coral Reef at Key Biscayne") is kept whole, never cut off before the "at".
+ {let j=pick.from+ws.length
+  if(ws.length>=2&&words[j]?.toLowerCase()==='at'&&words[j+1]&&isCapW(words[j+1])){const ext=['at'];j++;while(j<words.length&&ext.length<5&&(isCapW(words[j])||(NAME_CONNECT.has(words[j].toLowerCase())&&words[j+1]&&isCapW(words[j+1])))){ext.push(words[j]);j++}ws=[...ws,...ext]}}
+ // Address fragments ("100 Chopin Plaza", "Galen Dr") and generic labels are not venue names.
+ if(pick.from>0&&/^\d+[a-z]?$/i.test(words[pick.from-1]))return null
+ if(STREET_END.test(ws[ws.length-1].replace(/[^\p{L}]/gu,''))||ws.every(w=>GENERIC_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))return null
+ const name=ws.join(' ').replace(/[.\-]+$/,'')
  const nl=name.toLowerCase().replace(/['’]s$/,'')
  if(UI_NAMES.has(nl)||name.split(/\s+/).every(w=>UI_NAMES.has(w.toLowerCase())))return null
  if(!/\s/.test(name)&&/s$/i.test(name)&&GEO_NAMES.includes(nl.replace(/s$/,'')))return null
@@ -61,12 +72,13 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000,ski
  const entries:ViewLine[]=[];let used=0,pages=0,venueLines=0
  for(const id of records.pageIds()){
   if(isHubUrl(records.pageUrl(id))||skip?.has(id))continue
-  const text=records.pageText(id)||'';let size=0,pos=0,added=0,full=false
+  const text=records.pageText(id)||'';let size=0,pos=0,added=0,full=false,ctx:Kind|undefined
   for(const raw of text.split('\n')){
    const lineStart=pos;pos+=raw.length+1
    if(full)continue
    const lead=raw.match(/^[\s#>*•\-\d.)]*/)![0].length,content=raw.slice(lead).replace(/\s+$/,'')
    const flat=content.replace(/\s+/g,' ').trim()
+   if(/^\s*#/.test(raw)||(flat.length<60&&!/[.!?:]$/.test(flat))){const sk=sectionKind(flat);if(sk)ctx=sk;else if(/^\s*#{1,2}\s/.test(raw))ctx=undefined}
    if(flat.length<8||flat.split(' ').length<2||NAV.test(flat))continue
    for(const m of content.matchAll(/\S[^.!?]*(?:[.!?]+(?=\s|$)|$)/g)){
     const lit=m[0].slice(0,260),flatS=stripUi(lit.replace(/\s+/g,' ').trim())
@@ -74,7 +86,7 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000,ski
     if(size+flatS.length>perPage||used+size+flatS.length>total){full=true;break}
     const name=extractLineName(flatS);if(!name)continue
     const start=lineStart+lead+m.index!
-    entries.push({n:entries.length+1,source:id,start,end:start+lit.length,text:flatS,name});size+=flatS.length+name.length+12;added++
+    entries.push({n:entries.length+1,source:id,start,end:start+lit.length,text:flatS,name,ctx});size+=flatS.length+name.length+12;added++
     if(VENUE_LIKE.test(flatS))venueLines++
    }
   }
@@ -133,19 +145,23 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   // The name is the server's: extracted from the line, so the model cannot invent or mis-copy one.
   const name=line.name,text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
   if(off<0){reject('name_not_on_line',name);continue}
+  if(line.ctx&&line.ctx!==kind){reject('kind_mismatch',name);continue}
+  // The reason is this pick's own sentence only: cut before any other venue's name, never borrow another venue's text.
+  const others=entries.filter(e=>e.source===line.source&&e.name!==name&&!e.name.includes(name)&&!name.includes(e.name)).map(e=>e.name)
+  const cutAtOthers=(t:string)=>{let c=t.length;for(const o of others){const k=t.indexOf(o);if(k>0&&k<c)c=k}return t.slice(0,c).replace(/[\s,;:\-–—(]+$/,'').trim()}
+  const mentionsOther=(t:string)=>others.some(o=>t.includes(o))
   const nxt=entries.find(e=>e.n===line.n+1&&e.source===line.source&&e.name===name)
   const heading=line.end-line.start<40||!/[.!?]$/.test(line.text)
-  let quote=stripUi(norm(text.slice(line.start,(nxt&&heading&&nxt.end-line.start<=300?nxt.end:line.end))))
+  let quote=cutAtOthers(stripUi(norm(text.slice(line.start,(nxt&&heading&&nxt.end-line.start<=300?nxt.end:line.end)))))
   if(quote.length<name.length+30){
-   // A bare name is not a reason: add the next real sentences of the page, with UI strings removed.
-   // Only this pick's own section: stop at the next venue line on the page or the next heading-like line.
+   // A bare name is not a reason: add the next sentence of this pick's own section that talks about it.
    const nextVenue=entries.find(e=>e.source===line.source&&e.start>=line.end&&e.name!==name)
    const limit=Math.min(line.end+700,nextVenue?nextVenue.start:Infinity)
    const sect:string[]=[]
    for(const raw of text.slice(line.end,limit).split('\n')){const t=raw.replace(/^[\s#>*•\-\d.)]*/,'').trim();if(!t)continue;if(t.length<40&&!/[.!?]$/.test(t))break;sect.push(t)}
-   const after=sect.join(' ').split(/(?<=[.!?])\s+/).map(x=>stripUi(norm(x))).filter(x=>x.split(' ').length>=5&&!NEWS_LINE.test(x))
-   let extra='';for(const x of after){if((quote+' '+extra+' '+x).length>300)break;extra+=(extra?' ':'')+x;if(extra.length>=40)break}
-   if(extra)quote=(quote+' '+extra).trim()
+   const own=new RegExp('(?:'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'|^(?:It|Its|This|They|The (?:hotel|restaurant|property|museum|park|venue|bar|cafe))\\b)','i')
+   const after=sect.join(' ').split(/(?<=[.!?])\s+/).map(x=>stripUi(norm(x))).filter(x=>x.split(' ').length>=5&&!NEWS_LINE.test(x)&&own.test(x)&&!mentionsOther(x))
+   if(after[0]&&(quote+' '+after[0]).length<=300)quote=(quote+' '+after[0]).trim()
   }
   if(kindNameMismatch(name,kind)){reject('kind_mismatch',name);continue}
   if(!nameShapeOk(name)){reject('name_shape',name);continue}
