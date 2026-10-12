@@ -346,3 +346,15 @@ it('extractor skips a leading prepositional phrase for the real venue on a list 
  expect(extractLineName('In Miami Beach: Lantern Table serves seafood')).toBe('Lantern Table')
  expect(extractLineName('Lantern Table, in Harbor Beach')).toBe('Lantern Table')
 })
+it('bare-label lines and a bare-name reason',async()=>{
+ expect(cleanEmptyHeadings(['## Friday','- Dinner','## Saturday','text']).join('\n')).toBe('## Friday\n## Saturday\ntext'.replace('## Friday\n',''))
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://g.test/b',title:'Harbor stays',content:'## Where to stay\nHarbor Inn\n'} as any,'2026-01-01T00:00:00Z')
+ const v=buildPageView(r),ln=v.entries.find(e=>e.name==='Harbor Inn')!.n
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',line:ln}]},r,'trip to Harbor',async()=>true,v.entries)
+ if('error' in o)throw new Error(o.error)
+ expect(String((o.candidates[0] as any).reason)).toContain('Listed as a place to stay')
+})
+
+it('meal label before a bold activity label is still empty',()=>{
+ expect(cleanEmptyHeadings(['## Friday','**Dinner**','**Activities**','- Harbor Museum tickets']).join('\n')).toBe('## Friday\n**Activities**\n- Harbor Museum tickets')
+})

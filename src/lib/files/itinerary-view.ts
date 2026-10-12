@@ -176,6 +176,11 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
    const after=sect.join(' ').split(/(?<=[.!?])\s+/).map(x=>stripUi(norm(x))).filter(x=>x.split(' ').length>=5&&!NEWS_LINE.test(x)&&own.test(x)&&!mentionsOther(x))
    if(after[0]&&(quote+' '+after[0]).length<=300)quote=(quote+' '+after[0]).trim()
   }
+  if(quote.length<name.length+30){
+   // Nothing of its own to say: state only what the page shows, that it lists this name under this kind.
+   const title=stripUi(norm(records.pageTitle(line.source)||'')).slice(0,100),label=kind==='hotel'?'a place to stay':kind==='restaurant'?'a place to eat or drink':'something to do'
+   quote=`${quote||name}. Listed as ${label}${title?' on "'+title+'"':' on the source page'}.`.slice(0,300)
+  }
   if(kindNameMismatch(name,kind)){reject('kind_mismatch',name);continue}
   if(!nameShapeOk(name)){reject('name_shape',name);continue}
   if(dest.length){
