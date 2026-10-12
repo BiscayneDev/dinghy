@@ -147,18 +147,22 @@ it('line selection: the server takes the quote from the line, entity bound to ki
  expect(out.candidates.map((c:any)=>c.kind)).toEqual(['hotel','restaurant','activity']);expect(out.dropped).toEqual([])
  const c:any=out.candidates[1];expect(r.pageText(c.name.source)!.slice(c.name.start,c.name.end)).toBe('Rook & Thistle');expect(c.reason).toContain('seafood kitchen');expect(c.reason).not.toContain('Fenn')
 })
-it('line selection: a name on an adjacent line is accepted at its own line; elsewhere is rejected naming the lines that hold it',async()=>{
+it('line selection: the server resolves the line from the literal name, whatever line number the model gives or omits',async()=>{
  const r=guide(),v=buildPageView(r),k=lineN(v,'Kestrel Lodge'),yes={'Kestrel Lodge':'hotel'}
  const adj=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge',line:k-1}]},r,ask,judge(yes),v.entries)
  expect('error' in adj).toBe(false);if(!('error' in adj))expect((adj.candidates[0] as any).reason).toContain('Kestrel Lodge')
  const far=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge',line:lineN(v,'Maritime Museum')}]},r,ask,judge(yes),v.entries)
- expect('error' in far&&far.dropped).toEqual(['name_not_on_line']);expect('error' in far&&far.error).toContain('L'+k)
+ expect('error' in far).toBe(false);if(!('error' in far))expect((far.candidates[0] as any).reason).toContain('Kestrel Lodge')
+ const none=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodging House',line:k}]},r,ask,judge(yes),v.entries)
+ expect('error' in none&&none.dropped).toEqual(['name_not_on_line'])
+ const noLine=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge'}]},r,ask,judge(yes),v.entries)
+ expect('error' in noLine).toBe(false)
 })
 it('line selection rejects paraphrased names, unknown lines, meals, relabeled kinds, cities',async()=>{
  const r=guide(),v=buildPageView(r),yes={'Kestrel Lodge':'hotel','Rook & Thistle':'restaurant'},good={kind:'hotel',name:'Kestrel Lodge',line:lineN(v,'Kestrel Lodge')}
  const cases:[string,any][]=[
   ['name_not_on_line',{kind:'hotel',name:'Kestrel Lodging House',line:lineN(v,'Kestrel Lodge')}],
-  ['line_unknown',{kind:'hotel',name:'Kestrel Lodge',line:9999}],
+  ['line_unknown',{kind:'hotel',name:'Nowhere Tower',line:9999}],
   ['not_verified',{kind:'restaurant',name:'Sunday Brunch',line:lineN(v,'Sunday Brunch')}],
   ['not_verified',{kind:'activity',name:'Kestrel Lodge',line:lineN(v,'Kestrel Lodge')}],
   ['not_a_venue_name',{kind:'hotel',name:'Harbor City',line:lineN(v,'Harbor City has')}]]
