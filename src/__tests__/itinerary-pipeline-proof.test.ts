@@ -11,7 +11,7 @@ import {gateTools} from '@/lib/spectrum/tool-gating'
 import {chatWithTools} from '@/lib/spectrum/dinghy'
 import {fileToolsFor} from '@/lib/files/tool'
 import {writeFile,mkdir} from 'node:fs/promises'
-const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Numbered lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ /.test(x)&&x.includes(nm));return l?Number(l.split(' ')[0].slice(1)):1}
+const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Candidate lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' ')[0].slice(1)):9999}
 afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();vi.clearAllMocks()})
 it('mandatory actual production schema compiles first attempt, renders HTML/PDF/localcard and queues one file without sends',async()=>{
  vi.stubEnv('TAVILY_API_KEY','fictional-key')
@@ -28,7 +28,7 @@ it('mandatory actual production schema compiles first attempt, renders HTML/PDF/
   if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
   const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
   const name=n===1?'web_search':n<=3?'select_itinerary_candidates':'create_file'
-  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,name:nm,line:lineOf(requests.at(-1),nm as string)}))}:{title:'Synthetic Harbor founders itinerary',body:body+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
+  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,line:lineOf(requests.at(-1),nm as string)}))}:{title:'Synthetic Harbor founders itinerary',body:body+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
@@ -55,7 +55,7 @@ it('unverified requested kinds are noted truthfully as a distinct partial while 
   if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
   const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
   const name=n===1?'web_search':n<=4?'select_itinerary_candidates':'create_file'
-  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:[['hotel','Harbor Inn']].map(([kind,nm])=>({kind,name:nm,line:lineOf(requests.at(-1),nm as string)}))}:{title:'Synthetic Harbor founders itinerary',body,format:'pdf',kind:'itinerary'}
+  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:[['hotel','Harbor Inn']].map(([kind,nm])=>({kind,line:lineOf(requests.at(-1),nm as string)}))}:{title:'Synthetic Harbor founders itinerary',body,format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
@@ -82,7 +82,7 @@ it('server states the requested working sessions when the model agenda omits the
   if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
   const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
   const name=n===1?'web_search':n<=3?'select_itinerary_candidates':'create_file'
-  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,name:nm,line:lineOf(requests.at(-1),nm as string)}))}:{title:'Synthetic Harbor founders itinerary',body:body.replace('Working sessions','Sessions')+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
+  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,line:lineOf(requests.at(-1),nm as string)}))}:{title:'Synthetic Harbor founders itinerary',body:body.replace('Working sessions','Sessions')+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
@@ -105,7 +105,7 @@ it('verification accepts only a bare yes, caches verdicts across retries, and an
   const b=JSON.parse(init.body)
   if(b.max_tokens===8){verifies++;return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'Yes, but I am not sure'}}]}))}
   n++;const name=n===1?'web_search':'select_itinerary_candidates'
-  const args=n===1?{query:'Harbor listings'}:{candidates:[{kind:'hotel',name:'Harbor Inn',line:1}]}
+  const args=n===1?{query:'Harbor listings'}:{candidates:[{kind:'hotel',line:1}]}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(n),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
@@ -125,12 +125,12 @@ it('verified picks survive later failed attempts and publish as an honest partia
   const b=JSON.parse(init.body)
   if(b.max_tokens===8)return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))
   n++;const name=n===1?'web_search':n<=4?'select_itinerary_candidates':'create_file'
-  const args=n===1?{query:'Harbor listings'}:n===2?{candidates:[{kind:'hotel',name:'Harbor Inn',line:1}]}:n<=4?{candidates:[{kind:'restaurant',name:'Nowhere Bistro',line:2}]}:{title:'Synthetic Harbor itinerary',body:'## Friday\n- 10:00 User supplied office visit.\n## Weekend\nPlans to confirm.',format:'pdf',kind:'itinerary'}
+  const args=n===1?{query:'Harbor listings'}:n===2?{candidates:[{kind:'hotel',line:1}]}:n<=4?{candidates:[{kind:'restaurant',line:9999}]}:{title:'Synthetic Harbor itinerary',body:'## Friday\n- 10:00 User supplied office visit.\n## Weekend\nPlans to confirm.',format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(n),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
  await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
- expect(stages).toContain('itinerary:accepted:h1_r0_a0');expect(stages.some(x=>x.startsWith('itinerary:rejected:name_not_on_line-1'))).toBe(true)
+ expect(stages).toContain('itinerary:accepted:h1_r0_a0');expect(stages.some(x=>x.startsWith('itinerary:rejected:line_unknown-1'))).toBe(true)
  expect(stages).toContain('itinerary:partial_unverified:restaurant');expect(published).toHaveBeenCalledTimes(1)
  for(const x of stages)expect(x.length).toBeLessThanOrEqual(80)
 })
