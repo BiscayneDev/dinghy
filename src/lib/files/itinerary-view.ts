@@ -10,12 +10,27 @@ export type ViewLine={n:number;source:string;start:number;end:number;text:string
 const VENUE_LIKE=/\p{Lu}[\p{L}'’]+(?:\s+(?:&\s+)?\p{Lu}[\p{L}'’]+)+/u
 const NAME_CONNECT=new Set(['of','the','de','la','le','les','el','del','du','von','van','and','y','&','da','di','der'])
 const SKIP_RUN=new Set('sunday monday tuesday wednesday thursday friday saturday weekend brunch dinner lunch breakfast happy hour menu menus reservations reservation tickets admission book check booking open daily'.split(' '))
+const UI_STRIP=/\b(?:save to (?:wish ?list|favorites|trip)|add to (?:wish ?list|trip|favorites)|create your own\b[^.\n]*|book now|view deal|see (?:all|more)\b|read more|sign in|log in|show more|\d[\d,.]*\s+reviews?|\(\d[\d,]*\)|\d(?:\.\d)?\s*(?:\/\s*5|stars?)|photos?\s*\(?\d*\)?|share|wish ?list)\b/gi
+const UI_WORDS=new Set('save share book view see visit explore add create read sign log get compare show open find check'.split(' '))
+const UI_NAMES=new Set('save share wishlist photos reviews review sign login book view deal compare filter sort map menu'.split(' '))
+export const LODGING_NAME=/\b(?:hotel|hostel|inn|suites?|resort|lodge|motel|novotel|hilton|marriott|hyatt|sheraton|b&b|guesthouse|villa|residences?)\b/i
+export const FOOD_NAME=/\b(?:caf[eé]|restaurant|bistro|bar|grill|kitchen|trattoria|pizzeria|taqueria|diner|brasserie|steakhouse|eatery|cantina|bakery|tavern|pub)\b/i
+export function kindNameMismatch(name:string,kind:Kind):boolean{
+ const l=LODGING_NAME.test(name),f=FOOD_NAME.test(name)
+ if(l&&f)return false
+ if(l)return kind!=='hotel'
+ if(f)return kind!=='restaurant'
+ return false
+}
+export const stripUi=(t:string)=>t.replace(UI_STRIP,' ').replace(/\s{2,}/g,' ').replace(/^[\s|·•\-–—]+|[\s|·•\-–—]+$/g,'').trim()
 const NEWS_LINE=/\b(?:breaks?\s+ground|announces?|announced|unveils?|set to open|will open|to open in|plans? to|proposed|redevelop\w*|demolish\w*|closes?\s+its|has closed|permanently closed|under construction)\b/i
 /** The venue name is taken from the line by the server: the leading proper-name run before the first dash, colon, comma, parenthesis or sentence end. */
 export function extractLineName(text:string):string|null{
  if(NEWS_LINE.test(text))return null
  const head=text.split(/\s[-–—]\s|[–—:,(|·.!?]/)[0].trim()
  const words=head.split(/\s+/).filter(Boolean)
+ while(words.length>1&&UI_WORDS.has(words[0].toLowerCase()))words.shift()
+ if(words.length<1)return null
  const isCapW=(w:string)=>/^[\p{Lu}\d]/u.test(w)&&!/^\d+$/.test(w)
  const runs:{from:number;ws:string[]}[]=[]
  for(let i=0;i<words.length;){
@@ -30,9 +45,14 @@ export function extractLineName(text:string):string|null{
   runs.push({from:i,ws});i=j
  }
  const usable=runs.filter(r=>!r.ws.every(w=>SKIP_RUN.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))
- const pick=usable.find(r=>r.ws.length>=2)??usable.find(r=>r.from>0&&r.ws[0].length>=5)??(usable.length===1&&words.length<=3&&usable[0].from===0&&usable[0].ws[0].length>=4?usable[0]:undefined)
+ const longLine=text.length>120
+ const pool=longLine?usable.filter(r=>r.from===0):usable
+ const pick=pool.find(r=>r.ws.length>=2)??pool.find(r=>r.from>0&&r.ws[0].length>=5)??(usable.length===1&&words.length<=3&&usable[0].from===0&&usable[0].ws[0].length>=4?usable[0]:undefined)
  if(!pick)return null
  const name=pick.ws.join(' ').replace(/[.\-]+$/,'')
+ const nl=name.toLowerCase().replace(/['’]s$/,'')
+ if(UI_NAMES.has(nl)||name.split(/\s+/).every(w=>UI_NAMES.has(w.toLowerCase())))return null
+ if(!/\s/.test(name)&&/s$/i.test(name)&&GEO_NAMES.includes(nl.replace(/s$/,'')))return null
  if(name.length<4||name.length>80||!nameShapeOk(name)||isNonVenueName(name)||isCategoryPhrase(name.split(/\s+/)))return null
  return name
 }
@@ -49,7 +69,7 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000):{t
    const flat=content.replace(/\s+/g,' ').trim()
    if(flat.length<8||flat.split(' ').length<2||NAV.test(flat))continue
    for(const m of content.matchAll(/\S[^.!?]*(?:[.!?]+(?=\s|$)|$)/g)){
-    const lit=m[0].slice(0,260),flatS=lit.replace(/\s+/g,' ').trim()
+    const lit=m[0].slice(0,260),flatS=stripUi(lit.replace(/\s+/g,' ').trim())
     if(flatS.length<8||flatS.split(' ').length<2)continue
     if(size+flatS.length>perPage||used+size+flatS.length>total){full=true;break}
     const name=extractLineName(flatS);if(!name)continue
@@ -114,7 +134,9 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   const name=line.name,text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
   if(off<0){reject('name_not_on_line',name);continue}
   const nxt=entries.find(e=>e.n===line.n+1&&e.source===line.source)
-  const quote=norm(text.slice(line.start,(nxt&&line.end-line.start<40&&nxt.end-line.start<=300?nxt.end:line.end)))
+  const heading=line.end-line.start<40||!/[.!?]$/.test(line.text)
+  const quote=stripUi(norm(text.slice(line.start,(nxt&&heading&&nxt.end-line.start<=300?nxt.end:line.end))))
+  if(kindNameMismatch(name,kind)){reject('kind_mismatch',name);continue}
   if(!nameShapeOk(name)){reject('name_shape',name);continue}
   if(dest.length){
    const head=(records.pageTitle(line.source)||'').toLowerCase(),lc=line.text.toLowerCase(),pl=text.toLowerCase()
@@ -139,5 +161,5 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
 }
 export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):string{
  const what=kind==='hotel'?'hotel or lodging property to stay at':kind==='restaurant'?'restaurant, cafe or bar to eat or drink at':'attraction, venue or activity provider to visit'
- return `Name: "${name}"\nLine from the page: "${quote}"\n\nIs "${name}" a specific, currently open and operating ${what}${destination?' in or near '+destination:''}, described by this line as a place a traveler can use now? Answer no for news headlines, announcements, future openings, closures, demolitions, construction news, other cities, and for cities, countries, neighborhoods, websites, meals, events or categories. Answer with exactly one word: yes, no or unsure.`
+ return `Name: "${name}"\nLine from the page: "${quote}"\n\nIs "${name}" a specific, currently open and operating ${what}${destination?' in or near '+destination:''}, described by this line as a place a traveler can use now? ${kind==='hotel'?'Answer no if the line or name shows it is a restaurant, bar, attraction or anything other than a place to sleep.':'Answer no if the name or line shows it is a hotel or lodging property, or is mainly something other than a '+(kind==='restaurant'?'place to eat or drink':'visitor attraction or activity')+'.'} Answer no for news headlines, announcements, future openings, closures, demolitions, construction news, other cities, and for cities, countries, neighborhoods, websites, meals, events or categories. Answer with exactly one word: yes, no or unsure.`
 }

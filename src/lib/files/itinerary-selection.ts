@@ -119,12 +119,17 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
  const allowed=new Set<string>([...wordsOf(request),...pickNames.flatMap(wordsOf),...GENERIC_CAPS,...UNIT_GENERIC])
  const kindRe=unsupported.map(k=>k==='activity'?'activit(?:y|ies)':k==='restaurant'?'(?:restaurants?|dining|meals?)':'(?:hotels?|stays?|lodging)')
  const refRe=kindRe.length?new RegExp('\\b(?:recommended|suggested|selected|chosen|picked|our|the)\\s+(?:\\w+\\s+)?(?:'+kindRe.join('|')+')\\b','i'):null
+ const headKinds=unsupported.map(k=>k==='activity'?'activit(?:y|ies)|things to do|events?|nightlife|sightseeing|evening':k==='restaurant'?'restaurants?|dining|dinner|lunch|brunch|breakfast|eats|food':'hotels?|stays?|lodging|accommodations?')
+ const headRe=headKinds.length?new RegExp('\\b(?:'+headKinds.join('|')+')\\b','i'):null
+ const reqLc=request.toLowerCase()
  const lines=body.split('\n'),keep:string[]=[];let removed=0,skipUnder=false
  for(const line of lines){
   const heading=/^\s*#/.test(line)
   if(!heading&&skipUnder){if(!line.trim()){keep.push(line)}else removed++;continue}
   if(heading)skipUnder=false
   if(!line.trim()){keep.push(line);continue}
+  if(heading&&headRe&&headRe.test(line)&&!headRe.test(request)){removed++;skipUnder=true;continue}
+  if(!heading&&/\b(?:weekend events?|local events?|events? (?:this|happening|nearby)|festivals?|concerts?|live music|happening (?:this|in))\b/i.test(line)&&!/\b(?:events?|festivals?|concerts?|live music)\b/.test(reqLc)){removed++;continue}
   if(/\b(?:no|not|none|zero)\b[^.\n]*\b(?:hotels?|restaurants?|dining|activities|venues?)\b[^.\n]*\b(?:recommend\w*|verified|found|available)\b/i.test(line)||/\b(?:no|not)\s+(?:\w+\s+){0,2}recommend\w*\b/i.test(line)||(refRe&&refRe.test(line))){removed++;continue}
   let bad=false,atStart=true,run=0
   for(const m of line.matchAll(/[\p{L}\d][\p{L}\d'’&.\-]*|[.!?:;,]/gu)){
@@ -139,19 +144,29 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
   }
   if(bad){removed++;if(heading)skipUnder=true}else keep.push(line)
  }
- // A heading with nothing left under it, and a line that ends in a colon with nothing after it, are dropped.
+ const fin=cleanEmptyHeadings(keep);removed+=keep.length-fin.length
+ return removed?{body:fin.join('\n'),removed}:{body,removed:0}
+}
+/** A heading with nothing left under it, and a line that ends in a colon with nothing after it, are dropped (repeat until stable). */
+export function cleanEmptyHeadings(lines:string[]):string[]{
+ let cur=lines
+ for(let pass=0;pass<4;pass++){
+ const keep=cur
  const depth=(l:string)=>/^\s*(#+)/.exec(l)?.[1].length??0
  const fin:string[]=[]
  for(let i=0;i<keep.length;i++){
   const d=depth(keep[i]);let j=i+1;while(j<keep.length&&!keep[j].trim())j++
   if(!d){
-   if(!/^\s*:::/.test(keep[i])&&/[\p{L}\d][^:]*:\s*$/u.test(keep[i])&&(j>=keep.length||depth(keep[j]))){removed++;continue}
+   if(!/^\s*:::/.test(keep[i])&&/[\p{L}\d][^:]*:\s*$/u.test(keep[i])&&(j>=keep.length||depth(keep[j]))){continue}
    fin.push(keep[i]);continue
   }
-  if(j>=keep.length||(depth(keep[j])&&depth(keep[j])<=d)){removed++;continue}
+  if(j>=keep.length||(depth(keep[j])&&depth(keep[j])<=d)){continue}
   fin.push(keep[i])
  }
- return removed?{body:fin.join('\n'),removed}:{body,removed:0}
+ if(fin.length===cur.length)return fin
+ cur=fin
+ }
+ return cur
 }
 export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[]{
  return picks.flatMap((c:any)=>{const t=records.pageText(c.name.source);return t?[t.slice(c.name.start,c.name.end)]:[]})
@@ -172,7 +187,8 @@ export function ensureRequestAgenda(body:string,request:string):{body:string;add
  }
  const add:string[]=[]
  for(const it of items){
-  const present=new RegExp('\\b0?'+it.hour+'(?::'+it.mins+')?\\s?(?:am|pm)?\\b','i').test(body)&&new RegExp(it.what.split(/\s+/)[0],'i').test(body)
+  const tre=new RegExp('\\b0?'+it.hour+'(?::'+it.mins+')?\\s?(?:am|pm)?\\b','i'),wds=it.what.toLowerCase().split(/\s+/).filter(w=>w.length>=3)
+  const present=body.split('\n').some(l=>tre.test(l)&&wds.some(w=>l.toLowerCase().includes(w)))
   if(!present)add.push(`- ${it.time}: ${it.what}`)
  }
  if(!add.length)return {body,added:0}

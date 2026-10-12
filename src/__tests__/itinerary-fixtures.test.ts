@@ -156,7 +156,8 @@ it('line selection rejects unknown lines, meals, relabeled kinds, cities, and re
  const r=guide(),v=buildPageView(r),yes={'The Kestrel Lodge':'hotel','Rook & Thistle':'restaurant'},good={kind:'restaurant',line:lineN(v,'Rook & Thistle')}
  const cases:[string,any][]=[
   ['line_unknown',{kind:'hotel',line:9999}],
-  ['not_verified',{kind:'activity',line:lineN(v,'Kestrel Lodge')}],
+  ['kind_mismatch',{kind:'activity',line:lineN(v,'Kestrel Lodge')}],
+  ['not_verified',{kind:'activity',line:lineN(v,'Maritime Museum')}],
   ['not_a_venue_name',{kind:'hotel',line:lineN(v,'Harbor City')}]]
  for(const [code,cand] of cases){const o=await compileQuoteSelection({candidates:[cand,good]},r,ask,judge(yes),v.entries);expect('error' in o,code).toBe(false);if('error' in o)continue;expect(o.dropped,code).toContain(code);expect(o.candidates).toHaveLength(1)}
  const o=await compileQuoteSelection({candidates:[{kind:'activity',line:lineN(v,'Kestrel Lodge')}]},r,ask,async()=>false,v.entries)
@@ -246,4 +247,35 @@ it('user-supplied timed agenda items are restated from the request when the body
  const kept=ensureRequestAgenda('## Friday\n- 10:00 Office visit with the team\n- 7:30 PM dinner',req)
  expect(kept.added).toBe(0)
  expect(ensureRequestAgenda('x','Plan a trip').added).toBe(0)
+})
+
+import {describe} from 'vitest'
+import {kindNameMismatch,stripUi} from '@/lib/files/itinerary-view'
+import {cleanEmptyHeadings,ensureRequestAgenda as era,neutralizeUnpickedVenues as nuv} from '@/lib/files/itinerary-selection'
+describe('ui junk, kind and body cleanup',()=>{
+ it('strips ui words and leading verbs, rejects ui and possessive city names',()=>{
+  expect(stripUi('Harbor Suites Save to wishlist')).toBe('Harbor Suites')
+  expect(extractLineName('Add Cafe Lumen')).toBe('Cafe Lumen')
+  expect(extractLineName('Save to wishlist')).toBeNull()
+  expect(extractLineName('Create your own trip')).toBeNull()
+  const long='The weekend crowd gathers every evening near the marina where Kestrel Lodge sits beside the water and people stroll along the pier until late at night.'
+  expect(extractLineName(long)).toBeNull()
+ })
+ it('name words force the kind',()=>{
+  expect(kindNameMismatch('Novotel Harbor','restaurant')).toBe(true)
+  expect(kindNameMismatch('Novotel Harbor','hotel')).toBe(false)
+  expect(kindNameMismatch('Cafe Lumen','activity')).toBe(true)
+  expect(kindNameMismatch('Cafe Lumen','restaurant')).toBe(false)
+  expect(kindNameMismatch('Hotel Cafe Lumen','hotel')).toBe(false)
+ })
+ it('cleans nested empty headings and unsupported-kind headings',()=>{
+  expect(cleanEmptyHeadings(['# A','## B','','## C','text']).join('\n')).toBe('# A\n\n## C\ntext')
+  const r=nuv('# Plan\n## Evening Activities\nstuff here\n## Notes\nkeep',[],' ',['activity'] as any)
+  expect(r.body).toContain('Notes');expect(r.body).not.toContain('Evening')
+  expect(nuv('# P\nWeekend events: a fair\nkeep this',[] as any,'plan a trip').body).not.toContain('Weekend events')
+ })
+ it('does not duplicate a time item the body already states as 10:00 AM',()=>{
+  expect(era('# Day\n## 10:00 AM - Office visit','Friday office visit 10am').added).toBe(0)
+  expect(era('# Day','Friday office visit 10am').added).toBe(1)
+ })
 })
