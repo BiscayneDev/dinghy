@@ -33,3 +33,17 @@ it('mentions come from the full page text, past a long nav prefix, with server-o
  expect(out.candidates).toHaveLength(2);expect(out.dropped).toEqual(['unknown_id'])
  expect(mentionToolDef(menu.map(m=>m.id)).function.parameters.properties.candidates.items.properties.id.enum).toEqual(menu.map(m=>m.id))
 })
+import {extractMentions as em2,hintCounts} from '@/lib/files/itinerary-mentions'
+import {relaxedContract,requiredKinds} from '@/lib/files/itinerary-selection'
+it('menu reserves slots for each requested kind even on a nav-heavy page with many other names',()=>{
+ const noise=Array.from({length:80},(_,i)=>`Featured Partner Alpha${String.fromCharCode(65+i%26)}${i} Group.`).join(' ')
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://x.test/p',title:'T',content:noise+' Dinner at Salt & Vine restaurant, a seafood bistro. Brunch at Blue Door Cafe. Stay at Harborview Inn, rooms per night. See the Maritime Museum tour.'},'2026-01-01T00:00:00Z')
+ const menu=em2(r,48,['hotel','restaurant','activity']),texts=menu.map(m=>m.text)
+ expect(menu.length).toBeLessThanOrEqual(48);expect(texts).toContain('Salt & Vine');expect(texts).toContain('Harborview Inn');expect(texts).toContain('Maritime Museum')
+ expect(menu.find(m=>m.text==='Salt & Vine')!.hint).toBe('restaurant');expect(hintCounts(menu)).toMatch(/^h\d+_r\d+_a\d+_n\d+$/)
+})
+it('relaxed contract drops only unsupported kinds and keeps research-needed',()=>{
+ const c={kind:'itinerary',request:'Plan Friday with hotel, restaurant and activities'}
+ expect(requiredKinds(c.request)).toEqual(['hotel','restaurant','activity'])
+ expect(relaxedContract(c,['restaurant']).request).toMatch(/hotel.*meals.*activities.*recommendations/)
+})
