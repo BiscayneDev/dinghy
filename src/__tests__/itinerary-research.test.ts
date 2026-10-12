@@ -35,3 +35,27 @@ it('a hotel cannot be described as a dining pick under lunch, but stays and plai
  const o=neutralizeUnpickedVenues(body,['Harbor Inn'],'Friday in Harbor with Hotels and Lunch Recommendations',[],[{kind:'hotel',name:'Harbor Inn'}])
  expect(o.body).not.toContain('relaxed dining');expect(o.body).toContain('quiet rooms');expect(o.body).toContain('Meet at Harbor Inn')
 })
+
+import {activityPageEvidence} from '@/lib/files/itinerary-research'
+it('second query is genuinely different for dining and activities',()=>{
+ for(const kind of ['restaurant','activity'])expect(widenQuery(kind,'Harbor',1)).not.toBe(widenQuery(kind,'Harbor',0))
+ expect(widenQuery('activity','Harbor',1)).toContain('museums gardens')
+})
+it('activity read slots require named attraction evidence, not destination/event chrome',()=>{
+ const r=page('Harbor celebration','South Harbor Wine\nSavor the Stories\n25th Celebration')
+ expect(activityPageEvidence(r,r.pageIds()).usable).toBe(false)
+ const attractions=page('Harbor attractions','Tide Museum has art exhibits.\nShell Gallery displays murals.')
+ expect(activityPageEvidence(attractions,attractions.pageIds())).toMatchObject({usable:true,venueLines:2})
+})
+
+import {ensureWorkingSessions,ensureWeekendGap} from '@/lib/files/itinerary-selection'
+it('partial time-of-day prose cannot leak a single unpicked venue or hotel activity blurb',()=>{
+ const body='## Evening\nHedran\n## Afternoon\nHarbor Inn offers beachside relaxation.'
+ const o=neutralizeUnpickedVenues(body,['Harbor Inn'],'Friday evening afternoon in Harbor',['restaurant','activity'],[{kind:'hotel',name:'Harbor Inn'}])
+ expect(o.body).not.toContain('Hedran');expect(o.body).not.toContain('beachside')
+})
+it('working sessions follow the office row even inside nested Morning, and missing weekend stays visible',()=>{
+ const b=ensureWorkingSessions('## Friday\n### Morning\n- 10am: Office visit\n### Afternoon\n- Rest','Friday office visit 10am then working sessions').body
+ expect(b).toContain('Office visit\n- Working sessions');expect(b.indexOf('Working sessions')).toBeLessThan(b.indexOf('### Afternoon'))
+ expect(ensureWeekendGap(b,'Friday and weekend activities',['activity'])).toContain('## Weekend')
+})

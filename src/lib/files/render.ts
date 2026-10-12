@@ -628,7 +628,10 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
             if (t.type === 'heading') {
                 const h = t as Tokens.Heading
                 if (h.depth <= 2) {
-                    ensure(70)
+                    const next=bodyTokens.slice(ti+1).find(x=>x.type!=='space')
+                    const first=next?.type==='list'?(next as Tokens.List).items[0]:undefined
+                    const following=first?pdf.font('bodyBold').fontSize(11).heightOfString(plain(first.text),{width:W-20,lineGap:3}):24
+                    ensure(52+following)
                     rule(8, 14)
                     pdf.font('display').fontSize(19).fillColor(BRAND.ink).text(plain(h.text), L, pdf.y, { width: W })
                     pdf.moveDown(0.35)

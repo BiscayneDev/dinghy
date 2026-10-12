@@ -143,14 +143,14 @@ it('a missing kind reopens research on the server and the new pages feed a secon
  published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
  const find=(b:any,nm:string)=>{const ls=b.messages.filter((m:any)=>m.role==='system'&&/\nL\d+ \| /.test('\n'+String(m.content))).flatMap((m:any)=>String(m.content).split('\n'));const l=[...ls].reverse().find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' ')[0].slice(1)):9999}
  vi.stubGlobal('fetch',vi.fn(async(u:any,init:any)=>{
-  if(String(u)==='https://api.tavily.com/search'){const q=JSON.parse(init.body).query;queries.push(q);return new Response(JSON.stringify({results:[...(/^best restaurants/.test(q)?[{title:'Harbor best restaurants guide one',url:junk1,content:'Dining.'},{title:'Harbor best restaurants guide two',url:junk2,content:'Dining.'},{title:'Harbor eats guide',url:u2,content:'Dining.'}]:[{title:'Harbor stays guide',url:u1,content:'Hotels.'}])]}))}
+  if(String(u)==='https://api.tavily.com/search'){const q=JSON.parse(init.body).query;queries.push(q);return new Response(JSON.stringify({results:[...(/restaurant recommendations/.test(q)?[{title:'Harbor eats guide',url:u2,content:'Dining.'}]:/^best restaurants/.test(q)?[{title:'Harbor best restaurants guide one',url:junk1,content:'Dining.'},{title:'Harbor best restaurants guide two',url:junk2,content:'Dining.'}]:[{title:'Harbor stays guide',url:u1,content:'Hotels.'}])]}))}
   if(String(u)===u1)return new Response('<html><title>Harbor stays</title><body><h2>Harbor Inn</h2><p>Harbor Inn has quiet rooms near the water in Harbor.</p></body></html>')
   if(String(u)===junk1||String(u)===junk2)return new Response('<html><title>Harbor guide</title><body><h2>Season Menus</h2><p>Savor the Stories in Harbor.</p></body></html>')
   if(String(u)===u2)return new Response('<html><title>Harbor eats</title><body><h2>Lantern Table</h2><p>Lantern Table serves seafood dinners in Harbor.</p></body></html>')
   const b=JSON.parse(init.body)
   if(b.max_tokens===8)return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))
-  n++;const name=n===1?'web_search':n<=3?'select_itinerary_candidates':'create_file'
-  const args=n===1?{query:'Harbor listings'}:n===2?{candidates:[{kind:'hotel',line:find(b,'Harbor Inn')}]}:n===3?{candidates:[{kind:'restaurant',line:find(b,'Lantern Table')}]}:{title:'Synthetic Harbor itinerary',body:'## Friday\n- 10:00 User supplied office visit.\n',format:'pdf',kind:'itinerary'}
+  n++;const name=n===1?'web_search':n<=4?'select_itinerary_candidates':'create_file'
+  const args=n===1?{query:'Harbor listings'}:n===2?{candidates:[{kind:'hotel',line:find(b,'Harbor Inn')}]}:n===3?{candidates:[{kind:'restaurant',line:9999}]}:n===4?{candidates:[{kind:'restaurant',line:find(b,'Lantern Table')}]}:{title:'Synthetic Harbor itinerary',body:'## Friday\n- 10:00 User supplied office visit.\n',format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(n),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
@@ -158,6 +158,7 @@ it('a missing kind reopens research on the server and the new pages feed a secon
  expect(stages.some(x=>x.startsWith('itinerary:widen:r_'))).toBe(true)
  expect(stages.filter(s=>s==='itinerary:dining_page:0_skip')).toHaveLength(2)
  expect(queries.some(q=>q.startsWith('best restaurants in harbor'))).toBe(true)
+ expect(queries.some(q=>q.includes('restaurant recommendations'))).toBe(true)
  expect(stages).toContain('itinerary:accepted:h0_r1_a0');expect(stages.some(x=>x.startsWith('itinerary:partial_unverified'))).toBe(false)
  expect(published).toHaveBeenCalledTimes(1)
 })
