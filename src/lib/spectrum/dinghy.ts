@@ -1,3 +1,4 @@
+import {widenQuery,widenSourceScore,diningPageEvidence} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
 import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
 import {isHubUrl,sourceScore} from '@/lib/files/itinerary-mentions'
@@ -831,12 +832,11 @@ export async function chatWithTools(
             const destTok=destinationTokens(currentRequest),dest=destTok.join(' ')
             if(!dest)return false
             const seenIds=new Set(sourceRecords.pageIds()),seenUrls=new Set(foundSources.map(s=>s.url))
-            const phrase:Record<string,string>={hotel:'best hotels where to stay in',restaurant:'best restaurants where to eat in',activity:'best things to do attractions in'}
             let reads=0
             const searched:string[]=[]
             for(const kind of missing){
                 if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<30000)break
-                const q=`${phrase[kind]} ${dest} guide`,sargs=JSON.stringify({query:q})
+                const q=widenQuery(kind,dest),sargs=JSON.stringify({query:q})
                 searched.push(kind)
                 if(egressRejection('web_search',sargs,tainted,corpus))continue
                 await assertAccountActive(ctx.userId,ctx.chatGuid)
@@ -849,10 +849,10 @@ export async function chatWithTools(
                         for(const h of ((r.data as {results?:{title?:unknown;url?:unknown}[]}|undefined)?.results??[])){if(typeof h.url==='string'&&!seenUrls.has(h.url)&&!isHubUrl(h.url)){seenUrls.add(h.url);hits.push({title:typeof h.title==='string'?h.title:'',url:h.url})}}
                     }
                 }catch(err){if(err instanceof TurnDeadlineExceeded)throw err}
-                hits=hits.map(x=>({x,sc:sourceScore(x.url,x.title)})).filter(y=>y.sc>-3).sort((a,b)=>b.sc-a.sc).map(y=>y.x).slice(0,5)
-                let good=0
+                hits=hits.map(x=>({x,sc:widenSourceScore(kind,x.url,x.title)})).filter(y=>y.sc>-3).sort((a,b)=>b.sc-a.sc).map(y=>y.x).slice(0,5)
+                let good=0,venueLines=0
                 for(const h of hits){
-                    if(good>=2)break
+                    if(kind==='restaurant'?good>=2&&venueLines>=4:good>=2)break
                     if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<22000)break
                     if(egressRejection('web_fetch',JSON.stringify({url:h.url}),tainted,corpus))continue
                     toolCallCount++
@@ -864,6 +864,7 @@ export async function chatWithTools(
                         const fresh=sourceRecords.pageIds().filter(id=>!before.has(id))
                         const onDest=fresh.some(id=>{const t=((sourceRecords.pageTitle(id)||'')+' '+(sourceRecords.pageText(id)||'').slice(0,2500)).toLowerCase();return destTok.some(d=>t.includes(d))})
                         if(fresh.length&&!onDest){for(const id of fresh)seenIds.add(id);continue}
+                        if(kind==='restaurant'&&fresh.length){const evidence=diningPageEvidence(sourceRecords,fresh);await opts.onStage?.('tool',`itinerary:dining_page:${evidence.venueLines}_${evidence.usable?'keep':'skip'}`);if(!evidence.usable){for(const id of fresh)seenIds.add(id);continue}venueLines+=evidence.venueLines}
                         if(cap.some(x=>x.content)){reads++;good++;if(!foundSources.some(x=>x.url===h.url))foundSources.push({title:h.title.replace(/[\r\n]/g,' ').slice(0,100),url:h.url})}
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err}
                 }
@@ -970,7 +971,7 @@ export async function chatWithTools(
                         else if(!selectedCandidates||!input||typeof input!=='object'){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Recommendations are not selected yet. No file was created.'})});continue}
                         else{
                             input=injectCandidates(input,selectedCandidates)
-                            if(typeof (input as {body?:unknown}).body==='string'){const n=neutralizeUnpickedVenues((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords),currentRequest,unsupportedKinds);if(n.removed){await opts.onStage?.('tool',`itinerary:body_venues_removed:${n.removed}`);input={...(input as Record<string,unknown>),body:n.body}}}
+                            if(typeof (input as {body?:unknown}).body==='string'){const n=neutralizeUnpickedVenues((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords),currentRequest,unsupportedKinds,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})));if(n.removed){await opts.onStage?.('tool',`itinerary:body_venues_removed:${n.removed}`);input={...(input as Record<string,unknown>),body:n.body}}}
                             {const ag=ensureRequestAgenda((input as {body:string}).body,currentRequest);if(ag.added){await opts.onStage?.('tool',`itinerary:request_agenda_added:${ag.added}`);input={...(input as Record<string,unknown>),body:ag.body}}}
                             {const names=pickNameTexts(selectedCandidates,sourceRecords),pl=selectedCandidates.map((c,x)=>({kind:String((c as {kind?:unknown}).kind),name:names[x]??''})).filter(p=>p.name);const pp=ensurePlanFromPicks((input as {body:string}).body,currentRequest,pl);if(pp.added){await opts.onStage?.('tool',`itinerary:plan_from_picks:${pp.added}`);input={...(input as Record<string,unknown>),body:pp.body}}}
                             // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
@@ -1096,4 +1097,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                                                               }
+                            }
