@@ -208,7 +208,7 @@ it('off-destination: a line about another town is rejected unless the page is ab
 })
 it('verify prompt carries name, line, destination, and says no to news, openings, closures',()=>{
  const p=verifyPrompt('Kestrel Lodge','hotel','The Kestrel Lodge has rooms.','harbor')
- expect(p).toContain('Kestrel Lodge');expect(p).toContain('harbor');expect(p).toMatch(/closure, demolition or future opening/);expect(p).toMatch(/Answer yes only if the source context shows/)
+ expect(p).toContain('Kestrel Lodge');expect(p).toContain('harbor');expect(p).toMatch(/closure, demolition or future opening/);expect(p).toMatch(/Answer yes only if the source context identifies/)
 })
 it('source score: guides beat news stories; news signatures score low',()=>{
  expect(sourceScore('https://site.test/best-hotels-in-harbor-city-guide','Best hotels in Harbor City')).toBeGreaterThan(0)
