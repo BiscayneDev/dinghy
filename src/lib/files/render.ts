@@ -630,8 +630,12 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
                 if (h.depth <= 2) {
                     const next=bodyTokens.slice(ti+1).find(x=>x.type!=='space')
                     const first=next?.type==='list'?(next as Tokens.List).items[0]:undefined
+                    const after=next?.type==='paragraph'?bodyTokens.slice(bodyTokens.indexOf(next)+1).find(x=>x.type!=='space'):undefined
+                    const afterFirst=after?.type==='list'?(after as Tokens.List).items[0]:undefined
                     const following=first?pdf.font('bodyBold').fontSize(11).heightOfString(plain(first.text),{width:W-20,lineGap:3}):24
-                    ensure(52+following)
+                    const paraHeight=next?.type==='paragraph'?pdf.font('bodyBold').fontSize(11).heightOfString(plain((next as Tokens.Paragraph).text),{width:W,lineGap:3}):0
+                    const afterHeight=afterFirst?pdf.heightOfString(plain(afterFirst.text),{width:W-20,lineGap:3}):0
+                    ensure(52+following+paraHeight+afterHeight)
                     rule(8, 14)
                     pdf.font('display').fontSize(19).fillColor(BRAND.ink).text(plain(h.text), L, pdf.y, { width: W })
                     pdf.moveDown(0.35)
