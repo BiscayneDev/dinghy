@@ -88,6 +88,8 @@ function stripHtml(html: string): string {
     .replace(/<nav[\s\S]*?<\/nav>/gi, '')
     .replace(/<footer[\s\S]*?<\/footer>/gi, '')
     .replace(/<header[\s\S]*?<\/header>/gi, '')
+    // Block boundaries become line breaks so adjacent list items and headings stay separate entries.
+    .replace(/<\/?(?:li|ul|ol|h[1-6]|p|div|br|tr|td|th|section|article|table|dl|dt|dd|figure|figcaption|blockquote)\b[^>]*>/gi, '\n')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -95,7 +97,9 @@ function stripHtml(html: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
+    .replace(/[ \t\f\v\r]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{2,}/g, '\n')
     .trim()
 }
 
@@ -104,7 +108,7 @@ function extractTitle(html: string): string | null {
   return match ? match[1].trim() : null
 }
 
-const MAX_CONTENT_LENGTH = 8000
+const MAX_CONTENT_LENGTH = 16000
 
 export const webFetch: Tool = {
   name: 'web_fetch',
@@ -165,4 +169,4 @@ export const webFetch: Tool = {
       return { success: false, publicReadFailure: err instanceof z.ZodError ? 'invalid_input' : 'network', error: `Fetch failed: ${msg}` }
     }
   },
-  }
+}
