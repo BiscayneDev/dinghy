@@ -186,8 +186,9 @@ export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[
 
 /** When the model body is stripped of its day plan, the server restates a plan only from facts it holds: the user's requested days and the verified picks. */
 export function ensurePlanFromPicks(body:string,request:string,picks:{kind:string;name:string}[]):{body:string;added:number}{
- const content=body.split('\n').filter(l=>l.trim()&&!/^\s*(#|:::)/.test(l)&&!/^\s*\|/.test(l))
- if(content.length>=3||!picks.length)return {body,added:0}
+ const lc=body.toLowerCase()
+ picks=picks.filter(p=>p.name&&!lc.includes(p.name.toLowerCase()))
+ if(!picks.length)return {body,added:0}
  const days=[...new Set((request.match(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi)||[]).map(d=>d[0].toUpperCase()+d.slice(1).toLowerCase()))]
  const by=(k:string)=>picks.filter(p=>p.kind===k).map(p=>p.name)
  const rows:string[]=[]
@@ -196,7 +197,7 @@ export function ensurePlanFromPicks(body:string,request:string,picks:{kind:strin
  if(eat.length)rows.push(`- Eat: ${eat.slice(0,3).join(', ')}`)
  if(do_.length)rows.push(`- Do: ${do_.slice(0,3).join(', ')}`)
  if(!rows.length)return {body,added:0}
- rows.push(`- ${days.length?days.join(' / '):'Day'} timing for these is not set; pick from the cards below.`)
+ rows.push(`- ${days.length?days.join(' / '):'Day'} timing for these is not set.`)
  const lines=body.split('\n'),h=lines.findIndex(l=>/^\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i.test(l))
  if(h>=0)lines.splice(h+1,0,...rows)
  else{const t=lines.findIndex(l=>/^\s*#\s/.test(l));lines.splice(t>=0?t+1:0,0,`## ${days[0]??'Day 1'}`,...rows)}

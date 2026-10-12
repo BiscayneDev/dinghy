@@ -337,7 +337,7 @@ describe('phrases, category headings, plan from picks',()=>{
   const picks=[{kind:'hotel',name:'Harbor Inn'},{kind:'restaurant',name:'Lantern Table'}]
   const a=epp('# Trip\n',"Friday and Saturday in Harbor",picks)
   expect(a.added).toBeGreaterThan(0);expect(a.body).toContain('Stay: Harbor Inn');expect(a.body).toContain('Friday / Saturday');expect(a.body).toContain('## Friday')
-  expect(epp('# Trip\n- a one\n- b two\n- c three','x',picks).added).toBe(0)
+  expect(epp('# Trip\n- Harbor Inn and Lantern Table tonight','x',picks).added).toBe(0)
   expect(epp('# Trip\n','x',[]).added).toBe(0)
  })
 })
@@ -368,5 +368,26 @@ describe('areas and orphan prose',()=>{
   const body='## Friday\n- 10:00 Office visit with the team\nA stunning estate offering insight into the history of the region.\nTide Museum is a quick stop before dinner.\n'
   const r=nuv(body,['Tide Museum'],'Friday office visit with the team in Harbor',[])
   expect(r.body).not.toContain('stunning');expect(r.body).toContain('Tide Museum');expect(r.body).toContain('Office visit')
+ })
+})
+describe('ui single tokens, own-page reasons, picks rows',()=>{
+ it('rejects camel-case and lone common words, keeps venues',()=>{
+  expect(extractLineName('PoweredBy')).toBeNull()
+  expect(extractLineName('Search for HotList favorites')).toBeNull()
+  expect(extractLineName('Please sign up for the newsletter')).toBeNull()
+  expect(extractLineName('Reed & Marlow steakhouse')).toBe('Reed & Marlow')
+  expect(extractLineName('Zori restaurant')).toBe('Zori')
+ })
+ it('a bare heading takes the first page sentence that names it',async()=>{
+  const r=new SourceRecords();r.capture('web_fetch',{url:'https://g.test/c',title:'Harbor eats',content:'## Where to eat\nLantern Table\nLantern Table serves seafood dinners on the pier every night.\n'} as any,'2026-01-01T00:00:00Z')
+  const v=buildPageView(r),ln=v.entries.find(e=>e.name==='Lantern Table')!.n
+  const o=await compileQuoteSelection({candidates:[{kind:'restaurant',line:ln}]},r,'trip to Harbor',async()=>true,v.entries)
+  if('error' in o)throw new Error(o.error)
+  expect(String((o.candidates[0] as any).reason)).toContain('seafood dinners')
+ })
+ it('rows are added for any pick the body does not name, not only when thin',()=>{
+  const body='## Friday\n- 10:00 Office visit\n- Walk\n- Lunch\n- Rest\nTide Museum is nearby.'
+  const r=epp(body,'Friday in Harbor',[{kind:'hotel',name:'Harbor Inn'},{kind:'activity',name:'Tide Museum'}])
+  expect(r.body).toContain('Stay: Harbor Inn');expect(r.body).not.toContain('Do: Tide Museum')
  })
 })
