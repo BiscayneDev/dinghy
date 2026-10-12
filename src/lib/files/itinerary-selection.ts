@@ -173,6 +173,24 @@ export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[
  return picks.flatMap((c:any)=>{const t=records.pageText(c.name.source);return t?[t.slice(c.name.start,c.name.end)]:[]})
    }
 
+/** When the model body is stripped of its day plan, the server restates a plan only from facts it holds: the user's requested days and the verified picks. */
+export function ensurePlanFromPicks(body:string,request:string,picks:{kind:string;name:string}[]):{body:string;added:number}{
+ const content=body.split('\n').filter(l=>l.trim()&&!/^\s*(#|:::)/.test(l)&&!/^\s*\|/.test(l))
+ if(content.length>=3||!picks.length)return {body,added:0}
+ const days=[...new Set((request.match(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi)||[]).map(d=>d[0].toUpperCase()+d.slice(1).toLowerCase()))]
+ const by=(k:string)=>picks.filter(p=>p.kind===k).map(p=>p.name)
+ const rows:string[]=[]
+ const stay=by('hotel'),eat=by('restaurant'),do_=by('activity')
+ if(stay.length)rows.push(`- Stay: ${stay.slice(0,2).join(' or ')}`)
+ if(eat.length)rows.push(`- Eat: ${eat.slice(0,3).join(', ')}`)
+ if(do_.length)rows.push(`- Do: ${do_.slice(0,3).join(', ')}`)
+ if(!rows.length)return {body,added:0}
+ rows.push(`- ${days.length?days.join(' / '):'Day'} timing for these is not set; pick from the cards below.`)
+ const lines=body.split('\n'),h=lines.findIndex(l=>/^\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i.test(l))
+ if(h>=0)lines.splice(h+1,0,...rows)
+ else{const t=lines.findIndex(l=>/^\s*#\s/.test(l));lines.splice(t>=0?t+1:0,0,`## ${days[0]??'Day 1'}`,...rows)}
+ return {body:lines.join('\n'),added:rows.length}
+}
 const TIME_RE=/\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b/gi
 const LEAD_FILL=new Set(['plus','but','or','plan','make','with','then','and','include','including','add','also','a','an','the','my','our','on','friday','saturday','sunday','monday','tuesday','wednesday','thursday','to','for','by','at'])
 /** User-supplied time-anchored agenda items (e.g. "office visit 10am") are facts the user gave; when the model's body drops one, the server restates it from the request text. */
