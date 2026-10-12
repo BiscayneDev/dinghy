@@ -391,3 +391,38 @@ describe('ui single tokens, own-page reasons, picks rows',()=>{
   expect(r.body).toContain('Stay: Harbor Inn');expect(r.body).not.toContain('Do: Tide Museum')
  })
 })
+import {ensureWorkingSessions as ews} from '@/lib/files/itinerary-selection'
+describe('agenda placement under the requested day',()=>{
+ const req='Plan Friday in Harbor. Office visit at 10am then working sessions. Weekend activities too.'
+ it('office and working-session rows land under Friday, not the weekend heading',()=>{
+  const body='# Trip\n## Friday\n- Arrive\n## Weekend Activities\n- Stroll\n'
+  const a=era(body,req);expect(a.added).toBe(1)
+  const w=ews(a.body,req)
+  const lines=w.body.split('\n'),fi=lines.indexOf('## Friday'),wi=lines.indexOf('## Weekend Activities')
+  const at=(t:string)=>lines.findIndex(l=>l.includes(t))
+  expect(at('10am')).toBeGreaterThan(fi);expect(at('10am')).toBeLessThan(wi)
+  expect(at('Working sessions')).toBeGreaterThan(fi);expect(at('Working sessions')).toBeLessThan(wi)
+ })
+ it('creates the requested day heading before the weekend heading when missing',()=>{
+  const a=era('# Trip\n## Weekend Activities\n- Stroll\n',req)
+  const lines=a.body.split('\n');expect(lines.indexOf('## Friday')).toBeGreaterThan(-1);expect(lines.indexOf('## Friday')).toBeLessThan(lines.indexOf('## Weekend Activities'))
+  expect(lines.findIndex(l=>l.includes('10am'))).toBeLessThan(lines.indexOf('## Weekend Activities'))
+ })
+ it('pick rows: stay and eat under Friday, do under the weekend heading',()=>{
+  const r=epp('# Trip\n## Friday\n- Arrive\n## Weekend Activities\n- Stroll\n',req,[{kind:'hotel',name:'Harbor Inn'},{kind:'restaurant',name:'Lantern Table'},{kind:'activity',name:'Tide Museum'}])
+  const lines=r.body.split('\n'),wi=lines.indexOf('## Weekend Activities')
+  expect(lines.findIndex(l=>l.includes('Stay: Harbor Inn'))).toBeLessThan(wi)
+  expect(lines.findIndex(l=>l.includes('Do: Tide Museum'))).toBeGreaterThan(wi)
+ })
+})
+import {cleanChips as cc} from '@/lib/files/itinerary-view'
+it('price chips, pipes and address fragments are stripped from reasons',async()=>{
+ expect(cc('The Inn $ | UnitedStates, Miami,1440OceanDr')).toBe('')
+ expect(cc('Harbor Inn has quiet rooms. 1440 Ocean Dr, Miami, FL 33139')).toBe('Harbor Inn has quiet rooms.')
+ expect(cc('Harbor Inn has quiet rooms near the water.')).toBe('Harbor Inn has quiet rooms near the water.')
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://g.test/d',title:'Harbor stays',content:'## Where to stay\nHarbor Inn $ | UnitedStates, Harbor,1440OceanDr\nHarbor Inn has quiet rooms near the old water.\n'} as any,'2026-01-01T00:00:00Z')
+ const v=buildPageView(r),ln=v.entries.find(e=>e.name==='Harbor Inn')!.n
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',line:ln}]},r,'trip to Harbor',async()=>true,v.entries)
+ if('error' in o)throw new Error(o.error)
+ const reason=String((o.candidates[0] as any).reason);expect(reason).not.toMatch(/UnitedStates|\|/);expect(reason).toContain('quiet rooms')
+})

@@ -31,6 +31,9 @@ export function kindNameMismatch(name:string,kind:Kind):boolean{
  if(f)return kind!=='restaurant'
  return false
 }
+const CHIP=/(?:\$\s*\||\|\s*\$|\s\|\s|\bUnitedStates\b|\bUnited States,|\b\d{2,5}\s?[A-Z][A-Za-z]*\s?(?:St|Street|Dr|Drive|Ave|Avenue|Blvd|Boulevard|Rd|Road|Ln|Lane|Way|Pkwy|Hwy)\b\.?|\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b|,\s*\d{5}\b|\$\s*(?=[|,]|$))/
+/** Price chips, pipe-separated page chrome and street/zip fragments are not a reason; the parts that carry them are removed. */
+export const cleanChips=(t:string)=>t.split(/(?<=[.!?])\s+/).filter(p=>!CHIP.test(p)).join(' ').replace(/\s{2,}/g,' ').trim()
 export const stripUi=(t:string)=>t.replace(UI_STRIP,' ').replace(/\s{2,}/g,' ').replace(/^[\s|·•\-–—]+|[\s|·•\-–—]+$/g,'').trim()
 const NEWS_LINE=/\b(?:breaks?\s+ground|announces?|announced|unveils?|set to open|will open|to open in|plans? to|proposed|redevelop\w*|demolish\w*|closes?\s+its|has closed|permanently closed|under construction)\b/i
 /** The venue name is taken from the line by the server: the leading proper-name run before the first dash, colon, comma, parenthesis or sentence end. */
@@ -174,6 +177,7 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   const nxt=entries.find(e=>e.n===line.n+1&&e.source===line.source&&e.name===name)
   const heading=line.end-line.start<40||!/[.!?]$/.test(line.text)
   let quote=cutAtOthers(stripUi(norm(text.slice(line.start,(nxt&&heading&&nxt.end-line.start<=300?nxt.end:line.end)))))
+  quote=cleanChips(quote)||name
   if(quote.length<name.length+30){
    // A bare name is not a reason: add the next sentence of this pick's own section that talks about it.
    const nextVenue=entries.find(e=>e.source===line.source&&e.start>=line.end&&e.name!==name)
@@ -181,12 +185,12 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
    const sect:string[]=[]
    for(const raw of text.slice(line.end,limit).split('\n')){const t=raw.replace(/^[\s#>*•\-\d.)]*/,'').trim();if(!t)continue;if(t.length<40&&!/[.!?]$/.test(t))break;sect.push(t)}
    const own=new RegExp('(?:'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'|^(?:It|Its|This|They|The (?:hotel|restaurant|property|museum|park|venue|bar|cafe))\\b)','i')
-   const after=sect.join(' ').split(/(?<=[.!?])\s+/).map(x=>stripUi(norm(x))).filter(x=>x.split(' ').length>=5&&!NEWS_LINE.test(x)&&own.test(x)&&!mentionsOther(x))
+   const after=sect.join(' ').split(/(?<=[.!?])\s+/).map(x=>stripUi(norm(x))).filter(x=>x.split(' ').length>=5&&!NEWS_LINE.test(x)&&own.test(x)&&!mentionsOther(x)&&cleanChips(x)===x)
    if(after[0]&&(quote+' '+after[0]).length<=300)quote=(quote+' '+after[0]).trim()
   }
   if(quote.length<name.length+30){
    // Nothing of its own to say: state only what the page shows, that it lists this name under this kind.
-   {const sents=(records.pageText(line.source)||'').split(/(?<=[.!?])\s+|\n+/).map(x=>stripUi(norm(x)));const own=sents.find(x=>x.includes(name)&&x!==line.text&&x.split(' ').length>=5&&x.length<=260&&!NEWS_LINE.test(x)&&!mentionsOther(x));if(own)quote=own}
+   {const sents=(records.pageText(line.source)||'').split(/(?<=[.!?])\s+|\n+/).map(x=>stripUi(norm(x)));const own=sents.find(x=>x.includes(name)&&x!==line.text&&x.split(' ').length>=5&&x.length<=260&&!NEWS_LINE.test(x)&&!mentionsOther(x)&&cleanChips(x)===x);if(own)quote=own}
   }
   if(quote.length<name.length+30){
    const title=stripUi(norm(records.pageTitle(line.source)||'')).slice(0,100),label=kind==='hotel'?'a place to stay':kind==='restaurant'?'a place to eat or drink':'something to do'

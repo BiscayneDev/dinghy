@@ -1,5 +1,5 @@
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
-import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensurePlanFromPicks,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
+import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
 import {isHubUrl,sourceScore} from '@/lib/files/itinerary-mentions'
 import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt,destinationTokens} from '@/lib/files/itinerary-view'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
@@ -974,7 +974,7 @@ export async function chatWithTools(
                             {const ag=ensureRequestAgenda((input as {body:string}).body,currentRequest);if(ag.added){await opts.onStage?.('tool',`itinerary:request_agenda_added:${ag.added}`);input={...(input as Record<string,unknown>),body:ag.body}}}
                             {const names=pickNameTexts(selectedCandidates,sourceRecords),pl=selectedCandidates.map((c,x)=>({kind:String((c as {kind?:unknown}).kind),name:names[x]??''})).filter(p=>p.name);const pp=ensurePlanFromPicks((input as {body:string}).body,currentRequest,pl);if(pp.added){await opts.onStage?.('tool',`itinerary:plan_from_picks:${pp.added}`);input={...(input as Record<string,unknown>),body:pp.body}}}
                             // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
-                            if(/\bworking sessions?\b/i.test(currentRequest)&&typeof (input as {body?:unknown}).body==='string'&&!/working sessions?/i.test((input as {body:string}).body)){await opts.onStage?.('tool','itinerary:working_sessions_added');input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\nWorking sessions: venue and duration to confirm.'}}
+                            if(typeof (input as {body?:unknown}).body==='string'){const ws=ensureWorkingSessions((input as {body:string}).body,currentRequest);if(ws.added){await opts.onStage?.('tool','itinerary:working_sessions_added');input={...(input as Record<string,unknown>),body:ws.body}}}
                             if(unsupportedKinds.length&&typeof (input as {body?:unknown}).body==='string'&&!/## Not found/i.test((input as {body:string}).body))input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\n## Not found\nI couldn\'t verify a pick for '+unsupportedKinds.map(k=>k==='activity'?'activities':k==='restaurant'?'restaurants':'hotels').join(' or ')+' from the pages I read. None are recommended here; the agenda above is unchanged.'}
                             {const bb=(input as {body?:unknown}).body;if(typeof bb==='string'){const cl=cleanEmptyHeadings(bb.split('\n')).join('\n');if(cl!==bb)input={...(input as Record<string,unknown>),body:cl}}}
                             const b=(input as {body?:unknown}).body
@@ -1096,4 +1096,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                        }
+                                                                               }
