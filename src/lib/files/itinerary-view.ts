@@ -13,6 +13,8 @@ const SECTION_CTX:[RegExp,Kind][]=[[/\b(?:hotels|hotel (?:suggestions|recommenda
 const sectionKind=(h:string):Kind|undefined=>{if(h.split(/\s+/).length>8)return undefined;for(const [re,k] of SECTION_CTX)if(re.test(h))return k;return undefined}
 const VENUE_LIKE=/\p{Lu}[\p{L}'’]+(?:\s+(?:&\s+)?\p{Lu}[\p{L}'’]+)+/u
 const NAME_CONNECT=new Set(['of','the','de','la','le','les','el','del','du','von','van','and','y','&','da','di','der'])
+const PHRASE_LEAD=new Set('in at from near top best on for with by to of around about visit explore discover enjoy why how what where when our your all any more most new the-best popular famous'.split(' '))
+const SERVICE_WORDS=new Set('transportation transfers transfer tours tour services service rentals rental charter charters packages package deals deal tickets passes pass shuttle shuttles limousine limo booking bookings guide guides cruises cruise excursions excursion private'.split(' '))
 const SKIP_RUN=new Set('sunday monday tuesday wednesday thursday friday saturday weekend brunch dinner lunch breakfast happy hour menu menus reservations reservation tickets admission book check booking open daily'.split(' '))
 const UI_STRIP=/\b(?:save to (?:wish ?list|favorites|trip)|add to (?:wish ?list|trip|favorites)|create your own\b[^.\n]*|book now|view deal|see (?:all|more)\b|read more|sign in|log in|show more|\d[\d,.]*\s+reviews?|\(\d[\d,]*\)|\d(?:\.\d)?\s*(?:\/\s*5|stars?)|photos?\s*\(?\d*\)?|share|wish ?list|read (?:the )?full (?:review|story|article)|save story|save this|readers['’] choice|subscribe\b[^.\n]*|sign up\b[^.\n]*|newsletter|advertisement|sponsored(?: content)?|click here|learn more|get directions|view (?:menu|map|website)|call now|opens? in new (?:tab|window)|\d+\s*min read)\b/gi
 const UI_WORDS=new Set('save share book view see visit explore add create read sign log get compare show open find check'.split(' '))
@@ -31,7 +33,10 @@ const NEWS_LINE=/\b(?:breaks?\s+ground|announces?|announced|unveils?|set to open
 /** The venue name is taken from the line by the server: the leading proper-name run before the first dash, colon, comma, parenthesis or sentence end. */
 export function extractLineName(text:string):string|null{
  if(NEWS_LINE.test(text))return null
- const head=text.split(/\s[-–—]\s|[–—:,(|·.!?]/)[0].trim()
+ for(const seg of text.split(/\s[-–—]\s|[–—:,(|·.!?]/).slice(0,3)){const n=extractFromHead(seg.trim(),text);if(n)return n}
+ return null
+}
+function extractFromHead(head:string,text:string):string|null{
  const words=head.split(/\s+/).filter(Boolean)
  while(words.length>1&&UI_WORDS.has(words[0].toLowerCase()))words.shift()
  if(words.length<1)return null
@@ -51,8 +56,10 @@ export function extractLineName(text:string):string|null{
  const usable=runs.filter(r=>!r.ws.every(w=>SKIP_RUN.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))
  const longLine=text.length>120
  const pool=longLine?usable.filter(r=>r.from===0):usable
- const pick=pool.find(r=>r.ws.length>=2)??pool.find(r=>r.from>0&&r.ws[0].length>=5)??(usable.length===1&&words.length<=3&&usable[0].from===0&&usable[0].ws[0].length>=4?usable[0]:undefined)
- if(!pick)return null
+ const cands=[...pool.filter(r=>r.ws.length>=2),...pool.filter(r=>r.ws.length<2&&r.from>0&&r.ws[0].length>=5),...(usable.length===1&&words.length<=3&&usable[0].from===0&&usable[0].ws[0].length>=4&&usable[0].ws.length<2?usable:[])]
+ for(const pick of cands){const n=validRun(pick);if(n)return n}
+ return null
+ function validRun(pick:{from:number;ws:string[]}):string|null{
  let ws=pick.ws
  // A name continued by "at <Place>" (e.g. "Coral Reef at Key Biscayne") is kept whole, never cut off before the "at".
  {let j=pick.from+ws.length
@@ -61,11 +68,17 @@ export function extractLineName(text:string):string|null{
  if(pick.from>0&&/^\d+[a-z]?$/i.test(words[pick.from-1]))return null
  if(STREET_END.test(ws[ws.length-1].replace(/[^\p{L}]/gu,''))||ws.every(w=>GENERIC_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))return null
  const name=ws.join(' ').replace(/[.\-]+$/,'')
+ // A phrase, not a name: leads with a preposition or ranking word, is an all-caps category heading, or is a service category.
+ if(PHRASE_LEAD.has(ws[0].toLowerCase().replace(/[^\p{L}]/gu,'')))return null
+ const letters=name.replace(/[^\p{L}]/gu,'')
+ if(ws.length>=2&&letters.length>=6&&letters===letters.toUpperCase()&&(ws.length>=4||ws.some(w=>SERVICE_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,'')))))return null
+ if(ws.some(w=>SERVICE_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,'')))&&!/\b(?:museum|gallery|park|garden|hotel|inn|resort|cafe|caf[eé]|restaurant|bar|grill|kitchen)\b/i.test(name))return null
  const nl=name.toLowerCase().replace(/['’]s$/,'')
  if(UI_NAMES.has(nl)||name.split(/\s+/).every(w=>UI_NAMES.has(w.toLowerCase())))return null
  if(!/\s/.test(name)&&/s$/i.test(name)&&GEO_NAMES.includes(nl.replace(/s$/,'')))return null
  if(name.length<4||name.length>80||!nameShapeOk(name)||isNonVenueName(name)||isCategoryPhrase(name.split(/\s+/)))return null
  return name
+ }
 }
 /** A clean, bounded, numbered view of each usable page: headings, list items and sentences. The server keeps the literal span of every line. */
 export function buildPageView(records:SourceRecords,perPage=4500,total=13000,skip?:Set<string>):{text:string;lines:number;pages:number;venueLines:number;entries:ViewLine[]}{
