@@ -158,7 +158,7 @@ it('line selection rejects unknown lines, meals, relabeled kinds, cities, and re
   ['line_unknown',{kind:'hotel',line:9999}],
   ['kind_mismatch',{kind:'activity',line:lineN(v,'Kestrel Lodge')}],
   ['not_verified',{kind:'activity',line:lineN(v,'Maritime Museum')}],
-  ['not_a_venue_name',{kind:'hotel',line:lineN(v,'Harbor City')}]]
+  ['line_unknown',{kind:'hotel',line:lineN(v,'Harbor City')}]]
  for(const [code,cand] of cases){const o=await compileQuoteSelection({candidates:[cand,good]},r,ask,judge(yes),v.entries);expect('error' in o,code).toBe(false);if('error' in o)continue;expect(o.dropped,code).toContain(code);expect(o.candidates).toHaveLength(1)}
  const o=await compileQuoteSelection({candidates:[{kind:'activity',line:lineN(v,'Kestrel Lodge')}]},r,ask,async()=>false,v.entries)
  expect('error' in o&&o.previews).toEqual(['TheKestrelLodge'])
@@ -298,4 +298,28 @@ it('a bare-name reason borrows only its own section, never the next venue',async
  const o=await compileQuoteSelection({candidates:[{kind:'hotel',line:ln}]},r,'trip to Harbor',async()=>true,v.entries)
  expect('error' in o).toBe(false);if('error' in o)return
  const reason=String((o.candidates[0] as any).reason);expect(reason).not.toMatch(/seafood|Lantern/)
+})
+describe('names, sections and reasons',()=>{
+ it('keeps "at <Place>" whole and rejects address fragments and generic labels',()=>{
+  expect(extractLineName('Coral Reef at Key Biscayne 303 Galen Dr rooms from $200')).toBe('Coral Reef at Key Biscayne')
+  expect(extractLineName('InterContinental Hall, 100 Chopin Plaza downtown')).toBe('InterContinental Hall')
+  expect(extractLineName('Visit 100 Chopin Plaza')).toBeNull()
+  expect(extractLineName('Coral Reef')).toBeNull()
+  expect(extractLineName('Galen Dr')).toBeNull()
+ })
+ it('the section heading grounds the kind and an activity pick under a hotel section is rejected',async()=>{
+  const r=new SourceRecords();r.capture('web_fetch',{url:'https://g.test/s',title:'Harbor',content:'## Hotel Suggestions\nPelican Rest at Harbor Bay is a quiet inn near Harbor.\n## Things to do\nTide Museum is open daily near Harbor.\n'} as any,'2026-01-01T00:00:00Z')
+  const v=buildPageView(r),hot=v.entries.find(e=>e.name.startsWith('Pelican'))!,mus=v.entries.find(e=>e.name==='Tide Museum')!
+  expect(hot.ctx).toBe('hotel');expect(mus.ctx).toBe('activity')
+  const o=await compileQuoteSelection({candidates:[{kind:'activity',line:hot.n},{kind:'activity',line:mus.n}]},r,'trip to Harbor',async()=>true,v.entries)
+  expect('error' in o).toBe(false);if('error' in o)return
+  expect(o.dropped).toContain('kind_mismatch');expect(o.candidates).toHaveLength(1)
+ })
+ it('a reason never carries another venue name from the same line',async()=>{
+  const r=new SourceRecords();r.capture('web_fetch',{url:'https://g.test/w',title:'Harbor',content:'Tide Museum has murals near Oasis Gardens Hotel in Harbor.\nOasis Gardens Hotel has rooms.\n'} as any,'2026-01-01T00:00:00Z')
+  const v=buildPageView(r),ln=v.entries.find(e=>e.name==='Tide Museum')!.n
+  const o=await compileQuoteSelection({candidates:[{kind:'activity',line:ln}]},r,'trip to Harbor',async()=>true,v.entries)
+  if('error' in o)throw new Error(o.error)
+  expect(String((o.candidates[0] as any).reason)).not.toContain('Oasis')
+ })
 })
