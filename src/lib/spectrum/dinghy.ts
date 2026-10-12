@@ -1,6 +1,7 @@
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
-import {SELECT_CANDIDATES_TOOL,mentionToolDef,compileMentionSelection,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,pickNameTexts} from '@/lib/files/itinerary-selection'
-import {extractMentions,placeWordsFrom,isHubUrl,menuNote,hintCounts,type Mention} from '@/lib/files/itinerary-mentions'
+import {SELECT_CANDIDATES_TOOL,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,pickNameTexts} from '@/lib/files/itinerary-selection'
+import {isHubUrl} from '@/lib/files/itinerary-mentions'
+import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt} from '@/lib/files/itinerary-view'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
@@ -606,7 +607,8 @@ export async function chatWithTools(
     })
     let selectedCandidates:Record<string,unknown>[]|undefined
     let selectionFailures=0
-    let mentionMenu:Mention[]=[]
+    let viewReady=false
+    const verdicts=new Map<string,boolean>();let verifyCalls=0
     let pickedSoFar:Record<string,unknown>[]=[]
     let unsupportedKinds:string[]=[]
     let menuShown=false
@@ -614,7 +616,7 @@ export async function chatWithTools(
     const defsNow = () => {
         const defs=tools.map((t) => ({type:'function' as const,function:{name:t.name,description:t.description,parameters:t.inputSchema as Record<string,unknown>}}))
         const ids=sourceRecords.pageIds()
-        return itineraryResearch&&ids.length&&!selectedCandidates&&mentionMenu.length ? [...defs,mentionToolDef(mentionMenu.length?mentionMenu.map(m=>m.id):['none'])] : defs
+        return itineraryResearch&&ids.length&&!selectedCandidates&&viewReady ? [...defs,quoteToolDef()] : defs
     }
     let messages: Record<string, unknown>[] = [
         {
@@ -710,7 +712,7 @@ export async function chatWithTools(
                     const id=`required_read_${iteration}_${readsOk}`
                     messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
                     // A thin first page (few venue names) gets up to two more observed pages while time allows.
-                    if(readsOk>=3||extractMentions(sourceRecords,45,requiredKinds(currentRequest),{placeWords:placeWordsFrom(currentRequest)}).length>=25||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
+                    if(readsOk>=3||buildPageView(sourceRecords).lines>=30||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
                     await opts.onStage?.('tool','research:read_more')
                     continue
                 }
@@ -725,13 +727,13 @@ export async function chatWithTools(
             if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
         }
         if(itineraryResearch&&mapResearchRead&&!selectedCandidates&&!menuShown){
-            menuShown=true;mentionMenu=extractMentions(sourceRecords,45,requiredKinds(currentRequest),{placeWords:placeWordsFrom(currentRequest)})
-            await opts.onStage?.('tool',`itinerary:mention_menu:${mentionMenu.length}`);await opts.onStage?.('tool',`itinerary:menu_hints:${hintCounts(mentionMenu)}`)
-            if(mentionMenu.length)messages.push({role:'system',content:menuNote(mentionMenu)})
+            menuShown=true;const view=buildPageView(sourceRecords);viewReady=view.lines>0
+            await opts.onStage?.('tool',`itinerary:page_view:${view.pages}_${view.lines}`)
+            if(viewReady)messages.push({role:'system',content:viewNote(view)})
         }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
-        const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates&&mentionMenu.length>0
+        const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates&&viewReady
         const forceTool = (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
         const offered = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const t0 = Date.now()
@@ -779,7 +781,7 @@ export async function chatWithTools(
             // The gateway may not honor tool_choice; the offered set (one tool) is the real constraint. Bounded nudge, never a text answer.
             if(selecting&&selectionFailures<3){
                 selectionFailures++;await opts.onStage?.('tool','invalid:selection:no_call')
-                messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with candidates copied from the page reads. Do not answer in text.'});continue
+                messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with {kind,name,quote} copied from the page text. Do not answer in text.'});continue
             }
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
             if(contextualResearch&&!recoveryUsed&&(!mapResearchRead||prematureResearchReply(reply))&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=20000)){
@@ -820,7 +822,25 @@ export async function chatWithTools(
                 let parsed:unknown=null
                 try{parsed=JSON.parse(call.function.arguments||'{}')}catch{await opts.onStage?.('tool','invalid:selection:arguments_json')}
                 if(selectedCandidates){messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,already_selected:selectedCandidates.length,next:'Recommendations are already attached. Call create_file now.'})});continue}
-                const picked=compileMentionSelection(parsed,mentionMenu,sourceRecords)
+                const verifyPick=async(name:string,kind:'hotel'|'restaurant'|'activity',quote:string):Promise<boolean>=>{
+                    // One bounded yes/no check on the same routed model; anything but a clear yes rejects the pick.
+                    const vkey=`${kind}|${name}|${quote}`
+                    const cached=verdicts.get(vkey);if(cached!==undefined)return cached
+                    // At most 12 real verification calls per run; beyond that a pick is unverified, never assumed.
+                    if(verifyCalls>=12)return false
+                    verifyCalls++
+                    try{
+                        const ac=new AbortController();const timer=setTimeout(()=>ac.abort(),8000)
+                        const r=await withinTurn(opts.deadlineAt,(signal)=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:AbortSignal.any([signal,ac.signal]),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You verify venue names against page text. Reply with exactly one word.'},{role:'user',content:verifyPrompt(name,kind,quote)}],stream:false,max_tokens:8})}))
+                        if(!r.ok){clearTimeout(timer);return false}
+                        const j=await r.json() as {choices?:{message?:{content?:unknown}}[]}
+                        const c=j.choices?.[0]?.message?.content
+                        clearTimeout(timer)
+                        const ok=typeof c==='string'&&/^\s*yes[.!]?\s*$/i.test(c)
+                        verdicts.set(vkey,ok);return ok
+                    }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
+                }
+                const picked=await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick)
                 if('error' in picked){
                     selectionFailures++;await opts.onStage?.('tool','invalid:selection:'+picked.dropped[0])
                     if(selectionFailures>=3)return finish({reply:'I read the public sources but could not tie any hotel, restaurant or activity name to an exact passage, so no researched recommendations were published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
@@ -837,7 +857,7 @@ export async function chatWithTools(
                         await opts.onStage?.('tool',`itinerary:partial_unverified:${missing.join('_')}`);await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
                         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,unsupported:missing,next:'Recommendations are attached server-side; no pick could be verified for '+missing.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
                     }
-                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with ids from the menu for the missing kind(s) only, kind chosen from the context.'})});continue
+                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,name,quote} copied from the page text for the missing kind(s) only.'})});continue
                 }
                 selectedCandidates=pickedSoFar
                 await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
@@ -996,4 +1016,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                           }
+                            }
