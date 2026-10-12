@@ -833,9 +833,11 @@ export async function chatWithTools(
             const seenIds=new Set(sourceRecords.pageIds()),seenUrls=new Set(foundSources.map(s=>s.url))
             const phrase:Record<string,string>={hotel:'best hotels where to stay in',restaurant:'best restaurants where to eat in',activity:'best things to do attractions in'}
             let reads=0
-            for(const kind of missing.slice(0,2)){
+            const searched:string[]=[]
+            for(const kind of missing){
                 if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<30000)break
                 const q=`${phrase[kind]} ${dest} guide`,sargs=JSON.stringify({query:q})
+                searched.push(kind)
                 if(egressRejection('web_search',sargs,tainted,corpus))continue
                 await assertAccountActive(ctx.userId,ctx.chatGuid)
                 toolCallCount++
@@ -858,7 +860,7 @@ export async function chatWithTools(
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err}
                 }
             }
-            await opts.onStage?.('tool',`itinerary:widen:${missing.map(k=>k[0]).join('')}_${reads}`)
+            await opts.onStage?.('tool',`itinerary:widen:${searched.map(k=>k[0]).join('')}_${reads}`)
             if(!reads)return false
             const view=buildPageView(sourceRecords,4500,13000,seenIds)
             if(!view.lines)return false
@@ -1084,4 +1086,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                            }
+}
