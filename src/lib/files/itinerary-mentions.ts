@@ -51,6 +51,10 @@ export function sentenceAround(text:string,start:number,end:number):string {
  let b=end,stops=0;while(b<text.length&&b-end<260){if(/[\n.!?]/.test(text[b])){if(++stops>=2||text[b]==='\n')break}b++}
  return text.slice(a,b).replace(/\s+/g,' ').trim()
 }
+
+const GEO=new Set(('united states,usa,america,united kingdom,england,scotland,wales,ireland,canada,mexico,brazil,argentina,chile,peru,colombia,france,germany,spain,portugal,italy,greece,turkey,netherlands,belgium,switzerland,austria,sweden,norway,denmark,finland,poland,czechia,hungary,croatia,iceland,morocco,egypt,south africa,kenya,israel,uae,dubai,india,china,japan,korea,thailand,vietnam,indonesia,singapore,malaysia,philippines,australia,new zealand,cuba,jamaica,bahamas,caribbean,europe,asia,africa,north america,south america,latin america,'+'alabama,alaska,arizona,arkansas,california,colorado,connecticut,delaware,florida,georgia,hawaii,idaho,illinois,indiana,iowa,kansas,kentucky,louisiana,maine,maryland,massachusetts,michigan,minnesota,mississippi,missouri,montana,nebraska,nevada,new hampshire,new jersey,new mexico,new york,north carolina,north dakota,ohio,oklahoma,oregon,pennsylvania,rhode island,south carolina,south dakota,tennessee,texas,utah,vermont,virginia,washington,west virginia,wisconsin,wyoming,'+'new york city,los angeles,san francisco,san diego,las vegas,chicago,boston,seattle,portland,denver,austin,dallas,houston,atlanta,miami,orlando,nashville,new orleans,philadelphia,washington dc,london,paris,rome,madrid,barcelona,berlin,amsterdam,lisbon,vienna,prague,tokyo,kyoto,bangkok,sydney,toronto,vancouver,montreal,mexico city,key west,palm beach,fort lauderdale,miami beach,south beach').split(','))
+const BRAND=/\.(?:com|net|org|io|co)\b|\b(?:booking|expedia|tripadvisor|airbnb|trivago|yelp|opentable|agoda|priceline|orbitz|hotwire|viator|getyourguide|lonely planet|wikipedia|google|facebook|reddit|hotels)\b/i
+export const isNonVenueName=(t:string):boolean=>{const l=t.toLowerCase().replace(/[^\p{L} .]/gu,'').trim();return BRAND.test(t)||GEO.has(l)||l.split(' ').every(w=>GEO.has(w))}
 const PLACE_SUFFIX=new Set(['district','neighborhood','neighbourhood','quarter','downtown','county','city','area','village'])
 export const placeWordsFrom=(request:string):Set<string>=>new Set((request.match(/\p{Lu}[\p{L}'’-]+/gu)||[]).map(w=>w.toLowerCase()))
 export type ExtractOpts={placeWords?:Set<string>;evidence?:boolean}
@@ -117,6 +121,7 @@ export function extractMentions(records:SourceRecords,max=45,need:Kind[]=[],opts
   const ws=m.text.toLowerCase().split(/[^\p{L}'’]+/u).filter(Boolean)
   if(place&&ws.length&&ws.every(w=>place.has(w)))return false
   if(PLACE_SUFFIX.has(ws[ws.length-1]??''))return false
+  if(isNonVenueName(m.text))return false
   if(!useEvidence)return true
   return EVIDENCE.test(sentenceAround(records.pageText(m.source)!,m.start,m.end))
  }).sort((a,b)=>(Number(b.multi)-Number(a.multi))||b.count-a.count||a.start-b.start)
@@ -129,7 +134,7 @@ export function extractMentions(records:SourceRecords,max=45,need:Kind[]=[],opts
  return ranked.map(({m,hint},k)=>{const t=records.pageText(m.source)!;const ctx=sentenceAround(t,m.start,m.end).slice(0,230);return {id:'m'+(k+1),source:m.source,start:m.start,end:m.end,text:m.text,context:ctx,...(hint?{hint}:{})}})
 }
 export function menuNote(menu:Mention[]):string {
- return 'Venue-name candidates found by the server in the page text, each with the sentence it appears in. Pick ONLY from these ids, and only when the sentence shows the entry is an actual hotel, restaurant or attraction (skip cities, neighborhoods, site labels and generic headings). Each line: id | exact text | sentence | wording hint (a hint only; decide kind from the sentence).\n'+menu.map(m=>`${m.id} | ${m.text} | ${m.context} | ${m.hint??'none'}`).join('\n')
+ return 'Venue-name candidates found by the server in the page text, each with the sentence it appears in. Pick ONLY from these ids, and only when the sentence shows the entry is an actual hotel, restaurant or attraction (skip cities, countries, neighborhoods, site names and generic headings). The kind you choose must match the hint on that line; entries with hint none cannot be picked. Each line: id | exact text | sentence | wording hint (a hint only; decide kind from the sentence).\n'+menu.map(m=>`${m.id} | ${m.text} | ${m.context} | ${m.hint??'none'}`).join('\n')
 }
 
 export function hintCounts(menu:Mention[]):string {
