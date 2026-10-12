@@ -1,5 +1,5 @@
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
-import {SELECT_CANDIDATES_TOOL,mentionToolDef,compileMentionSelection,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract} from '@/lib/files/itinerary-selection'
+import {SELECT_CANDIDATES_TOOL,mentionToolDef,compileMentionSelection,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,pickNameTexts} from '@/lib/files/itinerary-selection'
 import {extractMentions,menuNote,hintCounts,type Mention} from '@/lib/files/itinerary-mentions'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
@@ -841,7 +841,7 @@ export async function chatWithTools(
                 }
                 selectedCandidates=pickedSoFar
                 await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
-                messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,next:'Recommendations are attached server-side. Now call create_file with title, body (agenda and day headings only), format and kind itinerary. Do not include candidates, stay, options or sources blocks.'})});continue
+                messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,next:'Recommendations are attached server-side. Now call create_file with title, body (agenda and day headings only), format and kind itinerary. Do not include candidates, stay, options or sources blocks. Do not name any hotel, restaurant or attraction other than the selected ones.'})});continue
             }
             const tool = tools.find((t) => t.name === call.function.name)
             let content: string
@@ -873,6 +873,7 @@ export async function chatWithTools(
                         else if(!selectedCandidates||!input||typeof input!=='object'){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Recommendations are not selected yet. No file was created.'})});continue}
                         else{
                             input=injectCandidates(input,selectedCandidates)
+                            if(typeof (input as {body?:unknown}).body==='string'){const n=neutralizeUnpickedVenues((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords),currentRequest);if(n.removed){await opts.onStage?.('tool',`itinerary:body_venues_removed:${n.removed}`);input={...(input as Record<string,unknown>),body:n.body}}}
                             // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
                             if(/\bworking sessions?\b/i.test(currentRequest)&&typeof (input as {body?:unknown}).body==='string'&&!/working sessions?/i.test((input as {body:string}).body)){await opts.onStage?.('tool','itinerary:working_sessions_added');input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\nWorking sessions: venue and duration to confirm.'}}
                             if(unsupportedKinds.length&&typeof (input as {body?:unknown}).body==='string'&&!/## Not found/i.test((input as {body:string}).body))input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\n## Not found\nI couldn\'t verify a pick for '+unsupportedKinds.map(k=>k==='activity'?'activities':k==='restaurant'?'restaurants':'hotels').join(' or ')+' from the pages I read. None are recommended here; the agenda above is unchanged.'}
@@ -995,4 +996,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+    }
