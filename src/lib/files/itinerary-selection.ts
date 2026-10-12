@@ -55,7 +55,7 @@ export function mentionToolDef(menuIds:string[]){
 export function compileMentionSelection(input:unknown,menu:Mention[],records:SourceRecords):Selection|{error:string;dropped:string[]}{
  const list=input&&typeof input==='object'?(input as {candidates?:unknown}).candidates:undefined
  if(!Array.isArray(list)||!list.length)return {error:'Supply candidates: at least one {kind,id,reason,catch} using ids from the menu.',dropped:['empty']}
- const byId=new Map(menu.map(m=>[m.id,m])),seen=new Set<string>(),kept:Record<string,unknown>[]=[],dropped:string[]=[],counts={hotel:0,restaurant:0,activity:0}
+ const pickedIds=new Set(list.flatMap((x:any)=>x&&typeof x.id==='string'?[x.id]:[])),byId=new Map(menu.map(m=>[m.id,m])),seen=new Set<string>(),kept:Record<string,unknown>[]=[],dropped:string[]=[],counts={hotel:0,restaurant:0,activity:0}
  for(const raw of list.slice(0,12)){
   if(!raw||typeof raw!=='object'||Array.isArray(raw)){dropped.push('candidate_type');continue}
   const r=raw as Record<string,unknown>,m=typeof r.id==='string'?byId.get(r.id):undefined
@@ -63,13 +63,15 @@ export function compileMentionSelection(input:unknown,menu:Mention[],records:Sou
   if(seen.has(m.id)){dropped.push('duplicate');continue}
   const kind=r.kind
   if(kind!=='hotel'&&kind!=='restaurant'&&kind!=='activity'){dropped.push('kind');continue}
+  // Soft kind check: a strong wording hint for another kind is a veto only while the menu still has unpicked mentions hinted as the requested kind.
+  if(m.hint&&m.hint!==kind&&menu.some(x=>x.hint===kind&&!pickedIds.has(x.id))){dropped.push('kind_conflict');continue}
   const c:Record<string,unknown>={kind,name:{source:m.source,field:'content',start:m.start,end:m.end},reason:typeof r.reason==='string'?r.reason.slice(0,300):'unknown',catch:typeof r.catch==='string'?r.catch.slice(0,300):'unknown'}
   const out=compileItineraryCandidates({body:'x',itinerary_candidates:[c]},records)
   if('error' in out){dropped.push(itineraryCandidateErrorCode(out.error));continue}
   if(counts[kind]>=GROUP_LIMITS[kind]){dropped.push('group_limit');continue}
   counts[kind]++;seen.add(m.id);kept.push(c)
  }
- if(!kept.length)return {error:'No valid candidate. Use ids exactly as listed in the menu, with kind chosen from the context. Hints are advisory; decide from the context. Dropped: '+[...new Set(dropped)].join(', '),dropped}
+ if(!kept.length)return {error:'No valid candidate. Use ids exactly as listed in the menu, with kind chosen from the context; when a menu hint names another kind, choose a hinted mention of the requested kind instead. Dropped: '+[...new Set(dropped)].join(', '),dropped}
  return {candidates:kept,dropped}
 }
 
@@ -97,4 +99,28 @@ export function relaxedContract<T extends {request:string}|null>(c:T,unsupported
  if(unsupported.includes('restaurant'))r=r.replace(/\brestaurants?\b/gi,'meals')
  if(unsupported.includes('activity'))r=r.replace(/\b(?:activities|things to do|fun things)\b/gi,'plans')
  return {...c,request:r+' recommendations'}
+   }
+
+import {extractMentions,hintFor} from './itinerary-mentions'
+import {SourceRecords as SR} from './source-records'
+const normName=(t:string)=>t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()
+/** The server cards are the only venue recommendations. Freehand body lines that name another venue-like entity
+ * (own-name wording such as Hotel/Inn/Cafe/Museum) not among the picks and not in the user's own request are removed. */
+export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:string):{body:string;removed:number}{
+ const tmp=new SR();tmp.capture('web_fetch',{url:'https://body.invalid/agenda',title:null,content:body},'1970-01-01T00:00:00Z')
+ const picks=pickNames.map(normName).filter(Boolean),req=normName(request)
+ const bad=new Set<number>()
+ const lines=body.split('\n'),starts:number[]=[];let pos=0;for(const l of lines){starts.push(pos);pos+=l.length+1}
+ for(const m of extractMentions(tmp,200,[])){
+  if(!m.text.includes(' ')||!hintFor(m.text,''))continue
+  const n=normName(m.text)
+  if(!n||req.includes(n)||picks.some(p=>p.includes(n)||n.includes(p)))continue
+  let li=0;while(li+1<lines.length&&starts[li+1]<=m.start)li++
+  if(!/^\s*#/.test(lines[li]))bad.add(li)
+ }
+ if(!bad.size)return {body,removed:0}
+ return {body:lines.filter((_,i)=>!bad.has(i)).join('\n'),removed:bad.size}
+}
+export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[]{
+ return picks.flatMap((c:any)=>{const t=records.pageText(c.name.source);return t?[t.slice(c.name.start,c.name.end)]:[]})
    }
