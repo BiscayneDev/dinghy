@@ -609,6 +609,13 @@ export async function chatWithTools(
     let selectionFailures=0
     let viewReady=false,viewEntries:import('@/lib/files/itinerary-view').ViewLine[]=[]
     const verdicts=new Map<string,boolean>();let verifyCalls=0
+    // Verified picks persist across attempts; when the retry budget ends they publish as an honest partial, never a pass.
+    const enablePartial=async():Promise<string[]>=>{
+        const missing=missingKinds(pickedSoFar,requiredKinds(currentRequest))
+        selectedCandidates=pickedSoFar;unsupportedKinds=missing
+        await opts.onStage?.('tool',`itinerary:partial_unverified:${missing.join('_')||'none'}`);await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
+        return missing
+    }
     let pickedSoFar:Record<string,unknown>[]=[]
     let unsupportedKinds:string[]=[]
     let menuShown=false
@@ -779,6 +786,10 @@ export async function chatWithTools(
 
         if (choice?.finish_reason !== 'tool_calls' || calls.length === 0) {
             // The gateway may not honor tool_choice; the offered set (one tool) is the real constraint. Bounded nudge, never a text answer.
+            if(selecting&&selectionFailures>=3&&pickedSoFar.length){
+                const miss=await enablePartial()
+                messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Recommendations are attached server-side; no pick could be verified for '+(miss.join(' or ')||'further kinds')+' from the pages read. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'});continue
+            }
             if(selecting&&selectionFailures<3){
                 selectionFailures++;await opts.onStage?.('tool','invalid:selection:no_call')
                 messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with {kind,name,line} using the numbered page lines. Do not answer in text.'});continue
@@ -841,9 +852,17 @@ export async function chatWithTools(
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
                 }
                 const picked=await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries)
+                {const acc={hotel:0,restaurant:0,activity:0};for(const c of ('candidates' in picked?picked.candidates:[]) as {kind:'hotel'|'restaurant'|'activity'}[])acc[c.kind]++
+                const rej:Record<string,number>={};for(const d of picked.dropped)rej[d]=(rej[d]??0)+1
+                await opts.onStage?.('tool',`itinerary:accepted:h${acc.hotel}_r${acc.restaurant}_a${acc.activity}`)
+                await opts.onStage?.('tool',('itinerary:rejected:'+(Object.entries(rej).map(([k,v])=>`${k}-${v}`).join(',')||'none')).slice(0,80))}
                 if('error' in picked){
                     selectionFailures++;await opts.onStage?.('tool','invalid:selection:'+picked.dropped[0])
-                    if(selectionFailures>=3)return finish({reply:'I read the public sources but could not tie any hotel, restaurant or activity name to an exact passage, so no researched recommendations were published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
+                    if(selectionFailures>=3){
+                        if(!pickedSoFar.length)return finish({reply:'I read the public sources but could not tie any hotel, restaurant or activity name to an exact passage, so no researched recommendations were published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
+                        const miss=await enablePartial()
+                        messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates!.length,unsupported:miss,next:'Recommendations are attached server-side; no pick could be verified for '+miss.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
+                    }
                     messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:picked.error})});continue
                 }
                 pickedSoFar=mergePicks(pickedSoFar,picked.candidates)
@@ -853,8 +872,7 @@ export async function chatWithTools(
                     if(selectionFailures>=3){
                         if(!pickedSoFar.length)return finish({reply:'I read the public sources but couldn\'t verify a '+missing.join(' or ')+' pick from them, so no researched itinerary was published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
                         // Partial, unverified fallback: publish what was verified; missing kinds get a truthful note, never invented rows. Never a full pass.
-                        selectedCandidates=pickedSoFar;unsupportedKinds=missing
-                        await opts.onStage?.('tool',`itinerary:partial_unverified:${missing.join('_')}`);await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
+                        await enablePartial()
                         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,unsupported:missing,next:'Recommendations are attached server-side; no pick could be verified for '+missing.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
                     }
                     messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,name,line} from the numbered page lines for the missing kind(s) only.'})});continue
@@ -1016,4 +1034,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                              }
+        }
