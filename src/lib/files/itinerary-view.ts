@@ -1,6 +1,6 @@
 import type {SourceRecords} from './source-records'
 import {compileItineraryCandidates,itineraryCandidateErrorCode} from './itinerary-candidates'
-import {isHubUrl,isNonVenueName,isCategoryPhrase,placeWordsFrom,GEO_NAMES} from './itinerary-mentions'
+import {isHubUrl,isNonVenueName,isCategoryPhrase,placeWordsFrom,GEO_NAMES,extractMentions} from './itinerary-mentions'
 import {SELECT_CANDIDATES_TOOL} from './itinerary-selection'
 type Kind='hotel'|'restaurant'|'activity'
 const GROUP_LIMITS={hotel:6,restaurant:5,activity:5}
@@ -81,8 +81,10 @@ function extractFromHead(head:string,text:string):string|null{
  if(AREA_WORDS.test(name)&&!OWN_WORD.test(name))return null
  // A phrase, not a name: leads with a preposition or ranking word, is an all-caps category heading, or is a service category.
  if(PHRASE_LEAD.has(ws[0].toLowerCase().replace(/[^\p{L}]/gu,'')))return null
+ // Mixed all-caps heading fragments without a venue noun are not complete names.
+ if(ws.length>=2&&ws.some(w=>/^\p{Lu}{4,}$/u.test(w))&&!OWN_WORD.test(name))return null
  const letters=name.replace(/[^\p{L}]/gu,'')
- if(ws.length>=2&&letters.length>=6&&letters===letters.toUpperCase()&&(ws.length>=4||ws.some(w=>SERVICE_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,'')))))return null
+ if(ws.length>=2&&letters.length>=6&&letters===letters.toUpperCase()&&!OWN_WORD.test(name)&&(ws.length>=4||ws.some(w=>SERVICE_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,'')))))return null
  if(ws.some(w=>SERVICE_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,'')))&&!/\b(?:museum|gallery|park|garden|hotel|inn|resort|cafe|caf[eé]|restaurant|bar|grill|kitchen)\b/i.test(name))return null
  const nl=name.toLowerCase().replace(/['’]s$/,'')
  if(UI_NAMES.has(nl)||name.split(/\s+/).every(w=>UI_NAMES.has(w.toLowerCase())))return null
@@ -158,6 +160,7 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
  const list=input&&typeof input==='object'?(input as {candidates?:unknown}).candidates:undefined
  if(!Array.isArray(list)||!list.length)return {error:'Supply candidates: at least one {kind,line}, with line numbers from the candidate lines.',dropped:['empty'],previews:[]}
  const place=placeWordsFrom(request),dropped:string[]=[],previews:string[]=[],pending:{kind:Kind;c:Record<string,unknown>;name:string;quote:string}[]=[],seen=new Set<string>(already.map(normKey)),dest=destinationTokens(request)
+ const mentions=extractMentions(records,500,[],{evidence:false})
  const reject=(code:string,name:string)=>{dropped.push(code);if(name)previews.push(preview(name))}
  for(const raw of list.slice(0,12)){
   if(!raw||typeof raw!=='object'||Array.isArray(raw)){dropped.push('candidate_type');continue}
@@ -170,31 +173,30 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   const name=line.name,text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
   if(off<0){reject('name_not_on_line',name);continue}
   if(line.ctx&&line.ctx!==kind){reject('kind_mismatch',name);continue}
-  // The reason is this pick's own sentence only: cut before any other venue's name, never borrow another venue's text.
-  const others=entries.filter(e=>e.source===line.source&&e.name!==name&&!e.name.includes(name)&&!name.includes(e.name)).map(e=>e.name)
-  const cutAtOthers=(t:string)=>{let c=t.length;for(const o of others){const k=t.indexOf(o);if(k>0&&k<c)c=k}return t.slice(0,c).replace(/[\s,;:\-–—(]+$/,'').trim()}
-  const mentionsOther=(t:string)=>others.some(o=>t.includes(o))
-  const nxt=entries.find(e=>e.n===line.n+1&&e.source===line.source&&e.name===name)
-  const heading=line.end-line.start<40||!/[.!?]$/.test(line.text)
-  let quote=cutAtOthers(stripUi(norm(text.slice(line.start,(nxt&&heading&&nxt.end-line.start<=300?nxt.end:line.end)))))
-  quote=cleanChips(quote)||name
-  if(quote.length<name.length+30){
-   // A bare name is not a reason: add the next sentence of this pick's own section that talks about it.
+  // Verify against the source section, not a cleaned reason or an invented listing fallback.
+  // Include prose following a heading so a neighborhood cannot become an attraction by losing its context.
+  const nextHeading=/\n\s*#{1,3}\s/.exec(text.slice(line.end))
+  const sectionEnd=Math.min(line.end+700,nextHeading?line.end+nextHeading.index:Infinity)
+  const evidence=norm(text.slice(line.start,sectionEnd))
+  const others=[...entries.filter(e=>e.source===line.source).map(e=>e.name),...mentions.filter(m=>m.source===line.source).map(m=>m.text)]
+   .filter(n=>n!==name&&!n.includes(name)&&!name.includes(n)&&!STREET_END.test(n.split(/\s+/).pop()||'')&&!n.split(/\s+/).every(w=>SKIP_RUN.has(w.toLowerCase())))
+  const mentionsOther=(t:string)=>others.some(o=>t.toLowerCase().includes(o.toLowerCase()))
+  const unsafeReason=(t:string)=>mentionsOther(t)||CHIP.test(t)||/[$€£¥]|\b(?:USD|EUR|GBP)\s*\d|\b\d+(?:[.,]\d+)?\s*(?:dollars?|euros?|pounds?)\b|\b(?:I|we|our|ours|us|my|mine)\b/i.test(t)
+  const sentences=(t:string)=>t.split(/(?<=[.!?])\s+|\n+/).map(x=>stripUi(norm(x)))
+  const own=new RegExp('(?:'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'|^(?:It|Its|This|They|The (?:hotel|restaurant|property|museum|park|venue|bar|cafe))\\b)','i')
+  const usable=(x:string)=>x.split(' ').length>=5&&x.length<=260&&!NEWS_LINE.test(x)&&own.test(x)&&!unsafeReason(x)
+  // Drop whole unsafe sentences. Cutting them before another venue leaves misleading fragments.
+  let quote=sentences(text.slice(line.start,line.end)).filter(usable).join(' ')
+  if(!quote){
    const nextVenue=entries.find(e=>e.source===line.source&&e.start>=line.end&&e.name!==name)
-   const limit=Math.min(line.end+700,nextVenue?nextVenue.start:Infinity)
-   const sect:string[]=[]
-   for(const raw of text.slice(line.end,limit).split('\n')){const t=raw.replace(/^[\s#>*•\-\d.)]*/,'').trim();if(!t)continue;if(t.length<40&&!/[.!?]$/.test(t))break;sect.push(t)}
-   const own=new RegExp('(?:'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'|^(?:It|Its|This|They|The (?:hotel|restaurant|property|museum|park|venue|bar|cafe))\\b)','i')
-   const after=sect.join(' ').split(/(?<=[.!?])\s+/).map(x=>stripUi(norm(x))).filter(x=>x.split(' ').length>=5&&!NEWS_LINE.test(x)&&own.test(x)&&!mentionsOther(x)&&cleanChips(x)===x)
-   if(after[0]&&(quote+' '+after[0]).length<=300)quote=(quote+' '+after[0]).trim()
+   const limit=Math.min(sectionEnd,nextVenue?nextVenue.start:Infinity)
+   quote=sentences(text.slice(line.end,limit)).find(usable)||''
   }
-  if(quote.length<name.length+30){
-   // Nothing of its own to say: state only what the page shows, that it lists this name under this kind.
-   {const sents=(records.pageText(line.source)||'').split(/(?<=[.!?])\s+|\n+/).map(x=>stripUi(norm(x)));const own=sents.find(x=>x.includes(name)&&x!==line.text&&x.split(' ').length>=5&&x.length<=260&&!NEWS_LINE.test(x)&&!mentionsOther(x)&&cleanChips(x)===x);if(own)quote=own}
-  }
-  if(quote.length<name.length+30){
+  if(!quote)quote=sentences(text).find(x=>x.includes(name)&&usable(x))||''
+  if(!quote){
    const title=stripUi(norm(records.pageTitle(line.source)||'')).slice(0,100),label=kind==='hotel'?'a place to stay':kind==='restaurant'?'a place to eat or drink':'something to do'
-   quote=`${quote||name}. Listed as ${label}${title?' on "'+title+'"':' on the source page'}.`.slice(0,300)
+   // The page title is optional display text, never evidence or a way to reintroduce unsafe content.
+   quote=`${name}. Listed as ${label}${title&&!unsafeReason(title)?' on "'+title+'"':' on the source page'}.`.slice(0,300)
   }
   if(kindNameMismatch(name,kind)){reject('kind_mismatch',name);continue}
   if(!nameShapeOk(name)){reject('name_shape',name);continue}
@@ -211,7 +213,7 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   const c:Record<string,unknown>={kind,name:{source:line.source,field:'content',start,end:start+name.length},reason:quote.slice(0,300),catch:'Hours, prices and availability unverified'}
   const out=compileItineraryCandidates({body:'x',itinerary_candidates:[c]},records)
   if('error' in out){reject(itineraryCandidateErrorCode(out.error),name);continue}
-  pending.push({kind,c,name,quote})
+  pending.push({kind,c,name,quote:evidence})
  }
  const verdicts=await Promise.all(pending.map(p=>verify(p.name,p.kind,p.quote).catch(()=>false)))
  const kept:Record<string,unknown>[]=[],counts={hotel:0,restaurant:0,activity:0}
@@ -222,5 +224,5 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
 export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):string{
  const what=kind==='hotel'?'a hotel or lodging property':kind==='restaurant'?'a restaurant, cafe or bar':'an attraction, museum, tour, venue or activity provider'
  const wrong=kind==='hotel'?'a restaurant, attraction or other non-lodging place':kind==='restaurant'?'a hotel, attraction or other non-food place':'a hotel or a restaurant'
- return `Name: "${name}"\nLine from the page: "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the line shows it is an operating ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} that a traveler can use now. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, or if you are unsure. Answer with exactly one word: yes or no.`
+ return `Name: "${name}"\nSource context (including surrounding prose): "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the source context shows the complete name identifies an operating ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} that a traveler can use now. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, a chopped or incomplete heading fragment, or if you are unsure. A heading alone is not evidence; use its surrounding prose. Answer with exactly one word: yes or no.`
 }
