@@ -159,7 +159,7 @@ it('line selection: the server resolves the line from the literal name, whatever
  expect('error' in noLine).toBe(false)
 })
 it('line selection rejects paraphrased names, unknown lines, meals, relabeled kinds, cities',async()=>{
- const r=guide(),v=buildPageView(r),yes={'Kestrel Lodge':'hotel','Rook & Thistle':'restaurant'},good={kind:'hotel',name:'Kestrel Lodge',line:lineN(v,'Kestrel Lodge')}
+ const r=guide(),v=buildPageView(r),yes={'Kestrel Lodge':'hotel','Rook & Thistle':'restaurant'},good={kind:'restaurant',name:'Rook & Thistle',line:lineN(v,'Rook & Thistle')}
  const cases:[string,any][]=[
   ['name_not_on_line',{kind:'hotel',name:'Kestrel Lodging House',line:lineN(v,'Kestrel Lodge')}],
   ['line_unknown',{kind:'hotel',name:'Nowhere Tower',line:9999}],
@@ -176,4 +176,73 @@ it('line selection with nothing verifiable is an error so the honest partial pat
 it('empty headings left after stripping are dropped, headings with content stay',()=>{
  const out=neutralizeUnpickedVenues('# Trip\n## Recommendations for the Day\n- Dinner at Dilmar Beach Club\n## Day 1\n- Check in at your hotel\n## Weekend','x'.split(','),'Plan Friday').body
  expect(out).not.toContain('Recommendations');expect(out).not.toContain('## Weekend');expect(out).toContain('## Day 1');expect(out).toContain('your hotel')
+})
+import {nameShapeOk,destinationTokens,verifyPrompt} from '@/lib/files/itinerary-view'
+import {sourceScore} from '@/lib/files/itinerary-mentions'
+it('decoder handles double-encoded and semicolon-less numeric entities',()=>{
+ expect(decodeEntities('Opens Q&amp;#58; 121 rooms')).toBe('Opens Q: 121 rooms')
+ expect(decodeEntities('A&amp;amp;#58; B')).toBe('A: B');expect(decodeEntities('A&#58 B')).toBe('A: B')
+})
+it('name shape gate rejects headlines and clauses, keeps proper-name runs',()=>{
+ for(const bad of ['The Orchid Tower hotel breaks ground on Quay Key: 121 rooms','Nox opens next week','Harbor hotel announces 40 rooms','Kestrel Lodge – Harbor City','New hotel set to open'])expect(nameShapeOk(bad),bad).toBe(false)
+ for(const ok of ['Kestrel Lodge','Rook & Thistle','The Orchid Tower','Maison de la Mer','Pier Kayak Tours'])expect(nameShapeOk(ok),ok).toBe(true)
+})
+it('destination tokens come from the request; picks off-destination or headline-like are rejected, duplicates deduped',async()=>{
+ expect(destinationTokens('Plan Friday in Harbor City with a hotel')).toEqual(['harbor'])
+ const r=cap('https://guide.test/mix','Best stays in Harbor City guide.\nThe Kestrel Lodge has rooms from $150 per night in Harbor City.\nThe Orchid Tower hotel breaks ground on Quay Key: 121 rooms.\nSalt Cove Inn offers rooms from $90 per night near Palm Reach.\nKestrel Lodge also offers breakfast and rooms.')
+ const v=buildPageView(r),yes:Record<string,string>={'Kestrel Lodge':'hotel','Orchid Tower':'hotel','Salt Cove Inn':'hotel'}
+ const o=await compileQuoteSelection({candidates:[
+  {kind:'hotel',name:'Kestrel Lodge'},{kind:'hotel',name:'Kestrel Lodge'},{kind:'hotel',name:'The Orchid Tower hotel breaks ground on Quay Key: 121 rooms'},{kind:'hotel',name:'Salt Cove Inn'}]},r,'Plan Friday in Harbor City with a hotel',judge(yes),v.entries)
+ expect('error' in o).toBe(false);if('error' in o)return
+ expect(o.candidates).toHaveLength(1)
+ expect(o.dropped).toContain('duplicate');expect(o.dropped).toContain('name_shape')
+ const again=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge'}]},r,'Plan Friday in Harbor City with a hotel',judge(yes),v.entries,['Kestrel Lodge'])
+ expect('error' in again&&again.dropped).toEqual(['duplicate'])
+})
+it('off-destination: a line about another town is rejected unless the page is about the destination',async()=>{
+ const r=cap('https://news.test/story','Salt Cove Inn offers rooms from $90 per night near Palm Reach.\nTidal Lodge has rooms from $100 per night near Palm Reach.')
+ const v=buildPageView(r),o=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Salt Cove Inn'}]},r,'Plan Friday in Harbor City with a hotel',async()=>true,v.entries)
+ expect('error' in o&&o.dropped).toEqual(['off_destination'])
+})
+it('verify prompt carries name, line, destination, and says no to news, openings, closures',()=>{
+ const p=verifyPrompt('Kestrel Lodge','hotel','The Kestrel Lodge has rooms.','harbor')
+ expect(p).toContain('Kestrel Lodge');expect(p).toContain('harbor');expect(p).toMatch(/future openings, closures, demolitions/);expect(p).toMatch(/currently open/)
+})
+it('source score: guides beat news stories; news signatures score low',()=>{
+ expect(sourceScore('https://site.test/best-hotels-in-harbor-city-guide','Best hotels in Harbor City')).toBeGreaterThan(0)
+ expect(sourceScore('https://site.test/2026/10/tower-breaks-ground-on-quay-key','Tower breaks ground')).toBeLessThanOrEqual(-3)
+})
+it('news-style pages with few venue lines are dropped from the view when a list page exists',()=>{
+ const r=cap('https://guide.test/list','1. The Gull Hotel - rooms\n2. Lantern Inn - rooms\n3. Salt Vine Grill - menu\n4. Blue Door Cafe - brunch\n5. Maritime Museum - exhibits\n6. Pier Kayak Tours - paddle\n')
+ r.capture('web_fetch',{url:'https://news.test/story',title:'t',content:'The Orchid Tower hotel breaks ground downtown this week. Officials said the project adds jobs.\nAnother paragraph about funding.'},'2026-01-01T00:00:00Z')
+ const v=buildPageView(r);expect(v.text).toContain('Gull Hotel');expect(v.text).not.toContain('Orchid')
+})
+it('partial body consistency: references to a recommended kind that could not be verified are removed, plain agenda stays',()=>{
+ const body='## Friday\n- 10:00 Office visit with the team\n- Working lunch at the recommended restaurant\n- Please see including:\n## Notes\n- Wrap up at 5'
+ const out=neutralizeUnpickedVenues(body,[],'Plan Friday in Harbor City with office visit',['restaurant']).body
+ expect(out).toContain('10:00 Office visit with the team');expect(out).toContain('Wrap up at 5');expect(out).not.toMatch(/recommended restaurant/);expect(out).not.toMatch(/including:/)
+})
+import {ensureRequestAgenda} from '@/lib/files/itinerary-selection'
+it('destination comes from the place phrase, not meta words; known cities count; no place means no check',()=>{
+ const req='Synthetic Self-Test PDF itinerary for Friday in Harbor City: office visit at 10am, hotel near Quay District. Title: Founders Plan'
+ const t=destinationTokens(req)
+ expect(t).toEqual(expect.arrayContaining(['harbor','quay']))
+ for(const meta of ['synthetic','self','test','pdf','itinerary','title','founders','plan','friday'])expect(t).not.toContain(meta)
+ expect(destinationTokens('Plan a weekend itinerary with a hotel. Synthetic PDF.')).toEqual([])
+ expect(destinationTokens('Weekend plan, Miami hotels and food')).toContain('miami')
+})
+it('destination must appear: meta-word tokens never pass the location check',async()=>{
+ const r=cap('https://guide.test/m','Synthetic Test Tower is a hotel with rooms from $90 per night.\nKestrel Lodge has rooms from $150 per night in Harbor City.')
+ const v=buildPageView(r),req='Synthetic Self-Test PDF itinerary in Harbor City with a hotel'
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Synthetic Test Tower'},{kind:'hotel',name:'Kestrel Lodge'}]},r,req,async()=>true,v.entries)
+ expect('error' in o).toBe(false);if('error' in o)return
+ expect(o.candidates).toHaveLength(1);expect(o.dropped).toContain('off_destination')
+})
+it('user-supplied timed agenda items are restated from the request when the body drops them',()=>{
+ const req='Make an itinerary for Friday in Harbor City. Office visit at 10am then working sessions, plus dinner at 7:30pm.'
+ const dropped=ensureRequestAgenda('## Friday\n- Free morning\n- Wrap up',req)
+ expect(dropped.added).toBe(2);expect(dropped.body).toContain('- 10am: Office visit');expect(dropped.body).toContain('7:30pm: dinner');expect(dropped.body.indexOf('## Friday')).toBeLessThan(dropped.body.indexOf('10am'))
+ const kept=ensureRequestAgenda('## Friday\n- 10:00 Office visit with the team\n- 7:30 PM dinner',req)
+ expect(kept.added).toBe(0)
+ expect(ensureRequestAgenda('x','Plan a trip').added).toBe(0)
 })
