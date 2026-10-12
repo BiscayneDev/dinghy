@@ -828,7 +828,7 @@ export async function chatWithTools(
             widened=true
             const searcher=tools.find(t=>t.name==='web_search'),reader=tools.find(t=>t.name==='web_fetch')
             if(!searcher||!reader)return false
-            const dest=destinationTokens(currentRequest).join(' ')
+            const destTok=destinationTokens(currentRequest),dest=destTok.join(' ')
             if(!dest)return false
             const seenIds=new Set(sourceRecords.pageIds()),seenUrls=new Set(foundSources.map(s=>s.url))
             const phrase:Record<string,string>={hotel:'best hotels where to stay in',restaurant:'best restaurants where to eat in',activity:'best things to do attractions in'}
@@ -849,14 +849,22 @@ export async function chatWithTools(
                         for(const h of ((r.data as {results?:{title?:unknown;url?:unknown}[]}|undefined)?.results??[])){if(typeof h.url==='string'&&!seenUrls.has(h.url)&&!isHubUrl(h.url)){seenUrls.add(h.url);hits.push({title:typeof h.title==='string'?h.title:'',url:h.url})}}
                     }
                 }catch(err){if(err instanceof TurnDeadlineExceeded)throw err}
-                hits=hits.map(x=>({x,sc:sourceScore(x.url,x.title)})).filter(y=>y.sc>-3).sort((a,b)=>b.sc-a.sc).map(y=>y.x).slice(0,2)
+                hits=hits.map(x=>({x,sc:sourceScore(x.url,x.title)})).filter(y=>y.sc>-3).sort((a,b)=>b.sc-a.sc).map(y=>y.x).slice(0,5)
+                let good=0
                 for(const h of hits){
+                    if(good>=2)break
                     if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<22000)break
                     if(egressRejection('web_fetch',JSON.stringify({url:h.url}),tainted,corpus))continue
                     toolCallCount++
                     try{
                         const r=await withinTurn(opts.deadlineAt,async signal=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([reader.execute({url:h.url},{...ctx,signal}),new Promise<never>((_,rej)=>{timer=setTimeout(()=>rej(new Error('timeout')),TOOL_TIMEOUT_MS)})])}finally{if(timer)clearTimeout(timer)}})
-                        if(r.success&&sourceRecords.capture('web_fetch',r.data,new Date().toISOString()).some(x=>x.content)){reads++;if(!foundSources.some(x=>x.url===h.url))foundSources.push({title:h.title.replace(/[\r\n]/g,' ').slice(0,100),url:h.url})}
+                        const before=new Set(sourceRecords.pageIds())
+                        const cap=r.success?sourceRecords.capture('web_fetch',r.data,new Date().toISOString()):[]
+                        // A page that is not about the destination (its title and opening text never mention it) is dropped and the next result is tried.
+                        const fresh=sourceRecords.pageIds().filter(id=>!before.has(id))
+                        const onDest=fresh.some(id=>{const t=((sourceRecords.pageTitle(id)||'')+' '+(sourceRecords.pageText(id)||'').slice(0,2500)).toLowerCase();return destTok.some(d=>t.includes(d))})
+                        if(fresh.length&&!onDest){for(const id of fresh)seenIds.add(id);continue}
+                        if(cap.some(x=>x.content)){reads++;good++;if(!foundSources.some(x=>x.url===h.url))foundSources.push({title:h.title.replace(/[\r\n]/g,' ').slice(0,100),url:h.url})}
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err}
                 }
             }
@@ -931,6 +939,7 @@ export async function chatWithTools(
                 await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
                 messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,next:'Recommendations are attached server-side. Now call create_file with title, body (agenda and day headings only), format and kind itinerary. Do not include candidates, stay, options or sources blocks. Do not name any hotel, restaurant or attraction other than the selected ones.'})});continue
             }
+            if(call.function.name==='create_file'&&deliverableCompleted){await opts.onStage?.('tool','create_file:duplicate_ignored');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,note:'The file was already created and queued. No second file was made.'})});continue}
             const tool = tools.find((t) => t.name === call.function.name)
             let content: string
             if ((fileRepairAttempted&&pageAttempted&&call.function.name==='create_file') || completionMode && (call.function.name === 'web_search' || (pageAttempted && call.function.name === 'create_file'))) {
@@ -1034,7 +1043,7 @@ export async function chatWithTools(
                             } catch { /* Invalid source URL is not delivered. */ }
                         }
                     }
-                    if (result.success && call.function.name === 'create_file' && (completionMode || mapArtifact || itineraryResearch) && calls.length === 1) {
+                    if (result.success && call.function.name === 'create_file' && (completionMode || mapArtifact || itineraryResearch)) {
                         // Hosting succeeded; the transport already owns the queued link.
                         // Do not spend another slow gateway call merely announcing it.
                         return finish({ reply: 'Here you go.', toolCalls: toolCallCount, iterations: iteration, tainted })
@@ -1087,4 +1096,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                }
+                        }
