@@ -193,9 +193,9 @@ export function ensurePlanFromPicks(body:string,request:string,picks:{kind:strin
  const by=(k:string)=>picks.filter(p=>p.kind===k).map(p=>p.name)
  const rows:string[]=[]
  const stay=by('hotel'),eat=by('restaurant'),do_=by('activity')
- if(stay.length)rows.push(`- Stay: ${stay.slice(0,2).join(' or ')}`)
- if(eat.length)rows.push(`- Eat: ${eat.slice(0,3).join(', ')}`)
- if(do_.length)rows.push(`- Do: ${do_.slice(0,3).join(', ')}`)
+ if(stay.length)rows.push(`- Stay: ${stay.join(' or ')}`)
+ if(eat.length)rows.push(`- Eat: ${eat.join(', ')}`)
+ if(do_.length)rows.push(`- Do: ${do_.join(', ')}`)
  if(!rows.length)return {body,added:0}
  rows.push(`- ${days.length?days.join(' / '):'Day'} timing for these is not set.`)
  const lines=body.split('\n')
@@ -203,7 +203,8 @@ export function ensurePlanFromPicks(body:string,request:string,picks:{kind:strin
  const first=days[0]
  // Stay and Eat go under the first requested day; Do goes under a weekend/activities/Sat/Sun heading when the body has one.
  const doRows=rows.filter(r=>r.startsWith('- Do:')),mainRows=rows.filter(r=>!r.startsWith('- Do:'))
- const weekendIdx=lines.findIndex(l=>/^\s*#{2,3}\s+(?:.*\b(?:weekend|activit\w*|things to do)\b|sat|sun)/i.test(l)&&!(first&&new RegExp('^\\s*#{2,3}\\s+'+first.slice(0,3),'i').test(l)))
+ let weekendIdx=lines.findIndex(l=>/^\s*#{2,3}\s+(?:.*\b(?:weekend|activit\w*|things to do)\b|sat|sun)/i.test(l)&&!(first&&new RegExp('^\\s*#{2,3}\\s+'+first.slice(0,3),'i').test(l)))
+ if(doRows.length&&weekendIdx<0&&/\bweekend\b/i.test(request)){lines.push('', '## Weekend');weekendIdx=lines.length-1}
  if(doRows.length&&weekendIdx>=0){lines.splice(weekendIdx+1,0,...doRows)}else mainRows.push(...doRows)
  insertUnderDay(lines,first,[...mainRows,timing],false)
  return {body:lines.join('\n'),added:rows.length+1}
