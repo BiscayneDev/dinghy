@@ -323,3 +323,26 @@ describe('names, sections and reasons',()=>{
   expect(String((o.candidates[0] as any).reason)).not.toContain('Oasis')
  })
 })
+import {ensurePlanFromPicks as epp} from '@/lib/files/itinerary-selection'
+describe('phrases, category headings, plan from picks',()=>{
+ it('rejects preposition-led phrases and all-caps service headings',()=>{
+  expect(extractLineName('In Miami Beach')).toBeNull()
+  expect(extractLineName('Best Places To Eat')).toBeNull()
+  expect(extractLineName('PRIVATE TRANSPORTATION IN SOUTH FLORIDA')).toBeNull()
+  expect(extractLineName('Harbor Boat Tours')).toBeNull()
+  expect(extractLineName('Tide Museum')).toBe('Tide Museum')
+  expect(extractLineName('Lantern Table')).toBe('Lantern Table')
+ })
+ it('restates a plan from verified picks only when the body has no day plan',()=>{
+  const picks=[{kind:'hotel',name:'Harbor Inn'},{kind:'restaurant',name:'Lantern Table'}]
+  const a=epp('# Trip\n',"Friday and Saturday in Harbor",picks)
+  expect(a.added).toBeGreaterThan(0);expect(a.body).toContain('Stay: Harbor Inn');expect(a.body).toContain('Friday / Saturday');expect(a.body).toContain('## Friday')
+  expect(epp('# Trip\n- a one\n- b two\n- c three','x',picks).added).toBe(0)
+  expect(epp('# Trip\n','x',[]).added).toBe(0)
+ })
+})
+
+it('extractor skips a leading prepositional phrase for the real venue on a list line',()=>{
+ expect(extractLineName('In Miami Beach: Lantern Table serves seafood')).toBe('Lantern Table')
+ expect(extractLineName('Lantern Table, in Harbor Beach')).toBe('Lantern Table')
+})
