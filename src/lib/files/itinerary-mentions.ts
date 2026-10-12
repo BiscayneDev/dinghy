@@ -9,6 +9,20 @@ const CONNECT=new Set(['of','the','de','la','del','&','du','von','van'])
 const STOP=new Set(['the','a','an','in','at','on','our','your','my','we','you','it','is','are','this','that','these','those','for','with','from','to','and','or','but','if','as','by','of','all','new','top','best','menu','home','about','contact','book','visit','stay','view','read','more','see','click','login','sign','search','skip','cookie','cookies','privacy','terms','policy','share','follow','subscribe','email','phone','call','open','closed','hours','price','prices','rating','ratings','reviews','review','monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','hotel','hotels','restaurant','restaurants','dining','activities','things','guide','map','photos','overview','hello','welcome','who','what','where','when','why','how','there','here','also','some','many','most','each','every','one','two','three','best','free','join','get','find','explore','discover','learn','shop','menu','order','now','today','tonight','weekend','back','next','previous','page','pages','copyright','rights','reserved','instagram','facebook','twitter','tiktok','youtube','google','yelp','tripadvisor','usa','us'])
 const LEAD=new Set(['the','a','an','in','at','on','our','your','my','we','you','it','this','that','for','with','from','to','near','visit','stay','book','see','view','read','explore','discover','join','get','find','order','welcome','hello','where','what','who','when','how','dinner','lunch','breakfast','rooms','try','enjoy','also','and','or','but','if','as','by','of'])
 const TRAIL=new Set(['monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','today','tonight','now','and','or','of','the'])
+const CATEGORY_PLURAL=new Set(['hotels','restaurants','attractions','activities','museums','places','tours','spots','bars','cafes','cafés','resorts','options','destinations','neighborhoods','neighbourhoods','beaches','experiences','guides','reviews','deals','rentals','things','stays','eats','sights','shops','hostels','nightlife','landmarks'])
+const CATEGORY_LEAD=new Set(['best','top','luxury','cheap','affordable','popular','famous','favorite','favourite','recommended','beautiful','ultimate','complete','budget','boutique','family','romantic','cool','hidden','local','must','free','great','fun','unique'])
+const CATEGORY_NOUN=new Set(['hotel','restaurant','attraction','activity','museum','park','place','tour','spot','bar','cafe','café','resort','option','destination','beach','experience','guide','stay','eat','sight','gallery','shop','market','inn','suite','hostel','club'])
+/** Generic category phrases ("Luxury Hotels", "Top Attractions", "Things To Do") are headings, not venues. */
+export function isCategoryPhrase(words:string[]):boolean {
+ const w=words.map(x=>x.toLowerCase().replace(/[^\p{L}]/gu,'')).filter(Boolean)
+ if(!w.length)return true
+ const last=w[w.length-1]
+ if(CATEGORY_PLURAL.has(last)&&w.length<=2)return true
+ if(CATEGORY_LEAD.has(w[0])&&(w[1]==='of'||(w.length<=5&&w.some(x=>CATEGORY_PLURAL.has(x)))))return true
+ if(w.length<=2&&CATEGORY_LEAD.has(w[0])&&(CATEGORY_NOUN.has(last)||CATEGORY_PLURAL.has(last)))return true
+ if(w.length<=3&&w[0]==='things'&&w[1]==='to')return true
+ return w.every(x=>CATEGORY_NOUN.has(x)||CATEGORY_PLURAL.has(x)||CATEGORY_LEAD.has(x)||STOP.has(x))
+}
 const WORD=/[\p{L}][\p{L}'’.\-]*|&/gu
 const isCap=(w:string)=>/^\p{Lu}/u.test(w)&&!/^\p{Lu}{4,}$/u.test(w)
 const HINTS:Record<Kind,RegExp>={
@@ -31,9 +45,9 @@ export function extractMentions(records:SourceRecords,max=60,need:Kind[]=[]):Men
    let j=i;const words=[toks[i]]
    while(j+1<toks.length&&words.length<7){
     const n=toks[j+1],gap=text.slice(toks[j].e,n.s)
-    if(/[\n.!?:;,()|]/.test(gap))break
+    if(/[\n.!?:;,()|–—]|\s-\s/.test(gap))break
     if(isCap(n.w)){words.push(n);j++;continue}
-    if(CONNECT.has(n.w.toLowerCase())&&j+2<toks.length&&isCap(toks[j+2].w)&&!/[\n.!?:;,()|]/.test(text.slice(n.e,toks[j+2].s))){words.push(n,toks[j+2]);j+=2;continue}
+    if(CONNECT.has(n.w.toLowerCase())&&j+2<toks.length&&isCap(toks[j+2].w)&&!/[\n.!?:;,()|–—]|\s-\s/.test(text.slice(n.e,toks[j+2].s))){words.push(n,toks[j+2]);j+=2;continue}
     break
    }
    // trim leading filler words
@@ -42,7 +56,7 @@ export function extractMentions(records:SourceRecords,max=60,need:Kind[]=[]):Men
    const first=words[0],last=words[words.length-1],span=text.slice(first.s,last.e)
    const prev=text.slice(Math.max(0,first.s-3),first.s),sentenceInitial=first.s===0||/[.!?\n]\s*$/.test(prev)
    const single=words.length===1,low=span.toLowerCase()
-   const ok=span.length>=4&&span.length<=80&&!STOP.has(low)&&!(single&&(sentenceInitial||span.length<5))
+   const ok=span.length>=4&&span.length<=80&&!STOP.has(low)&&!(single&&(sentenceInitial||span.length<5))&&!isCategoryPhrase(words.map(w=>w.w))
    if(ok){const prior=found.get(low);if(prior)prior.count++;else found.set(low,{source,start:first.s,end:last.e,text:span,count:1,multi:!single})}
    i=j+1
   }
@@ -55,8 +69,10 @@ export function extractMentions(records:SourceRecords,max=60,need:Kind[]=[]):Men
    const lineStart=pos;pos+=raw.length+1
    if(raw.length<4||raw.length>140)continue
    const lead=raw.match(/^[\s#>*•\-\d.)]*/)![0].length,body=raw.slice(lead)
-   const head=body.match(/^[^–—:,(|·]*?(?=\s[-–—]\s|[–—:,(|·]|$)/)![0].replace(/\s+$/,'')
-   const words=head.split(/\s+/).filter(Boolean)
+   let head=body.match(/^[^–—:,(|·]*?(?=\s[-–—]\s|[–—:,(|·]|$)/)![0].replace(/\s+$/,'')
+   let words=head.split(/\s+/).filter(Boolean),head2=head,skip=0
+   while(words.length>1&&LEAD.has(words[0].toLowerCase())){skip+=head2.length-head2.replace(/^\S+\s+/,'').length;head2=head2.replace(/^\S+\s+/,'');words=words.slice(1)}
+   head=head2
    if(!words.length||words.length>7||head.length<4||head.length>80)continue
    if(!/^[\p{Lu}\d]/u.test(head))continue
    if(/[.!?]$/.test(head)&&words.length>4)continue
@@ -64,8 +80,8 @@ export function extractMentions(records:SourceRecords,max=60,need:Kind[]=[]):Men
    if(!words.every(minor))continue
    const low=head.toLowerCase()
    if(words.length===1&&(STOP.has(low)||head.length<5))continue
-   if(words.every(w=>STOP.has(w.toLowerCase())))continue
-   const start=lineStart+lead,prior=found.get(low)
+   if(words.every(w=>STOP.has(w.toLowerCase()))||isCategoryPhrase(words))continue
+   const start=lineStart+lead+skip,prior=found.get(low)
    if(prior)prior.count+=2;else found.set(low,{source,start,end:start+head.length,text:head,count:2,multi:words.length>1})
   }
  }
