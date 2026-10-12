@@ -31,3 +31,19 @@ it('first-person only reviews fall back with a literal area mention, not rewritt
  if('error' in o)throw new Error(o.error)
  const reason=String(o.candidates[0].reason);expect(reason).toContain('source mentions Lantern District');expect(reason).not.toMatch(/We came|healthy food|I had/)
 })
+
+import {neutralizeUnpickedVenues} from '@/lib/files/itinerary-selection'
+it('bold-only venue bullets cannot leak unpicked or wrong-kind picks under Dinner',()=>{
+ const req='Friday in Harbor with Dinner and Hotels recommendations'
+ const body='## Friday\n**Dinner**\n- **Rosenleaf**\n- **Harbor Inn**\n- **Lantern Cafe**\n- **Working sessions**\n## Hotels\n- **Harbor Inn**'
+ const o=neutralizeUnpickedVenues(body,['Harbor Inn','Lantern Cafe'],req,[],[{kind:'hotel',name:'Harbor Inn'},{kind:'restaurant',name:'Lantern Cafe'}])
+ expect(o.body).not.toContain('Rosenleaf');expect(o.body.split('## Hotels')[0]).not.toContain('Harbor Inn');expect(o.body).toContain('Lantern Cafe');expect(o.body).toContain('Working sessions');expect(o.body.split('## Hotels')[1]).toContain('Harbor Inn')
+})
+it('partial hotel aliases in bold bullets still cannot become dinner picks',()=>{
+ const o=neutralizeUnpickedVenues('## Dinner\n- **Harbor Inn**',['Harbor Inn Seaside'],'Dinner in Harbor',[],[{kind:'hotel',name:'Harbor Inn Seaside'}])
+ expect(o.body).not.toContain('Harbor Inn')
+})
+it('writes a multipage PDF with a long hotel URL for bullet pagination review',async()=>{
+ const body=Array.from({length:22},(_,i)=>'- Agenda '+i+' keeps the requested work visible.').join('\n')+'\n## Hotels\n:::stay\nHarbor Inn | unknown | unknown | unknown | Hours and availability unverified | | https://fictional.test/hotel/harbor-inn/long-path-to-the-source-page-for-complete-provenance-and-link-verification\n:::\n\nSelection reasons:\n- Harbor Inn is listed as a place to stay.'
+ await mkdir('/tmp/itinerary-polish',{recursive:true});await writeFile('/tmp/itinerary-polish/bullet.pdf',await renderPdf({title:'Harbor weekend',body}))
+})
