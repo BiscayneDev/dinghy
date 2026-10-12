@@ -63,3 +63,29 @@ it('unverified requested kinds are noted truthfully as a distinct partial while 
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString();expect(html).toContain('hero-title');expect(html).toContain('Harbor Inn')
  await mkdir('/tmp/itinerary-pipeline-proof-unsupported',{recursive:true});await writeFile('/tmp/itinerary-pipeline-proof-unsupported/page.html',html);await writeFile('/tmp/itinerary-pipeline-proof-unsupported/file.pdf',made.bytes);await writeFile('/tmp/itinerary-pipeline-proof-unsupported/card.png',made.card!);await writeFile('/tmp/itinerary-pipeline-proof-unsupported/report.json',JSON.stringify({synthetic:true,noSend:true,stages,completed:true,httpMocked:true,publishMocked:true,files:1},null,2))
 })
+
+it('server states the requested working sessions when the model agenda omits the phrase',async()=>{
+ vi.stubEnv('TAVILY_API_KEY','fictional-key')
+ const url='https://harbor.test/visitors'
+ const ask='Make an itinerary for fictional founders visiting Harbor on Friday. Office visit10am then working sessions, hotel and restaurant recommendations and weekend activities.'
+ const body='## Friday\n- 10:00 User supplied office visit.\n- Working sessions: venue and duration to confirm.\n## Weekend\nPlans to confirm.'
+ const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
+ const files=fileToolsFor(),stages:string[]=[],requests:any[]=[]
+ published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
+ vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
+  if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel, dining and museum public listings.'}]}))
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn. Harbor Cafe. Harbor Museum. Hours, prices and availability unverified.</body></html>')
+  requests.push(JSON.parse(init.body))
+  const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
+  const name=n===1?'web_search':n<=3?'select_itinerary_candidates':'create_file'
+  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,id:(requests.at(-1).messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Venue-name mentions')).content.split('\n').map((l:string)=>l.split(' | ')).find((p:string[])=>p[1]===nm)??['m999'])[0],reason:'Selected for the fictional plan',catch:'Availability unverified'}))}:{title:'Synthetic Harbor founders itinerary',body:body.replace('Working sessions','Sessions')+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
+  return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
+ }))
+ const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
+ const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ expect(result.deliverable?.state).toBe('completed');expect(published).toHaveBeenCalledTimes(1);expect(files.files()).toHaveLength(1);expect(requests).toHaveLength(4)
+ expect(stages).toContain('research:read_ok');expect(stages).toContain('itinerary:candidates_compiled');expect(stages).toContain('invalid:selection:missing_kind:restaurant_activity');expect(stages).toContain('itinerary:manual_blocks_stripped');expect(stages).toContain('itinerary:working_sessions_added');expect(stages).toContain('itinerary:candidates_selected:3');expect(stages.some(x=>x.startsWith('itinerary:mention_menu:'))).toBe(true);expect(requests[1].tools.map((t:any)=>t.function.name)).toEqual(['select_itinerary_candidates']);for(const r of requests.slice(3)){const f=r.tools.find((t:any)=>t.function.name==='create_file');expect(f.function.parameters.properties.itinerary_candidates).toBeUndefined();expect(f.function.parameters.required).not.toContain('itinerary_candidates')};expect(stages.filter(s=>s.startsWith('invalid:')&&!s.startsWith('invalid:selection:missing_kind'))).toEqual([])
+ const made=files.files()[0];expect(made.bytes.subarray(0,4).toString()).toBe('%PDF');expect(made.card?.subarray(1,4).toString()).toBe('PNG');expect(made.markdown).toContain('Source provenance');expect(made.markdown).not.toContain('{{source:')
+ const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString();expect(html).toContain('hero-title');expect(html).toContain('Harbor Inn')
+ await mkdir('/tmp/itinerary-pipeline-proof-ws',{recursive:true});await writeFile('/tmp/itinerary-pipeline-proof-ws/page.html',html);await writeFile('/tmp/itinerary-pipeline-proof-ws/file.pdf',made.bytes);await writeFile('/tmp/itinerary-pipeline-proof-ws/card.png',made.card!);await writeFile('/tmp/itinerary-pipeline-proof-ws/report.json',JSON.stringify({synthetic:true,noSend:true,stages,completed:true,httpMocked:true,publishMocked:true,files:1},null,2))
+})
