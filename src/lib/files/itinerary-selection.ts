@@ -116,7 +116,7 @@ const UNIT_GENERIC=new Set('am pm et est edt local time times meeting meetings c
 /** The server cards are the only venue recommendations. A freehand body line is removed when it names an unpicked proper noun
  * (a run of 2+ unfamiliar capitalized words, or one unfamiliar capitalized word mid-sentence), claims that no hotels/restaurants/activities
  * are recommended, or refers to a "recommended restaurant/hotel/activity" for a kind the server could not verify. Plain agenda text is kept. */
-export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:string,unsupported:string[]=[]):{body:string;removed:number}{
+export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:string,unsupported:string[]=[],verified:{kind:string;name:string}[]=[]):{body:string;removed:number}{
  const allowed=new Set<string>([...wordsOf(request),...pickNames.flatMap(wordsOf),...GENERIC_CAPS,...UNIT_GENERIC])
  const kindRe=unsupported.map(k=>k==='activity'?'activit(?:y|ies)':k==='restaurant'?'(?:restaurants?|dining|meals?)':'(?:hotels?|stays?|lodging)')
  const refRe=kindRe.length?new RegExp('\\b(?:recommended|suggested|selected|chosen|picked|our|the|these|those|following|below|top|best|great)\\s+(?:\\w+\\s+)?(?:'+kindRe.join('|')+')\\b','i'):null
@@ -124,11 +124,12 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
  const headRe=headKinds.length?new RegExp('\\b(?:'+headKinds.join('|')+')\\b','i'):null
  const reqLc=request.toLowerCase()
  const reqWords=new Set(wordsOf(request))
- const lines=body.split('\n'),keep:string[]=[];let removed=0,skipUnder=false
+ const lines=body.split('\n'),keep:string[]=[];let removed=0,skipUnder=false,sectionKind:string|undefined
  for(const line of lines){
   const heading=/^\s*#/.test(line)
   if(!heading&&skipUnder){if(!line.trim()){keep.push(line)}else removed++;continue}
-  if(heading)skipUnder=false
+  if(heading){skipUnder=false;sectionKind=/\b(?:lunch|dinner|breakfast|brunch|dining|restaurants?|eats)\b/i.test(line)?'restaurant':/\b(?:hotels?|lodging|stays)\b/i.test(line)?'hotel':/\b(?:activities|attractions|things to do)\b/i.test(line)?'activity':undefined}
+  if(!heading&&sectionKind&&verified.some(p=>p.kind!==sectionKind&&line.toLowerCase().includes(p.name.toLowerCase()))){removed++;continue}
   if(!line.trim()){keep.push(line);continue}
   if(!heading&&kindRe.length&&/:\s*$/.test(line)&&new RegExp('\\b(?:'+kindRe.join('|')+')\\b','i').test(line)){removed++;skipUnder=true;continue}
   if(heading&&headRe&&headRe.test(line)&&!headRe.test(request)){removed++;skipUnder=true;continue}
