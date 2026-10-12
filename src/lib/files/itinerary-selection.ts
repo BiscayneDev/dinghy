@@ -214,7 +214,7 @@ const dayName=(d:string)=>d[0].toUpperCase()+d.slice(1).toLowerCase()
 /** Insert rows under the heading of a named weekday (top of the day, or at the end of its section). With no such heading, a heading for that day is created before the first day heading, else after the title. */
 export function insertUnderDay(lines:string[],day:string|undefined,rows:string[],top:boolean):void{
  const dayHead=/^\s*#{2,3}\s+(?:day\s+\d|mon|tue|wed|thu|fri|sat|sun|\d{4}-\d{2}-\d{2}|stop\s+\d)/i
- let h=day?lines.findIndex(l=>new RegExp('^\\s*#{2,3}\\s+'+day.slice(0,3),'i').test(l)):lines.findIndex(l=>dayHead.test(l))
+ let h=day?lines.findIndex(l=>new RegExp('^\\s*#{2,3}\\s+.*\\b'+day+'\\b','i').test(l)):lines.findIndex(l=>dayHead.test(l))
  if(h<0){
   const f=lines.findIndex(l=>dayHead.test(l)),t=lines.findIndex(l=>/^\s*#\s/.test(l))
   const at=f>=0?f:t>=0?t+1:0
