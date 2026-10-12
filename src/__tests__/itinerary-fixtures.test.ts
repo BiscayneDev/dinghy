@@ -28,3 +28,31 @@ for(const [name,fx] of Object.entries(pages))it(`fixture ${name}: menu carries a
  expect(out.dropped).toEqual([]);expect(out.candidates.length).toBe(picks.length)
  expect(missingKinds(mergePicks([],out.candidates),requiredKinds('hotel, restaurants and activities'))).toEqual([])
 })
+import {decodeEntities} from '@/lib/tools/web'
+import {neutralizeUnpickedVenues} from '@/lib/files/itinerary-selection'
+const page=(content:string)=>{const r=new SourceRecords();r.capture('web_fetch',{url:'https://fixture.test/x',title:'x',content},'2026-01-01T00:00:00Z');return r}
+it('decodes named, numeric and double-encoded entities',()=>{
+ expect(decodeEntities('Hampton Lodge &amp;amp;amp; Suites')).toBe('Hampton Lodge & Suites')
+ expect(decodeEntities('Caf&eacute; Lune &#8211; Bar &#x27;n&#39; Grill &lt;3')).toBe("Café Lune – Bar 'n' Grill <3")
+ expect(decodeEntities('keep &unknownthing; as is')).toBe('keep &unknownthing; as is')
+})
+it('trims descriptor suffixes and drops category headings, keeping real names including "& Suites"',()=>{
+ const r=page('Luxury Hotels\nBest of Harbor City\nTop Attractions\nThings To Do\nBest Restaurants in Harbor City\nHampton Lodge & Suites\nMaple Street Museum – Corporate Events\nRiverside Green - Waterfront\nVisit Bayside Garden – Waterfront views and a cafe.\n')
+ const t=extractMentions(r,60,['hotel','restaurant','activity']).map(m=>m.text)
+ for(const bad of ['Luxury Hotels','Best of Harbor City','Top Attractions','Things To Do','Best Restaurants in Harbor City'])expect(t).not.toContain(bad)
+ expect(t.some(x=>/[–—]/.test(x)||/ - /.test(x))).toBe(false)
+ expect(t).toContain('Hampton Lodge & Suites');expect(t).toContain('Maple Street Museum');expect(t).toContain('Riverside Green');expect(t).toContain('Bayside Garden')
+})
+it('soft kind check: a hinted hotel cannot fill activity while hinted activities remain unpicked, but is accepted when none exist',()=>{
+ const withAct=page('Stay at The Marlow Hotel, rooms per night.\nSee Coral Lane Gallery, a museum tour.\n')
+ const menu=extractMentions(withAct,60,['activity']),hot=menu.find(m=>m.text.includes('Marlow'))!
+ const out=compileMentionSelection({candidates:[{kind:'activity',id:hot.id,reason:'r',catch:'c'}]},menu,withAct)
+ expect('error' in out&&out.dropped).toEqual(['kind_conflict'])
+ const noAct=page('Stay at The Marlow Hotel, rooms per night.\n'),m2=extractMentions(noAct,60,['activity']),h2=m2.find(m=>m.text.includes('Marlow'))!
+ expect('error' in compileMentionSelection({candidates:[{kind:'activity',id:h2.id,reason:'r',catch:'c'}]},m2,noAct)).toBe(false)
+})
+it('freehand body lines naming venue-like entities outside the picks are removed; picks, headings and user-named places stay',()=>{
+ const body='## Friday\n- 10:00 Office visit at Harbor Tower\n- Dinner at Copper Kettle Bistro\n- Check in at Four Corners Hotel\nWorking sessions: venue and duration to confirm.'
+ const out=neutralizeUnpickedVenues(body,['Copper Kettle Bistro'],'Plan Friday with office visit at Harbor Tower and hotel recommendations')
+ expect(out.removed).toBe(1);expect(out.body).toContain('Copper Kettle Bistro');expect(out.body).toContain('Harbor Tower');expect(out.body).not.toContain('Four Corners');expect(out.body).toContain('## Friday')
+})
