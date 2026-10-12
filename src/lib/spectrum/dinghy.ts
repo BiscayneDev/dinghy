@@ -690,6 +690,7 @@ export async function chatWithTools(
             itineraryReadAttempted=true
             const reader=tools.find(t=>t.name==='web_fetch')!
             // At most six actual search URLs; preserve synthesis headroom on every try.
+            let readsOk=0
             for(const source of foundSources.slice(0,6)){
                 const args=JSON.stringify({url:source.url})
                 const blocked=egressRejection('web_fetch',args,tainted,corpus)
@@ -705,9 +706,13 @@ export async function chatWithTools(
                 if(captured.some(r=>r.content)){
                     mapResearchRead=true
                     await opts.onStage?.('tool','research:read_ok')
-                    const id=`required_read_${iteration}`
+                    readsOk++
+                    const id=`required_read_${iteration}_${readsOk}`
                     messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
-                    break
+                    // A thin first page (few venue names) gets up to two more observed pages while time allows.
+                    if(readsOk>=3||extractMentions(sourceRecords,60,requiredKinds(currentRequest)).length>=25||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
+                    await opts.onStage?.('tool','research:read_more')
+                    continue
                 }
                 await opts.onStage?.('tool',result.success?'research:read_empty':'research:read_failed')
                 if(!result.success){
@@ -720,7 +725,7 @@ export async function chatWithTools(
             if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
         }
         if(itineraryResearch&&mapResearchRead&&!selectedCandidates&&!menuShown){
-            menuShown=true;mentionMenu=extractMentions(sourceRecords,48,requiredKinds(currentRequest))
+            menuShown=true;mentionMenu=extractMentions(sourceRecords,60,requiredKinds(currentRequest))
             await opts.onStage?.('tool',`itinerary:mention_menu:${mentionMenu.length}`);await opts.onStage?.('tool',`itinerary:menu_hints:${hintCounts(mentionMenu)}`)
             if(mentionMenu.length)messages.push({role:'system',content:menuNote(mentionMenu)})
         }
