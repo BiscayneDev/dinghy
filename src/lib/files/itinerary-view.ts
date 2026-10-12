@@ -10,7 +10,7 @@ export type ViewLine={n:number;source:string;start:number;end:number;text:string
 const VENUE_LIKE=/\p{Lu}[\p{L}'’]+(?:\s+(?:&\s+)?\p{Lu}[\p{L}'’]+)+/u
 const NAME_CONNECT=new Set(['of','the','de','la','le','les','el','del','du','von','van','and','y','&','da','di','der'])
 const SKIP_RUN=new Set('sunday monday tuesday wednesday thursday friday saturday weekend brunch dinner lunch breakfast happy hour menu menus reservations reservation tickets admission book check booking open daily'.split(' '))
-const UI_STRIP=/\b(?:save to (?:wish ?list|favorites|trip)|add to (?:wish ?list|trip|favorites)|create your own\b[^.\n]*|book now|view deal|see (?:all|more)\b|read more|sign in|log in|show more|\d[\d,.]*\s+reviews?|\(\d[\d,]*\)|\d(?:\.\d)?\s*(?:\/\s*5|stars?)|photos?\s*\(?\d*\)?|share|wish ?list)\b/gi
+const UI_STRIP=/\b(?:save to (?:wish ?list|favorites|trip)|add to (?:wish ?list|trip|favorites)|create your own\b[^.\n]*|book now|view deal|see (?:all|more)\b|read more|sign in|log in|show more|\d[\d,.]*\s+reviews?|\(\d[\d,]*\)|\d(?:\.\d)?\s*(?:\/\s*5|stars?)|photos?\s*\(?\d*\)?|share|wish ?list|read (?:the )?full (?:review|story|article)|save story|save this|readers['’] choice|subscribe\b[^.\n]*|sign up\b[^.\n]*|newsletter|advertisement|sponsored(?: content)?|click here|learn more|get directions|view (?:menu|map|website)|call now|opens? in new (?:tab|window)|\d+\s*min read)\b/gi
 const UI_WORDS=new Set('save share book view see visit explore add create read sign log get compare show open find check'.split(' '))
 const UI_NAMES=new Set('save share wishlist photos reviews review sign login book view deal compare filter sort map menu'.split(' '))
 export const LODGING_NAME=/\b(?:hotel|hostel|inn|suites?|resort|lodge|motel|novotel|hilton|marriott|hyatt|sheraton|b&b|guesthouse|villa|residences?)\b/i
@@ -57,10 +57,10 @@ export function extractLineName(text:string):string|null{
  return name
 }
 /** A clean, bounded, numbered view of each usable page: headings, list items and sentences. The server keeps the literal span of every line. */
-export function buildPageView(records:SourceRecords,perPage=4500,total=13000):{text:string;lines:number;pages:number;venueLines:number;entries:ViewLine[]}{
+export function buildPageView(records:SourceRecords,perPage=4500,total=13000,skip?:Set<string>):{text:string;lines:number;pages:number;venueLines:number;entries:ViewLine[]}{
  const entries:ViewLine[]=[];let used=0,pages=0,venueLines=0
  for(const id of records.pageIds()){
-  if(isHubUrl(records.pageUrl(id)))continue
+  if(isHubUrl(records.pageUrl(id))||skip?.has(id))continue
   const text=records.pageText(id)||'';let size=0,pos=0,added=0,full=false
   for(const raw of text.split('\n')){
    const lineStart=pos;pos+=raw.length+1
@@ -133,9 +133,20 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   // The name is the server's: extracted from the line, so the model cannot invent or mis-copy one.
   const name=line.name,text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
   if(off<0){reject('name_not_on_line',name);continue}
-  const nxt=entries.find(e=>e.n===line.n+1&&e.source===line.source)
+  const nxt=entries.find(e=>e.n===line.n+1&&e.source===line.source&&e.name===name)
   const heading=line.end-line.start<40||!/[.!?]$/.test(line.text)
-  const quote=stripUi(norm(text.slice(line.start,(nxt&&heading&&nxt.end-line.start<=300?nxt.end:line.end))))
+  let quote=stripUi(norm(text.slice(line.start,(nxt&&heading&&nxt.end-line.start<=300?nxt.end:line.end))))
+  if(quote.length<name.length+30){
+   // A bare name is not a reason: add the next real sentences of the page, with UI strings removed.
+   // Only this pick's own section: stop at the next venue line on the page or the next heading-like line.
+   const nextVenue=entries.find(e=>e.source===line.source&&e.start>=line.end&&e.name!==name)
+   const limit=Math.min(line.end+700,nextVenue?nextVenue.start:Infinity)
+   const sect:string[]=[]
+   for(const raw of text.slice(line.end,limit).split('\n')){const t=raw.replace(/^[\s#>*•\-\d.)]*/,'').trim();if(!t)continue;if(t.length<40&&!/[.!?]$/.test(t))break;sect.push(t)}
+   const after=sect.join(' ').split(/(?<=[.!?])\s+/).map(x=>stripUi(norm(x))).filter(x=>x.split(' ').length>=5&&!NEWS_LINE.test(x))
+   let extra='';for(const x of after){if((quote+' '+extra+' '+x).length>300)break;extra+=(extra?' ':'')+x;if(extra.length>=40)break}
+   if(extra)quote=(quote+' '+extra).trim()
+  }
   if(kindNameMismatch(name,kind)){reject('kind_mismatch',name);continue}
   if(!nameShapeOk(name)){reject('name_shape',name);continue}
   if(dest.length){
@@ -160,6 +171,7 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
  return {candidates:kept,dropped,previews}
 }
 export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):string{
- const what=kind==='hotel'?'hotel or lodging property to stay at':kind==='restaurant'?'restaurant, cafe or bar to eat or drink at':'attraction, venue or activity provider to visit'
- return `Name: "${name}"\nLine from the page: "${quote}"\n\nIs "${name}" a specific, currently open and operating ${what}${destination?' in or near '+destination:''}, described by this line as a place a traveler can use now? ${kind==='hotel'?'Answer no if the line or name shows it is a restaurant, bar, attraction or anything other than a place to sleep.':'Answer no if the name or line shows it is a hotel or lodging property, or is mainly something other than a '+(kind==='restaurant'?'place to eat or drink':'visitor attraction or activity')+'.'} Answer no for news headlines, announcements, future openings, closures, demolitions, construction news, other cities, and for cities, countries, neighborhoods, websites, meals, events or categories. Answer with exactly one word: yes, no or unsure.`
+ const what=kind==='hotel'?'a hotel or lodging property':kind==='restaurant'?'a restaurant, cafe or bar':'an attraction, museum, tour, venue or activity provider'
+ const wrong=kind==='hotel'?'a restaurant, attraction or other non-lodging place':kind==='restaurant'?'a hotel, attraction or other non-food place':'a hotel or a restaurant'
+ return `Name: "${name}"\nLine from the page: "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the line shows it is an operating ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} that a traveler can use now. Answer no if it is ${wrong}, a city, neighborhood, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, or if you are unsure. Answer with exactly one word: yes or no.`
 }
