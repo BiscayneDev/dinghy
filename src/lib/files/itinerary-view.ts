@@ -15,6 +15,7 @@ const GENERIC_WORDS=new Set('coral reef beach park bay island river lake garden 
 const SECTION_CTX:[RegExp,Kind][]=[[/\b(?:hotels|hotel (?:suggestions|recommendations|options|picks)|stays|lodging|accommodations?|where to stay|places to stay)\b/i,'hotel'],[/\b(?:restaurants|restaurant (?:suggestions|recommendations|options|picks)|dining|eateries|where to eat|places to eat|cafes|bars)\b/i,'restaurant'],[/\b(?:things to do|(?:activity|attraction) (?:suggestions|recommendations|options|picks)|attractions|activities|sights|museums|experiences|sightseeing)\b/i,'activity']]
 const sectionKind=(h:string):Kind|undefined=>{if(h.split(/\s+/).length>8)return undefined;for(const [re,k] of SECTION_CTX)if(re.test(h))return k;return undefined}
 const VENUE_LIKE=/\p{Lu}[\p{L}'’]+(?:\s+(?:&\s+)?\p{Lu}[\p{L}'’]+)+/u
+const MARKETING_NAME=/^(?:taste\s+it\s+all|(?:discover|explore|savor|experience|must[ -]try|guide|taste|all|best|top)\b)/i
 const NAME_CONNECT=new Set(['of','the','de','la','le','les','el','del','du','von','van','and','y','&','da','di','der'])
 const PHRASE_LEAD=new Set('in at from near top best on for with by to of around about visit explore discover enjoy why how what where when our your all any more most new the-best popular famous'.split(' '))
 const SERVICE_WORDS=new Set('transportation transfers transfer tours tour services service rentals rental charter charters packages package deals deal tickets passes pass shuttle shuttles limousine limo booking bookings guide guides cruises cruise excursions excursion private'.split(' '))
@@ -39,6 +40,7 @@ const NEWS_LINE=/\b(?:breaks?\s+ground|announces?|announced|unveils?|set to open
 /** The venue name is taken from the line by the server: the leading proper-name run before the first dash, colon, comma, parenthesis or sentence end. */
 export function extractLineName(text:string):string|null{
  if(NEWS_LINE.test(text))return null
+ if(MARKETING_NAME.test(text.replace(/^[\s#>*•\-\d.)]*/,'')))return null
  for(const seg of text.split(/\s[-–—]\s|[–—:,(|·.!?]/).slice(0,3)){const n=extractFromHead(seg.trim(),text);if(n)return n}
  return null
 }
@@ -76,6 +78,8 @@ function extractFromHead(head:string,text:string):string|null{
  // A possessive owner prefix is not the venue. Keep an immediately continued full venue name.
  if(/['’]s$/i.test(ws[ws.length-1])&&!OWN_WORD.test(ws.join(' ')))return null
  const name=ws.join(' ').replace(/[.\-]+$/,'')
+ if(MARKETING_NAME.test(name))return null
+ if(ws.some(w=>/^(?:restaurants|hotels|attractions|activities)$/i.test(w))&&ws.every(w=>/^(?:restaurants|hotels|attractions|activities)$/i.test(w)||GEO_NAMES.includes(w.toLowerCase())||NAME_CONNECT.has(w.toLowerCase())))return null
  if(!OWN_WORD.test(name)&&(/\b(?:menus?|months?|through|powered by)\b/i.test(name)||ws.every(w=>GEO_NAMES.includes(w.toLowerCase())||NAME_CONNECT.has(w.toLowerCase()))))return null
  // Run-together or camel-case tokens (PoweredBy, HotList, SearchHack) are page UI, and a lone common word needs a venue word on its line.
  if(ws.length<2&&/\p{Ll}\p{Lu}/u.test(ws[0])&&!/^(?:Mc|Mac|O['’]|De|La|Le|Di|Van)/.test(ws[0]))return null
@@ -101,7 +105,7 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000,ski
  const entries:ViewLine[]=[];let used=0,pages=0,venueLines=0
  for(const id of records.pageIds()){
   if(isHubUrl(records.pageUrl(id))||skip?.has(id))continue
-  const text=records.pageText(id)||'';let size=0,pos=0,added=0,full=false,ctx:Kind|undefined
+  const text=records.pageText(id)||'';const titlePrefix=(records.pageTitle(id)||'').split(/\s[|–—]\s/)[0].trim();let size=0,pos=0,added=0,full=false,ctx:Kind|undefined
   for(const raw of text.split('\n')){
    const lineStart=pos;pos+=raw.length+1
    if(full)continue
@@ -114,6 +118,7 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000,ski
     if(flatS.length<8||flatS.split(' ').length<2)continue
     if(size+flatS.length>perPage||used+size+flatS.length>total){full=true;break}
     const name=extractLineName(flatS);if(!name)continue
+    if(titlePrefix&&flatS.startsWith(titlePrefix)&&/[|]/.test(flatS)&&name===titlePrefix)continue
     const start=lineStart+lead+m.index!
     entries.push({n:entries.length+1,source:id,start,end:start+lit.length,text:flatS,name,ctx});size+=flatS.length+name.length+12;added++
     if(VENUE_LIKE.test(flatS))venueLines++
@@ -157,6 +162,16 @@ export type Verify=(name:string,kind:Kind,quote:string)=>Promise<boolean>
 /** Mechanical checks (literal quote, name inside the quote, not a brand/place/category) then one bounded yes/no verification per pick. */
 export type SelectionResult={candidates:Record<string,unknown>[];dropped:string[];previews:string[]}|{error:string;dropped:string[];previews:string[]}
 const preview=(t:string)=>t.replace(/[^A-Za-z0-9]/g,'').slice(0,20)
+/** The selected span cannot start/end in the middle of a capitalized proper-name run. */
+export function completeNameSpan(text:string,start:number,end:number):boolean{
+ const before=text.slice(0,start).split('\n').pop()||'',after=text.slice(end).split('\n')[0]||''
+ const pre=before.replace(/[*_`]/g,''),post=after.replace(/[*_`]/g,'')
+ const word="[\\p{Lu}][\\p{L}'’0-9-]*"
+ // Punctuation terminates a run; whitespace and name connectors do not.
+ if(new RegExp(word+'(?:\\s+(?:&|of|the|de|la))?\\s+$','u').test(pre)&&!/(?:^|\s)(?:Visit|Stay|Eat|See|Book|Explore|Discover|At|In)\s*$/.test(pre))return false
+ if(new RegExp('^\\s+(?:(?:&|of|the|de|la)\\s+)?'+word,'u').test(post))return false
+ return true
+}
 /** A literal page title/category plus this pick's section. Never a synthesized kind claim. */
 export function verificationContext(line:ViewLine,records:SourceRecords,entries:ViewLine[]):string{
  const text=records.pageText(line.source)||''
@@ -187,6 +202,11 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   // The name is the server's: extracted from the line, so the model cannot invent or mis-copy one.
   const name=line.name,text=records.pageText(line.source)!,slice=text.slice(line.start,line.end),off=slice.indexOf(name)
   if(off<0){reject('name_not_on_line',name);continue}
+  const pageTitle=records.pageTitle(line.source)||'',titlePrefix=pageTitle.split(/\s[|–—]\s/)[0].trim()
+  if(pageTitle!==titlePrefix&&name===titlePrefix&&slice.includes('|')){reject('title_metadata',name);continue}
+  if(!completeNameSpan(text,line.start+off,line.start+off+name.length)){reject('name_fragment',name);continue}
+  // A short heading is ambiguous when its own page also spells a longer containing venue name.
+  if(entries.some(e=>e.source===line.source&&e.name!==name&&e.name.includes(name)&&e.name.length>name.length)){reject('name_fragment',name);continue}
   if(line.ctx&&line.ctx!==kind){reject('kind_mismatch',name);continue}
   // Verify against the source section, not a cleaned reason or an invented listing fallback.
   // Include prose following a heading so a neighborhood cannot become an attraction by losing its context.
@@ -241,5 +261,5 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
 export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):string{
  const what=kind==='hotel'?'a hotel or lodging property':kind==='restaurant'?'a restaurant, cafe or bar':'an attraction, museum, tour, venue or activity provider'
  const wrong=kind==='hotel'?'a restaurant, attraction or other non-lodging place':kind==='restaurant'?'a hotel, attraction or other non-food place':'a hotel or a restaurant'
- return `Name: "${name}"\nSource context (including surrounding prose): "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the source context identifies the complete name as a ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} rather than an area or category. A named entry in an explicit restaurant/hotel/attraction list is type evidence even without a descriptive sentence. This checks venue identity and kind, not proof of live hours, availability or prices. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, a chopped or incomplete heading fragment, or if you are unsure. A bare heading with no venue category or descriptive context is not evidence; use its page title, category and surrounding prose. Never use another entry to supply evidence about this name. Answer with exactly one word: yes or no.`
- }
+ return `Name: "${name}"\nSource context (including surrounding prose): "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the source context identifies the complete name as a ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} rather than an area or category. A named entry in an explicit restaurant/hotel/attraction list is type evidence even without a descriptive sentence. This checks venue identity and kind, not proof of live hours, availability or prices. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, a chopped or incomplete heading fragment, or if you are unsure. The name must be the full proper-name run in its source line, not a suffix or substring of a longer venue name. A bare heading with no venue category or descriptive context is not evidence; use its page title, category and surrounding prose. Never use another entry to supply evidence about this name. Answer with exactly one word: yes or no.`
+}
