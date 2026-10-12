@@ -873,7 +873,7 @@ export async function chatWithTools(
                         if(!pickedSoFar.length)return finish({reply:'I read the public sources but couldn\'t verify a '+missing.join(' or ')+' pick from them, so no researched itinerary was published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
                         // Partial, unverified fallback: publish what was verified; missing kinds get a truthful note, never invented rows. Never a full pass.
                         await enablePartial()
-                        messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,unsupported:missing,next:'Recommendations are attached server-side; no pick could be verified for '+missing.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
+                        messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:pickedSoFar.length,unsupported:missing,next:'Recommendations are attached server-side; no pick could be verified for '+missing.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
                     }
                     messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,name,line} from the numbered page lines for the missing kind(s) only.'})});continue
                 }
@@ -1034,4 +1034,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-        }
+}
