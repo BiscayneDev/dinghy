@@ -7,6 +7,8 @@ const GROUP_LIMITS={hotel:6,restaurant:5,activity:5}
 const NAV=/^(?:home|about(?: us)?|contact(?: us)?|menu|sign ?in|log ?in|search|cart|book now|privacy policy|terms(?: of use)?|cookies?|skip to content|subscribe|follow us|share|read more|next|previous)$/i
 
 export type ViewLine={n:number;source:string;start:number;end:number;text:string;name:string;ctx?:Kind}
+const AREA_WORDS=/\b(?:calle|avenida|rue|via|paseo|calzada|district|neighbou?rhood|quarter|barrio|downtown|midtown|uptown|corridor|strip|row|walk|mile|waterfront|boardwalk|promenade|old town|little [A-Z]\w+)\b/i
+const OWN_WORD=/\b(?:museum|gallery|park|garden|gardens|hotel|inn|resort|cafe|caf[eé]|restaurant|bar|grill|kitchen|house|club|hall|theater|theatre|tower|castle|zoo|aquarium|beach club|spa|trekking|tours?)\b/i
 const STREET_END=/^(?:street|st|avenue|ave|boulevard|blvd|road|rd|drive|dr|lane|ln|highway|hwy|parkway|pkwy|way|court|ct|causeway|trail|terrace|suite|ste)$/i
 const GENERIC_WORDS=new Set('coral reef beach park bay island river lake garden gardens downtown district old new north south east west central grand main ocean sea harbor harbour marina bridge pier point cove key keys city town village center centre square plaza avenue view views sunset sunrise tropical paradise golden blue green white royal'.split(' '))
 const SECTION_CTX:[RegExp,Kind][]=[[/\b(?:hotels|hotel (?:suggestions|recommendations|options|picks)|stays|lodging|accommodations?|where to stay|places to stay)\b/i,'hotel'],[/\b(?:restaurants|restaurant (?:suggestions|recommendations|options|picks)|dining|eateries|where to eat|places to eat|cafes|bars)\b/i,'restaurant'],[/\b(?:things to do|(?:activity|attraction) (?:suggestions|recommendations|options|picks)|attractions|activities|sights|museums|experiences|sightseeing)\b/i,'activity']]
@@ -68,6 +70,8 @@ function extractFromHead(head:string,text:string):string|null{
  if(pick.from>0&&/^\d+[a-z]?$/i.test(words[pick.from-1]))return null
  if(STREET_END.test(ws[ws.length-1].replace(/[^\p{L}]/gu,''))||ws.every(w=>GENERIC_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))return null
  const name=ws.join(' ').replace(/[.\-]+$/,'')
+ // A neighborhood, street or district is an area, not a venue.
+ if(AREA_WORDS.test(name)&&!OWN_WORD.test(name))return null
  // A phrase, not a name: leads with a preposition or ranking word, is an all-caps category heading, or is a service category.
  if(PHRASE_LEAD.has(ws[0].toLowerCase().replace(/[^\p{L}]/gu,'')))return null
  const letters=name.replace(/[^\p{L}]/gu,'')
@@ -207,5 +211,5 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
 export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):string{
  const what=kind==='hotel'?'a hotel or lodging property':kind==='restaurant'?'a restaurant, cafe or bar':'an attraction, museum, tour, venue or activity provider'
  const wrong=kind==='hotel'?'a restaurant, attraction or other non-lodging place':kind==='restaurant'?'a hotel, attraction or other non-food place':'a hotel or a restaurant'
- return `Name: "${name}"\nLine from the page: "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the line shows it is an operating ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} that a traveler can use now. Answer no if it is ${wrong}, a city, neighborhood, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, or if you are unsure. Answer with exactly one word: yes or no.`
+ return `Name: "${name}"\nLine from the page: "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the line shows it is an operating ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} that a traveler can use now. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, or if you are unsure. Answer with exactly one word: yes or no.`
 }
