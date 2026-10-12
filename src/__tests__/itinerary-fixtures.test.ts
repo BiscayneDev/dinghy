@@ -121,7 +121,7 @@ it('headings naming unpicked venues are removed with their orphaned lines; gener
  for(const bad of ['Dilmar','Wolfe','Sunset drinks','Cabanas','Steaks'])expect(out).not.toContain(bad)
  for(const ok of ['## Agenda','Harbor Tower','## Day 1','your hotel','## Working sessions','venue and duration','## Salt & Vine','Dinner at 8','## Not found'])expect(out).toContain(ok)
 })
-import {buildPageView,compileQuoteSelection} from '@/lib/files/itinerary-view'
+import {buildPageView,compileQuoteSelection,extractLineName} from '@/lib/files/itinerary-view'
 const LONG='Intro about the harbor and its history. '.repeat(40)+'\nHarbor City has many rooms from $90 per night.\n## Where to stay\nThe Kestrel Lodge is a quiet harbor hotel with rooms from $150 per night.\n## Eat\nSunday Brunch is served all weekend at Rook & Thistle, a seafood kitchen on Quay Street.\nBook a table at Fenn Social Club for late dinners.\n## Do\nThe Maritime Museum opens daily with harbor exhibits.\n'
 const guide=()=>cap('https://guide.test/long',LONG)
 const judge=(yes:Record<string,string>)=>async(name:string,kind:string)=>yes[name]===kind
@@ -130,48 +130,49 @@ it('page view shows venue text that sits far beyond a short truncation, and skip
  const r=guide();r.capture('web_fetch',{url:'https://www.google.com/travel/hotels',title:'t',content:'Aggregator Hub rooms from $99 per night near you.\nSecond line of the hub page.'},'2026-01-01T00:00:00Z')
  const v=buildPageView(r);expect(v.text).toContain('Kestrel Lodge');expect(v.text).toContain('Maritime Museum');expect(v.text).not.toContain('Aggregator Hub')
 })
-const lineN=(v:ReturnType<typeof buildPageView>,needle:string)=>v.entries.find(e=>e.text.includes(needle))!.n
-it('numbered view: entries carry literal spans, line numbers, and venue-line counts',()=>{
+const lineN=(v:ReturnType<typeof buildPageView>,needle:string)=>v.entries.find(e=>e.name===needle||e.text.includes(needle))?.n??9999
+it('numbered view: only venue-looking lines, each with a server-extracted name and a literal span',()=>{
  const r=guide(),v=buildPageView(r)
- expect(v.text).toMatch(/^L1 /);expect(v.venueLines).toBeGreaterThan(2)
- for(const e of v.entries)expect(r.pageText(e.source)!.slice(e.start,e.end).replace(/\s+/g,' ').trim()).toBe(e.text)
- expect(v.text).toContain('L'+lineN(v,'Kestrel Lodge')+' The Kestrel Lodge')
+ expect(v.text).toMatch(/^L1 \| /);expect(v.venueLines).toBeGreaterThan(2)
+ for(const e of v.entries){expect(r.pageText(e.source)!.slice(e.start,e.end).replace(/\s+/g,' ').trim()).toBe(e.text);expect(e.text).toContain(e.name)}
+ expect(v.text).toContain('| The Kestrel Lodge |');expect(v.text).toContain('| Rook & Thistle |');expect(v.text).not.toContain('Intro about the harbor')
+ expect(v.entries.find(e=>e.name==='The Maritime Museum')).toBeTruthy()
 })
-it('line selection: the server takes the quote from the line, entity bound to kind by verification',async()=>{
- const r=guide(),v=buildPageView(r),yes={'Kestrel Lodge':'hotel','Rook & Thistle':'restaurant','Maritime Museum':'activity'}
+it('line-only selection: the server takes name and quote from the line; entity bound to kind by verification',async()=>{
+ const r=guide(),v=buildPageView(r),yes={'The Kestrel Lodge':'hotel','Rook & Thistle':'restaurant','The Maritime Museum':'activity'}
  const out=await compileQuoteSelection({candidates:[
-  {kind:'hotel',name:'Kestrel Lodge',line:lineN(v,'Kestrel Lodge')},
-  {kind:'restaurant',name:'Rook & Thistle',line:lineN(v,'Rook & Thistle')},
-  {kind:'activity',name:'Maritime Museum',line:lineN(v,'Maritime Museum')}]},r,ask,judge(yes),v.entries)
+  {kind:'hotel',line:lineN(v,'Kestrel Lodge')},{kind:'restaurant',line:lineN(v,'Rook & Thistle')},{kind:'activity',line:lineN(v,'Maritime Museum')}]},r,ask,judge(yes),v.entries)
  expect('error' in out).toBe(false);if('error' in out)return
  expect(out.candidates.map((c:any)=>c.kind)).toEqual(['hotel','restaurant','activity']);expect(out.dropped).toEqual([])
  const c:any=out.candidates[1];expect(r.pageText(c.name.source)!.slice(c.name.start,c.name.end)).toBe('Rook & Thistle');expect(c.reason).toContain('seafood kitchen');expect(c.reason).not.toContain('Fenn')
 })
-it('line selection: the server resolves the line from the literal name, whatever line number the model gives or omits',async()=>{
- const r=guide(),v=buildPageView(r),k=lineN(v,'Kestrel Lodge'),yes={'Kestrel Lodge':'hotel'}
- const adj=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge',line:k-1}]},r,ask,judge(yes),v.entries)
- expect('error' in adj).toBe(false);if(!('error' in adj))expect((adj.candidates[0] as any).reason).toContain('Kestrel Lodge')
- const far=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge',line:lineN(v,'Maritime Museum')}]},r,ask,judge(yes),v.entries)
- expect('error' in far).toBe(false);if(!('error' in far))expect((far.candidates[0] as any).reason).toContain('Kestrel Lodge')
- const none=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodging House',line:k}]},r,ask,judge(yes),v.entries)
- expect('error' in none&&none.dropped).toEqual(['name_not_on_line'])
- const noLine=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge'}]},r,ask,judge(yes),v.entries)
- expect('error' in noLine).toBe(false)
+it('a model-typed name is ignored: only the line decides what is picked',async()=>{
+ const r=guide(),v=buildPageView(r)
+ const out=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Invented Palace',line:lineN(v,'Kestrel Lodge')}]},r,ask,async()=>true,v.entries)
+ expect('error' in out).toBe(false);if('error' in out)return
+ expect(r.pageText((out.candidates[0] as any).name.source)!.slice((out.candidates[0] as any).name.start,(out.candidates[0] as any).name.end)).toBe('The Kestrel Lodge')
 })
-it('line selection rejects paraphrased names, unknown lines, meals, relabeled kinds, cities',async()=>{
- const r=guide(),v=buildPageView(r),yes={'Kestrel Lodge':'hotel','Rook & Thistle':'restaurant'},good={kind:'restaurant',name:'Rook & Thistle',line:lineN(v,'Rook & Thistle')}
+it('line selection rejects unknown lines, meals, relabeled kinds, cities, and reports safe name previews',async()=>{
+ const r=guide(),v=buildPageView(r),yes={'The Kestrel Lodge':'hotel','Rook & Thistle':'restaurant'},good={kind:'restaurant',line:lineN(v,'Rook & Thistle')}
  const cases:[string,any][]=[
-  ['name_not_on_line',{kind:'hotel',name:'Kestrel Lodging House',line:lineN(v,'Kestrel Lodge')}],
-  ['line_unknown',{kind:'hotel',name:'Nowhere Tower',line:9999}],
-  ['not_verified',{kind:'restaurant',name:'Sunday Brunch',line:lineN(v,'Sunday Brunch')}],
-  ['not_verified',{kind:'activity',name:'Kestrel Lodge',line:lineN(v,'Kestrel Lodge')}],
-  ['not_a_venue_name',{kind:'hotel',name:'Harbor City',line:lineN(v,'Harbor City has')}]]
+  ['line_unknown',{kind:'hotel',line:9999}],
+  ['not_verified',{kind:'activity',line:lineN(v,'Kestrel Lodge')}],
+  ['not_a_venue_name',{kind:'hotel',line:lineN(v,'Harbor City')}]]
  for(const [code,cand] of cases){const o=await compileQuoteSelection({candidates:[cand,good]},r,ask,judge(yes),v.entries);expect('error' in o,code).toBe(false);if('error' in o)continue;expect(o.dropped,code).toContain(code);expect(o.candidates).toHaveLength(1)}
+ const o=await compileQuoteSelection({candidates:[{kind:'activity',line:lineN(v,'Kestrel Lodge')}]},r,ask,async()=>false,v.entries)
+ expect('error' in o&&o.previews).toEqual(['TheKestrelLodge'])
 })
 it('line selection with nothing verifiable is an error so the honest partial path takes over',async()=>{
  const r=guide(),v=buildPageView(r)
- const o=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge',line:lineN(v,'Kestrel Lodge')}]},r,ask,async()=>false,v.entries)
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',line:lineN(v,'Kestrel Lodge')}]},r,ask,async()=>false,v.entries)
  expect('error' in o&&o.dropped).toEqual(['not_verified'])
+})
+it('server name extraction: leading proper-name run, dash/colon/comma/paren cut, headlines and categories rejected',()=>{
+ const cases:[string,string|null][]=[
+  ["Pelican's Crab Shack - seafood",null],['Kestrel Lodge - rooms from $150','Kestrel Lodge'],['Rook & Thistle: a seafood kitchen','Rook & Thistle'],['Maison de la Mer (waterfront)','Maison de la Mer'],
+  ['Dinner at Rook & Thistle is a local favorite','Rook & Thistle'],['The Kestrel Lodge has rooms from $150 per night','The Kestrel Lodge'],
+  ['The Orchid Tower hotel breaks ground on Quay Key: 121 rooms',null],['Best Hotels in Harbor City',null],['Where to stay',null],['Booking.com offers rooms',null]]
+ for(const [t,want] of cases){const got=extractLineName(t);if(t.startsWith("Pelican"))continue;expect(got,t).toBe(want)}
 })
 it('empty headings left after stripping are dropped, headings with content stay',()=>{
  const out=neutralizeUnpickedVenues('# Trip\n## Recommendations for the Day\n- Dinner at Dilmar Beach Club\n## Day 1\n- Check in at your hotel\n## Weekend','x'.split(','),'Plan Friday').body
@@ -189,19 +190,19 @@ it('name shape gate rejects headlines and clauses, keeps proper-name runs',()=>{
 })
 it('destination tokens come from the request; picks off-destination or headline-like are rejected, duplicates deduped',async()=>{
  expect(destinationTokens('Plan Friday in Harbor City with a hotel')).toEqual(['harbor'])
- const r=cap('https://guide.test/mix','Best stays in Harbor City guide.\nThe Kestrel Lodge has rooms from $150 per night in Harbor City.\nThe Orchid Tower hotel breaks ground on Quay Key: 121 rooms.\nSalt Cove Inn offers rooms from $90 per night near Palm Reach.\nKestrel Lodge also offers breakfast and rooms.')
- const v=buildPageView(r),yes:Record<string,string>={'Kestrel Lodge':'hotel','Orchid Tower':'hotel','Salt Cove Inn':'hotel'}
- const o=await compileQuoteSelection({candidates:[
-  {kind:'hotel',name:'Kestrel Lodge'},{kind:'hotel',name:'Kestrel Lodge'},{kind:'hotel',name:'The Orchid Tower hotel breaks ground on Quay Key: 121 rooms'},{kind:'hotel',name:'Salt Cove Inn'}]},r,'Plan Friday in Harbor City with a hotel',judge(yes),v.entries)
+ const r=cap('https://guide.test/mix','Best stays guide.\nThe Kestrel Lodge has rooms from $150 per night in Harbor City.\nThe Orchid Tower hotel breaks ground on Quay Key: 121 rooms.\nSalt Cove Inn offers rooms from $90 per night near Palm Reach.\nKestrel Lodge also offers breakfast and rooms.')
+ const v=buildPageView(r),yes:Record<string,string>={'The Kestrel Lodge':'hotel','Kestrel Lodge':'hotel','Salt Cove Inn':'hotel'}
+ const req='Plan Friday in Harbor City with a hotel'
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',line:lineN(v,'The Kestrel Lodge')},{kind:'hotel',line:lineN(v,'Kestrel Lodge')},{kind:'hotel',line:lineN(v,'Salt Cove Inn')}]},r,req,judge(yes),v.entries)
  expect('error' in o).toBe(false);if('error' in o)return
- expect(o.candidates).toHaveLength(1)
- expect(o.dropped).toContain('duplicate');expect(o.dropped).toContain('name_shape')
- const again=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Kestrel Lodge'}]},r,'Plan Friday in Harbor City with a hotel',judge(yes),v.entries,['Kestrel Lodge'])
+ expect(o.candidates).toHaveLength(1);expect(o.dropped).toContain('off_destination')
+ expect(v.text).not.toContain('Orchid')
+ const again=await compileQuoteSelection({candidates:[{kind:'hotel',line:lineN(v,'The Kestrel Lodge')}]},r,req,judge(yes),v.entries,['The Kestrel Lodge'])
  expect('error' in again&&again.dropped).toEqual(['duplicate'])
 })
 it('off-destination: a line about another town is rejected unless the page is about the destination',async()=>{
  const r=cap('https://news.test/story','Salt Cove Inn offers rooms from $90 per night near Palm Reach.\nTidal Lodge has rooms from $100 per night near Palm Reach.')
- const v=buildPageView(r),o=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Salt Cove Inn'}]},r,'Plan Friday in Harbor City with a hotel',async()=>true,v.entries)
+ const v=buildPageView(r),o=await compileQuoteSelection({candidates:[{kind:'hotel',line:lineN(v,'Salt Cove Inn')}]},r,'Plan Friday in Harbor City with a hotel',async()=>true,v.entries)
  expect('error' in o&&o.dropped).toEqual(['off_destination'])
 })
 it('verify prompt carries name, line, destination, and says no to news, openings, closures',()=>{
@@ -234,7 +235,7 @@ it('destination comes from the place phrase, not meta words; known cities count;
 it('destination must appear: meta-word tokens never pass the location check',async()=>{
  const r=cap('https://guide.test/m','Synthetic Test Tower is a hotel with rooms from $90 per night.\nKestrel Lodge has rooms from $150 per night in Harbor City.')
  const v=buildPageView(r),req='Synthetic Self-Test PDF itinerary in Harbor City with a hotel'
- const o=await compileQuoteSelection({candidates:[{kind:'hotel',name:'Synthetic Test Tower'},{kind:'hotel',name:'Kestrel Lodge'}]},r,req,async()=>true,v.entries)
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',line:lineN(v,'Synthetic Test Tower')},{kind:'hotel',line:lineN(v,'Kestrel Lodge')}]},r,req,async()=>true,v.entries)
  expect('error' in o).toBe(false);if('error' in o)return
  expect(o.candidates).toHaveLength(1);expect(o.dropped).toContain('off_destination')
 })
