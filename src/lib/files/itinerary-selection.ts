@@ -127,6 +127,15 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
  const lines=body.split('\n'),keep:string[]=[];let removed=0,skipUnder=false,sectionKind:string|undefined
  for(const line of lines){
   const heading=/^\s*#/.test(line)
+  const boldOnly=/^\s*(?:[-*•]\s+)?\*\*([^*]+)\*\*\s*:?\s*$/.exec(line)
+  const label=boldOnly?.[1]?.trim()
+  if(label&&/^(?:lunch|dinner|breakfast|brunch|dining|restaurants?|eats|hotels?|lodging|stays|activities|attractions|things to do)$/i.test(label)){sectionKind=/^(?:hotels?|lodging|stays)$/i.test(label)?'hotel':/^(?:activities|attractions|things to do)$/i.test(label)?'activity':'restaurant'}
+  else if(label&&/^\p{Lu}/u.test(label)&&/^\s*[-*•]\s+/.test(line)&&!label.split(/\s+/).every(w=>GENERIC_CAPS.has(w.toLowerCase())||UNIT_GENERIC.has(w.toLowerCase()))){
+   const key=normName(label),pick=verified.find(p=>normName(p.name)===key||normName(p.name).startsWith(key+' '))
+   const known=pick||pickNames.some(n=>normName(n)===key)
+   const inRequest=normName(request).includes(key)
+   if((!known&&!inRequest)||(pick&&sectionKind&&pick.kind!==sectionKind)){removed++;continue}
+  }
   if(!heading&&skipUnder){if(!line.trim()){keep.push(line)}else removed++;continue}
   if(heading){skipUnder=false;sectionKind=/\b(?:lunch|dinner|breakfast|brunch|dining|restaurants?|eats)\b/i.test(line)?'restaurant':/\b(?:hotels?|lodging|stays)\b/i.test(line)?'hotel':/\b(?:activities|attractions|things to do)\b/i.test(line)?'activity':undefined}
   if(!heading&&sectionKind&&verified.some(p=>p.kind!==sectionKind&&line.toLowerCase().includes(p.name.toLowerCase()))){removed++;continue}
