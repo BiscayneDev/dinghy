@@ -72,3 +72,20 @@ export function compileMentionSelection(input:unknown,menu:Mention[],records:Sou
  if(!kept.length)return {error:'No valid candidate. Use ids exactly as listed in the menu, with kind chosen from the context. Dropped: '+[...new Set(dropped)].join(', '),dropped}
  return {candidates:kept,dropped}
 }
+
+/** Kinds the user's request actually asks for; the renderer contract needs rows for each. */
+export function requiredKinds(request:string):('hotel'|'restaurant'|'activity')[]{
+ const k:('hotel'|'restaurant'|'activity')[]=[]
+ if(/\b(?:hotels?|places? to stay)\b/i.test(request))k.push('hotel')
+ if(/\brestaurants?\b/i.test(request))k.push('restaurant')
+ if(/\b(?:activities|things to do|fun things)\b/i.test(request))k.push('activity')
+ return k
+}
+export const missingKinds=(cands:Record<string,unknown>[],need:string[])=>need.filter(k=>!cands.some(c=>c.kind===k))
+/** Accumulate picks across select calls; same mention is never added twice; group limits hold. */
+export function mergePicks(prior:Record<string,unknown>[],next:Record<string,unknown>[]):Record<string,unknown>[]{
+ const out=[...prior],key=(c:any)=>`${c.name.source}:${c.name.start}`,seen=new Set(out.map(key)),counts:Record<string,number>={hotel:0,restaurant:0,activity:0}
+ for(const c of out)counts[c.kind as string]++
+ for(const c of next){if(seen.has(key(c))||counts[c.kind as string]>=GROUP_LIMITS[c.kind as keyof typeof GROUP_LIMITS])continue;seen.add(key(c));counts[c.kind as string]++;out.push(c)}
+ return out
+}
