@@ -47,3 +47,7 @@ it('writes a multipage PDF with a long hotel URL for bullet pagination review',a
  const body=Array.from({length:22},(_,i)=>'- Agenda '+i+' keeps the requested work visible.').join('\n')+'\n## Hotels\n:::stay\nHarbor Inn | unknown | unknown | unknown | Hours and availability unverified | | https://fictional.test/hotel/harbor-inn/long-path-to-the-source-page-for-complete-provenance-and-link-verification\n:::\n\nSelection reasons:\n- Harbor Inn is listed as a place to stay.'
  await mkdir('/tmp/itinerary-polish',{recursive:true});await writeFile('/tmp/itinerary-polish/bullet.pdf',await renderPdf({title:'Harbor weekend',body}))
 })
+it('meal orphan wait and reservation claims disappear without a named pick',()=>{
+ const o=neutralizeUnpickedVenues('## Lunch\nReservations may be hard to get\n## Dinner\nPopular spot, expect a wait\n## Friday\n- Office visit',['Harbor Inn'],'Lunch Dinner Friday office visit',[],[{kind:'hotel',name:'Harbor Inn'}])
+ expect(o.body).not.toMatch(/hard to get|expect a wait/);expect(o.body).toContain('Office visit')
+})
