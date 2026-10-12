@@ -197,7 +197,7 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
    .filter(n=>n!==name&&!n.includes(name)&&!name.includes(n)&&!STREET_END.test(n.split(/\s+/).pop()||'')&&!n.split(/\s+/).every(w=>SKIP_RUN.has(w.toLowerCase())))
   const mentionsOther=(t:string)=>others.some(o=>t.toLowerCase().includes(o.toLowerCase()))
   const unsafeReason=(t:string)=>mentionsOther(t)||CHIP.test(t)||/[$€£¥]|\b(?:USD|EUR|GBP)\s*\d|\b\d+(?:[.,]\d+)?\s*(?:dollars?|euros?|pounds?)\b|\b(?:I|we|our|ours|us|my|mine)\b/i.test(t)
-  const sentences=(t:string)=>t.split(/(?<=[.!?])\s+|\n+/).map(x=>stripUi(norm(x)))
+  const sentences=(t:string)=>t.split(/(?<=[.!?])\s+|\n+/).map(x=>stripUi(norm(x.replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/[*_`]/g,''))))
   const own=new RegExp('(?:'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'|^(?:It|Its|This|They|The (?:hotel|restaurant|property|museum|park|venue|bar|cafe))\\b)','i')
   const usable=(x:string)=>x.split(' ').length>=5&&x.length<=260&&!NEWS_LINE.test(x)&&own.test(x)&&!unsafeReason(x)
   // Drop whole unsafe sentences. Cutting them before another venue leaves misleading fragments.
@@ -207,11 +207,13 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
    const limit=Math.min(sectionEnd,nextVenue?nextVenue.start:Infinity)
    quote=sentences(text.slice(line.end,limit)).find(usable)||''
   }
-  if(!quote)quote=sentences(text).find(x=>x.includes(name)&&usable(x))||''
+  if(!quote)quote=sentences(text).find(x=>x.toLowerCase().includes(name.toLowerCase())&&usable(x))||''
   if(!quote){
    const title=stripUi(norm(records.pageTitle(line.source)||'')).slice(0,100),label=kind==='hotel'?'a place to stay':kind==='restaurant'?'a place to eat or drink':'something to do'
    // The page title is optional display text, never evidence or a way to reintroduce unsafe content.
    quote=`${name}. Listed as ${label}${title&&!unsafeReason(title)?' on "'+title+'"':' on the source page'}.`.slice(0,300)
+   const area=norm(text.slice(line.end,sectionEnd)).match(/\b(?:in|to|within|around)\s+(?:the\s+)?([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}\s+(?:District|Quarter|Neighborhood))\b/)?.[1]
+   if(area)quote+=` The source mentions ${area}.`
   }
   if(kindNameMismatch(name,kind)){reject('kind_mismatch',name);continue}
   if(!nameShapeOk(name)){reject('name_shape',name);continue}
