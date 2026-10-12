@@ -144,6 +144,7 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
   if(heading&&headRe&&headRe.test(line)&&!headRe.test(request)){removed++;skipUnder=true;continue}
   if(!heading&&/\b(?:weekend events?|local events?|events? (?:this|happening|nearby)|festivals?|concerts?|live music|happening (?:this|in))\b/i.test(line)&&!/\b(?:events?|festivals?|concerts?|live music)\b/.test(reqLc)){removed++;continue}
   if(/\b(?:no|not|none|zero)\b[^.\n]*\b(?:hotels?|restaurants?|dining|activities|venues?)\b[^.\n]*\b(?:recommend\w*|verified|found|available)\b/i.test(line)||/\b(?:no|not)\s+(?:\w+\s+){0,2}recommend\w*\b/i.test(line)||(refRe&&refRe.test(line))){removed++;continue}
+  if(!heading&&unsupported.includes('activity')&&/^\s*#{1,4}\s+(?:afternoon|evening)\b/i.test(keep.filter(l=>/^\s*#/.test(l)).at(-1)||'')&&verified.some(p=>p.kind==='hotel'&&line.toLowerCase().includes(p.name.toLowerCase()))){removed++;continue}
   if(!heading){
    const lw=wordsOf(line),lcl=line.toLowerCase()
    const mentions=pickNames.some(n=>n&&lcl.includes(n.toLowerCase()))
@@ -158,7 +159,8 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
    if(/^[.!?:;]$/.test(w)){atStart=true;run=0;continue}
    if(w===','){run=0;continue}
    if(!/^\p{L}/u.test(w)){continue}
-   const first=atStart&&!heading;atStart=false
+   const timeSection=/^\s*#{1,4}\s+(?:morning|afternoon|evening|night)\b/i.test(keep.filter(l=>/^\s*#/.test(l)).at(-1)||'')
+   const first=atStart&&!heading&&!(unsupported.length&&timeSection);atStart=false
    const cap=/^\p{Lu}/u.test(w)&&w.length>=3&&!first
    const unknown=cap&&!allowed.has(w.toLowerCase().replace(/['’]s$/,'').replace(/[.\-]+$/,''))
    if(unknown){run++;if(run>=2||w.length>=4)bad=true}else if(!cap)run=0
@@ -257,7 +259,7 @@ export function dayForItem(request:string,index:number):string|undefined{
 export function ensureWorkingSessions(body:string,request:string):{body:string;added:number}{
  const m=/\bworking sessions?\b/i.exec(request)
  if(!m||/working sessions?/i.test(body))return {body,added:0}
- const lines=body.split('\n');insertUnderDay(lines,dayForItem(request,m.index),['- Working sessions: venue and duration to confirm.'],false)
+ const lines=body.split('\n'),office=lines.findIndex(l=>/office visit/i.test(l)&&/\d/.test(l));if(office>=0)lines.splice(office+1,0,'- Working sessions: venue and duration to confirm.');else insertUnderDay(lines,dayForItem(request,m.index),['- Working sessions: venue and duration to confirm.'],false)
  return {body:lines.join('\n'),added:1}
 }
 const TIME_RE=/\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b/gi
@@ -283,4 +285,10 @@ export function ensureRequestAgenda(body:string,request:string):{body:string;add
  const lines=body.split('\n')
  for(const g of groups){insertUnderDay(lines,g.day,g.rows,true)}
  return {body:lines.join('\n'),added:add.length}
+   }
+
+/** A requested weekend remains visible even when recommendations could not be verified. */
+export function ensureWeekendGap(body:string,request:string,unsupported:string[]):string{
+ if(/\bweekend\b/i.test(request)&&unsupported.includes('activity')&&!/^\s*#{1,4}[^\n]*\b(?:weekend|saturday|sunday)\b/im.test(body))return body+'\n\n## Weekend\n- Activity recommendations could not be verified from the pages read. Timing remains open.'
+ return body
    }
