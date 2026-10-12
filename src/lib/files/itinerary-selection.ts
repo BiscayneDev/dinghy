@@ -210,6 +210,17 @@ export function ensurePlanFromPicks(body:string,request:string,picks:{kind:strin
  insertUnderDay(lines,first,[...mainRows,timing],false)
  return {body:lines.join('\n'),added:rows.length+1}
 }
+/** Repeated untimed recommendation bullets are redundant, not distinct visits. Timed agenda rows stay. */
+export function dedupePickBullets(body:string,names:string[]):{body:string;removed:number}{
+ const seen=new Set<string>();let removed=0
+ const lines=body.split('\n').filter(l=>{
+  if(!/^\s*[-*•]\s/.test(l)||/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.test(l))return true
+  const hits=names.filter(n=>n&&l.toLowerCase().includes(n.toLowerCase())).map(n=>n.toLowerCase()).sort()
+  if(!hits.length)return true
+  const key=hits.join('|');if(seen.has(key)){removed++;return false}seen.add(key);return true
+ })
+ return {body:lines.join('\n'),removed}
+}
 const DAYS_RE=/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i
 const dayName=(d:string)=>d[0].toUpperCase()+d.slice(1).toLowerCase()
 /** Insert rows under the heading of a named weekday (top of the day, or at the end of its section). With no such heading, a heading for that day is created before the first day heading, else after the title. */
