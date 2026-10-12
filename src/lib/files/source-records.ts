@@ -9,7 +9,8 @@ const urlOk = (value: unknown): value is string => {
     if (typeof value !== 'string' || /[\s<>\"|{}\[\]()\\]/.test(value)) return false
     try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password } catch { return false }
 }
-const text = (value: unknown) => typeof value === 'string' && value.trim() ? value : null
+import { decodeEntities } from './entities'
+const text = (value: unknown) => typeof value === 'string' && value.trim() ? decodeEntities(value) : null
 export class SourceRecords {
     private records: SourceRecord[] = []
     capture(tool: string, data: unknown, checkedAt: string): SourceRecord[] {
@@ -67,6 +68,7 @@ export class SourceRecords {
     }
     /** Literal page text for a successful page read, else null. */
     pageText(source:string):string|null { const r=this.records.find(x=>x.id===source&&x.origin==='page'); return r?.content??null }
+    pageUrl(source:string):string|null { return this.records.find(x=>x.id===source)?.url??null }
     pageIds() { return this.records.filter(r=>r.origin==='page' && r.content).map(r=>r.id) }
     size() { return this.records.length }
     available() { return this.records.map(r => ({id:r.id,fields:fields.filter(f=>r[f]!==null)})) }

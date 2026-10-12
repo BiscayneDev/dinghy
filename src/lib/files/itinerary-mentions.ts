@@ -34,9 +34,36 @@ export function hintFor(text:string,context:string):Kind|undefined {
  // A tie gives no hint rather than a wrong one.
  return sc[0].v>0&&sc[0].v-sc[1].v>=1?sc[0].k:undefined
 }
-export function extractMentions(records:SourceRecords,max=60,need:Kind[]=[]):Mention[] {
+/** Aggregator hubs and UI shells (search/travel hubs, social) are not sources of venue facts. */
+export function isHubUrl(url:string|null):boolean {
+ if(!url)return false
+ try{
+  const u=new URL(url),h=u.hostname.replace(/^www\./,'').toLowerCase(),path=u.pathname.toLowerCase()
+  if(/(^|\.)(google|bing|duckduckgo|yahoo|facebook|instagram|pinterest|tiktok|youtube|youtu|linkedin)\.[a-z.]+$/.test(h)||/^(x|twitter)\.com$/.test(h))return true
+  if(/\/(search|flights|maps|travel\/(?:hotels|flights|explore)|hotel-search|searchresults)(\/|$)/.test(path))return true
+ }catch{return true}
+ return false
+}
+/** Venue evidence: price, address, rating, hours, booking, rooms, menu, tickets and similar facts in the same sentence. */
+const EVIDENCE=/[$€£]\s?\d|\b\d{1,5}\s+[\p{Lu}][\p{L}]+\s+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Rd|Road|Dr|Drive|Way|Ln|Lane|Pl|Place|Pkwy|Highway)\b|\(\d{3}\)|\b\d\.\d\b|\b(?:located|situated|address|opens?|open daily|hours|reservations?|book(?:ing)?|check-?in|per night|nightly|rooms?|suites?|chef|serves?|tasting menu|admission|tickets?|rated|rating|stars?|brunch|dinner|lunch|exhibits?|tours?|rooftop|oceanfront|waterfront)\b/iu
+export function sentenceAround(text:string,start:number,end:number):string {
+ let a=start;while(a>0&&start-a<160&&!/[\n.!?]/.test(text[a-1]))a--
+ let b=end,stops=0;while(b<text.length&&b-end<260){if(/[\n.!?]/.test(text[b])){if(++stops>=2||text[b]==='\n')break}b++}
+ return text.slice(a,b).replace(/\s+/g,' ').trim()
+}
+const PLACE_SUFFIX=new Set(['district','neighborhood','neighbourhood','quarter','downtown','county','city','area','village'])
+export const placeWordsFrom=(request:string):Set<string>=>new Set((request.match(/\p{Lu}[\p{L}'’-]+/gu)||[]).map(w=>w.toLowerCase()))
+export type ExtractOpts={placeWords?:Set<string>;evidence?:boolean}
+export function extractMentions(records:SourceRecords,max=45,need:Kind[]=[],opts:ExtractOpts={}):Mention[] {
+ const useEvidence=opts.evidence!==false
+ const pages=records.pageIds().filter(id=>{
+  if(!useEvidence)return true
+  if(isHubUrl(records.pageUrl(id)))return false
+  const t=records.pageText(id)||'';let n=0;for(const seg of t.split(/[\n.!?]+/)){if(EVIDENCE.test(seg)&&++n>=2)return true}
+  return false
+ })
  const found=new Map<string,{source:string;start:number;end:number;text:string;count:number;multi:boolean}>()
- for(const source of records.pageIds()){
+ for(const source of pages){
   const text=records.pageText(source);if(!text)continue
   const toks:{w:string;s:number;e:number}[]=[];for(const m of text.matchAll(WORD))toks.push({w:m[0].replace(/[.\-]+$/,''),s:m.index!,e:m.index!+m[0].replace(/[.\-]+$/,'').length})
   let i=0
@@ -56,13 +83,13 @@ export function extractMentions(records:SourceRecords,max=60,need:Kind[]=[]):Men
    const first=words[0],last=words[words.length-1],span=text.slice(first.s,last.e)
    const prev=text.slice(Math.max(0,first.s-3),first.s),sentenceInitial=first.s===0||/[.!?\n]\s*$/.test(prev)
    const single=words.length===1,low=span.toLowerCase()
-   const ok=span.length>=4&&span.length<=80&&!STOP.has(low)&&!(single&&(sentenceInitial||span.length<5))&&!isCategoryPhrase(words.map(w=>w.w))
+   const ok=span.length>=4&&span.length<=80&&!STOP.has(low)&&!(single&&(sentenceInitial||span.length<(useEvidence?5:4)))&&!isCategoryPhrase(words.map(w=>w.w))
    if(ok){const prior=found.get(low);if(prior)prior.count++;else found.set(low,{source,start:first.s,end:last.e,text:span,count:1,multi:!single})}
    i=j+1
   }
  }
  // List-like lines and headings: the text before a dash, colon, comma or bracket is often the venue name, e.g. "1. Pelican's Crab Shack - seafood".
- for(const source of records.pageIds()){
+ for(const source of pages){
   const text=records.pageText(source);if(!text)continue
   let pos=0
   for(const raw of text.split('\n')){
@@ -85,17 +112,24 @@ export function extractMentions(records:SourceRecords,max=60,need:Kind[]=[]):Men
    if(prior)prior.count+=2;else found.set(low,{source,start,end:start+head.length,text:head,count:2,multi:words.length>1})
   }
  }
- const all=[...found.values()].sort((a,b)=>(Number(b.multi)-Number(a.multi))||b.count-a.count||a.start-b.start)
- const scored=all.map(m=>{const t=records.pageText(m.source)!;const wide=t.slice(Math.max(0,m.start-50),Math.min(t.length,m.end+70)).replace(/\s+/g,' ');return {m,hint:hintFor(m.text,wide)}})
+ const place=opts.placeWords
+ const all=[...found.values()].filter(m=>{
+  const ws=m.text.toLowerCase().split(/[^\p{L}'’]+/u).filter(Boolean)
+  if(place&&ws.length&&ws.every(w=>place.has(w)))return false
+  if(PLACE_SUFFIX.has(ws[ws.length-1]??''))return false
+  if(!useEvidence)return true
+  return EVIDENCE.test(sentenceAround(records.pageText(m.source)!,m.start,m.end))
+ }).sort((a,b)=>(Number(b.multi)-Number(a.multi))||b.count-a.count||a.start-b.start)
+ const scored=all.map(m=>{const t=records.pageText(m.source)!;const wide=sentenceAround(t,m.start,m.end);return {m,hint:hintFor(m.text,wide)}})
  // Kind-balanced: reserve slots for each requested kind (best hint evidence first, then rank), fill the rest by rank.
  const chosen=new Set<typeof scored[number]>(),per=Math.max(6,Math.floor(max/ Math.max(1,need.length)/1.5))
  for(const k of need)for(const x of scored.filter(x=>x.hint===k).slice(0,per))chosen.add(x)
  for(const x of scored){if(chosen.size>=max)break;chosen.add(x)}
  const ranked=[...chosen].slice(0,max).sort((a,b)=>a.m.source.localeCompare(b.m.source)||a.m.start-b.m.start)
- return ranked.map(({m,hint},k)=>{const t=records.pageText(m.source)!;const ctx=t.slice(Math.max(0,m.start-50),Math.min(t.length,m.end+60)).replace(/\s+/g,' ').trim();return {id:'m'+(k+1),source:m.source,start:m.start,end:m.end,text:m.text,context:ctx,...(hint?{hint}:{})}})
+ return ranked.map(({m,hint},k)=>{const t=records.pageText(m.source)!;const ctx=sentenceAround(t,m.start,m.end).slice(0,230);return {id:'m'+(k+1),source:m.source,start:m.start,end:m.end,text:m.text,context:ctx,...(hint?{hint}:{})}})
 }
 export function menuNote(menu:Mention[]):string {
- return 'Venue-name mentions found by the server in the full page text. Pick ONLY from these ids. Each line: id | exact text | nearby context | wording hint (a hint only; decide kind from the context).\n'+menu.map(m=>`${m.id} | ${m.text} | ${m.context} | ${m.hint??'none'}`).join('\n')
+ return 'Venue-name candidates found by the server in the page text, each with the sentence it appears in. Pick ONLY from these ids, and only when the sentence shows the entry is an actual hotel, restaurant or attraction (skip cities, neighborhoods, site labels and generic headings). Each line: id | exact text | sentence | wording hint (a hint only; decide kind from the sentence).\n'+menu.map(m=>`${m.id} | ${m.text} | ${m.context} | ${m.hint??'none'}`).join('\n')
 }
 
 export function hintCounts(menu:Mention[]):string {

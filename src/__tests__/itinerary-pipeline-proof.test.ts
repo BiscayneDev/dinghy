@@ -22,11 +22,11 @@ it('mandatory actual production schema compiles first attempt, renders HTML/PDF/
  published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
  vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
   if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel, dining and museum public listings.'}]}))
-  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn. Harbor Cafe. Harbor Museum. Hours, prices and availability unverified.</body></html>')
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
   requests.push(JSON.parse(init.body))
   const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
   const name=n===1?'web_search':n<=3?'select_itinerary_candidates':'create_file'
-  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,id:(requests.at(-1).messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Venue-name mentions')).content.split('\n').map((l:string)=>l.split(' | ')).find((p:string[])=>p[1]===nm)??['m999'])[0],reason:'Selected for the fictional plan',catch:'Availability unverified'}))}:{title:'Synthetic Harbor founders itinerary',body:body+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
+  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,id:(requests.at(-1).messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Venue-name candidates')).content.split('\n').map((l:string)=>l.split(' | ')).find((p:string[])=>p[1]===nm)??['m999'])[0],reason:'Selected for the fictional plan',catch:'Availability unverified'}))}:{title:'Synthetic Harbor founders itinerary',body:body+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
@@ -48,11 +48,11 @@ it('unverified requested kinds are noted truthfully as a distinct partial while 
  published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
  vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
   if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel, dining and museum public listings.'}]}))
-  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn. Harbor Cafe. Harbor Museum. Hours, prices and availability unverified.</body></html>')
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
   requests.push(JSON.parse(init.body))
   const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
   const name=n===1?'web_search':n<=4?'select_itinerary_candidates':'create_file'
-  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:[['hotel','Harbor Inn']].map(([kind,nm])=>({kind,id:(requests.at(-1).messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Venue-name mentions')).content.split('\n').map((l:string)=>l.split(' | ')).find((p:string[])=>p[1]===nm)??['m999'])[0],reason:'Selected for the fictional plan',catch:'Availability unverified'}))}:{title:'Synthetic Harbor founders itinerary',body,format:'pdf',kind:'itinerary'}
+  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:[['hotel','Harbor Inn']].map(([kind,nm])=>({kind,id:(requests.at(-1).messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Venue-name candidates')).content.split('\n').map((l:string)=>l.split(' | ')).find((p:string[])=>p[1]===nm)??['m999'])[0],reason:'Selected for the fictional plan',catch:'Availability unverified'}))}:{title:'Synthetic Harbor founders itinerary',body,format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
@@ -74,11 +74,11 @@ it('server states the requested working sessions when the model agenda omits the
  published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
  vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
   if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel, dining and museum public listings.'}]}))
-  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn. Harbor Cafe. Harbor Museum. Hours, prices and availability unverified.</body></html>')
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
   requests.push(JSON.parse(init.body))
   const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
   const name=n===1?'web_search':n<=3?'select_itinerary_candidates':'create_file'
-  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,id:(requests.at(-1).messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Venue-name mentions')).content.split('\n').map((l:string)=>l.split(' | ')).find((p:string[])=>p[1]===nm)??['m999'])[0],reason:'Selected for the fictional plan',catch:'Availability unverified'}))}:{title:'Synthetic Harbor founders itinerary',body:body.replace('Working sessions','Sessions')+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
+  const args=name==='web_search'?{query:'Harbor official visitor listings'}:name==='select_itinerary_candidates'?{candidates:(n===2?[['hotel','Harbor Inn']]:[['restaurant','Harbor Cafe'],['activity','Harbor Museum'],['activity','Invented Tower']]).map(([kind,nm])=>({kind,id:(requests.at(-1).messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Venue-name candidates')).content.split('\n').map((l:string)=>l.split(' | ')).find((p:string[])=>p[1]===nm)??['m999'])[0],reason:'Selected for the fictional plan',catch:'Availability unverified'}))}:{title:'Synthetic Harbor founders itinerary',body:body.replace('Working sessions','Sessions')+'\n:::options\nHand | typed | rows | here\n:::',format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active

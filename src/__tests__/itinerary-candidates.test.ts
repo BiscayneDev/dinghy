@@ -5,9 +5,9 @@ import {itineraryPageError} from '@/lib/files/itinerary-contract'
 import {chatWithTools} from '@/lib/spectrum/dinghy'
 vi.mock('@/lib/data-portability/erasure-state',()=>({assertAccountActive:async()=>{}}))
 afterEach(()=>vi.unstubAllGlobals())
-const url='https://harbor.test/guide',text='Harbor Inn. Harbor Cafe. Harbor Museum.'
+const url='https://harbor.test/guide',text='Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served.'
 const ref=(start:number,end:number,source='src2')=>({source,field:'content',start,end})
-const candidates=[{kind:'hotel',name:ref(0,10),reason:'Selected for this plan',catch:'Availability unverified'},{kind:'restaurant',name:ref(12,23),reason:'Dining choice',catch:'Hours unverified'},{kind:'activity',name:ref(25,38),reason:'Weekend choice',catch:'Tickets unverified'}]
+const candidates=[{kind:'hotel',name:ref(0,10),reason:'Selected for this plan',catch:'Availability unverified'},{kind:'restaurant',name:ref(18,29),reason:'Dining choice',catch:'Hours unverified'},{kind:'activity',name:ref(38,51),reason:'Weekend choice',catch:'Tickets unverified'}]
 const body='## Friday\n-10:00 User supplied office visit.\n- Working sessions: venue and duration to confirm.\n## Weekend\nPlans to confirm.'
 const ask='Make an itinerary for fictional founders on an unspecified Friday. Office10am then working sessions. Hotel and restaurant recommendations and weekend activities.'
 const input={title:'Fictional Harbor',body,itinerary_candidates:candidates}
@@ -20,7 +20,7 @@ describe('typed itinerary candidate compiler',()=>{
   const b=(sourced.input as any).body;expect(b).toContain('Harbor Inn | unknown | unknown | unknown | Availability unverified | | '+url);expect(b).toContain('Harbor Cafe | unknown | Dining choice | Hours unverified '+url);expect(b).toContain('Selected for this plan');expect(itineraryPageError(b,ask,[url])).toBeNull();expect((compiled.input as any).itinerary_candidates).toBeUndefined()
  })
  it.each([
-  ['nonhotel discarded fact',[{kind:'restaurant',name:ref(12,23),area:ref(0,10)}]],['missing name',[{kind:'hotel'}]],['ambiguous kind',[{kind:'place',name:ref(0,10)}]],['snippet',[{kind:'hotel',name:ref(0,6,'src1')}]],['page title',[{kind:'hotel',name:{source:'src2',field:'title'}}]],['unknown source',[{kind:'hotel',name:ref(0,10,'src99')}]],['cut name',[{kind:'hotel',name:ref(1,10)}]],['bad optional',[{kind:'hotel',name:ref(0,10),price:'$50'}]],['null optional',[{kind:'hotel',name:ref(0,10),rating:null}]],['unknown key',[{kind:'hotel',name:ref(0,10),book:true}]],['empty',[]],['overflow',Array(7).fill(candidates[0])]
+  ['nonhotel discarded fact',[{kind:'restaurant',name:ref(18,29),area:ref(0,10)}]],['missing name',[{kind:'hotel'}]],['ambiguous kind',[{kind:'place',name:ref(0,10)}]],['snippet',[{kind:'hotel',name:ref(0,6,'src1')}]],['page title',[{kind:'hotel',name:{source:'src2',field:'title'}}]],['unknown source',[{kind:'hotel',name:ref(0,10,'src99')}]],['cut name',[{kind:'hotel',name:ref(1,10)}]],['bad optional',[{kind:'hotel',name:ref(0,10),price:'$50'}]],['null optional',[{kind:'hotel',name:ref(0,10),rating:null}]],['unknown key',[{kind:'hotel',name:ref(0,10),book:true}]],['empty',[]],['overflow',Array(7).fill(candidates[0])]
  ])('rejects %s without guessing',(_label,value)=>expect(compileItineraryCandidates({...input,itinerary_candidates:value},registry())).toHaveProperty('error'))
  it('rejects mixing typed candidates with handwritten renderer blocks',()=>expect(compileItineraryCandidates({...input,body:body+'\n:::stay\nmalformed\n:::'},registry())).toHaveProperty('error'))
  it('escapes literal reason/catch controls without creating links or newblocks',()=>{const compiled=compileItineraryCandidates({...input,itinerary_candidates:[{...candidates[0],reason:'one|two\n:::stay <b>keep</b>',catch:'{{source:src9.url}}'}]},registry());if('error'in compiled)throw Error(compiled.error);const b=(compiled.input as any).body;expect(b).toContain('one&#124;two');expect(b).not.toContain('<b>');expect(b).not.toContain('{{source:src9.url}}');expect((b.match(/:::stay/g)??[])).toHaveLength(1)})

@@ -1,6 +1,6 @@
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
 import {SELECT_CANDIDATES_TOOL,mentionToolDef,compileMentionSelection,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,pickNameTexts} from '@/lib/files/itinerary-selection'
-import {extractMentions,menuNote,hintCounts,type Mention} from '@/lib/files/itinerary-mentions'
+import {extractMentions,placeWordsFrom,isHubUrl,menuNote,hintCounts,type Mention} from '@/lib/files/itinerary-mentions'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
@@ -602,7 +602,7 @@ export async function chatWithTools(
         // Candidates are selected by a separate forced call and attached by the server; the file call never carries them.
         const schema=t.inputSchema as {required?:string[];properties?:Record<string,unknown>}
         const {itinerary_candidates:_dropped,...properties}=schema.properties??{}
-        return {...t,description:'Itinerary recommendations are already selected and attached server-side. Supply title, body (the supplied agenda and day headings only, no stay/options/sources blocks), format and kind "itinerary". '+t.description.split(ITINERARY_CANDIDATE_NOTE).join(''),inputSchema:{...schema,properties,required:(schema.required??[]).filter(k=>k!=='itinerary_candidates')}}
+        return {...t,description:'Itinerary recommendations are already selected and attached server-side. Supply title, body (the supplied agenda and day headings only, no stay/options/sources blocks; refer to places generically such as "your hotel" or "dinner", never by venue name), format and kind "itinerary". '+t.description.split(ITINERARY_CANDIDATE_NOTE).join(''),inputSchema:{...schema,properties,required:(schema.required??[]).filter(k=>k!=='itinerary_candidates')}}
     })
     let selectedCandidates:Record<string,unknown>[]|undefined
     let selectionFailures=0
@@ -691,7 +691,7 @@ export async function chatWithTools(
             const reader=tools.find(t=>t.name==='web_fetch')!
             // At most six actual search URLs; preserve synthesis headroom on every try.
             let readsOk=0
-            for(const source of foundSources.slice(0,6)){
+            for(const source of foundSources.filter(x=>!isHubUrl(x.url)).slice(0,6)){
                 const args=JSON.stringify({url:source.url})
                 const blocked=egressRejection('web_fetch',args,tainted,corpus)
                 if(blocked){await opts.onStage?.('tool','research:read_blocked');break}
@@ -710,7 +710,7 @@ export async function chatWithTools(
                     const id=`required_read_${iteration}_${readsOk}`
                     messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
                     // A thin first page (few venue names) gets up to two more observed pages while time allows.
-                    if(readsOk>=3||extractMentions(sourceRecords,60,requiredKinds(currentRequest)).length>=25||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
+                    if(readsOk>=3||extractMentions(sourceRecords,45,requiredKinds(currentRequest),{placeWords:placeWordsFrom(currentRequest)}).length>=25||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
                     await opts.onStage?.('tool','research:read_more')
                     continue
                 }
@@ -725,7 +725,7 @@ export async function chatWithTools(
             if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
         }
         if(itineraryResearch&&mapResearchRead&&!selectedCandidates&&!menuShown){
-            menuShown=true;mentionMenu=extractMentions(sourceRecords,60,requiredKinds(currentRequest))
+            menuShown=true;mentionMenu=extractMentions(sourceRecords,45,requiredKinds(currentRequest),{placeWords:placeWordsFrom(currentRequest)})
             await opts.onStage?.('tool',`itinerary:mention_menu:${mentionMenu.length}`);await opts.onStage?.('tool',`itinerary:menu_hints:${hintCounts(mentionMenu)}`)
             if(mentionMenu.length)messages.push({role:'system',content:menuNote(mentionMenu)})
         }
@@ -996,4 +996,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-    }
+                           }

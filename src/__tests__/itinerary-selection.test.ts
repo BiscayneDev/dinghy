@@ -23,7 +23,7 @@ import {extractMentions} from '@/lib/files/itinerary-mentions'
 import {compileMentionSelection,mentionToolDef} from '@/lib/files/itinerary-selection'
 it('mentions come from the full page text, past a long nav prefix, with server-owned offsets and no auto price',()=>{
  const nav='Menu Home Contact cookies privacy terms. '.repeat(60)
- const r=new SourceRecords();r.capture('web_fetch',{url:'https://x.test/p',title:'T',content:nav+'Where to stay: The Grand Harbor Hotel, rooms from $189 per night near the pier. Dinner at Salt & Vine is a local favorite. Visit the Maritime Museum on Sunday.'},'2026-01-01T00:00:00Z')
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://site.test/p',title:'T',content:nav+'Where to stay: The Grand Harbor Hotel, rooms from $189 per night near the pier. Dinner at Salt & Vine is a local favorite. Visit the Maritime Museum on Sunday, tickets at the door.'},'2026-01-01T00:00:00Z')
  const menu=extractMentions(r),texts=menu.map(m=>m.text)
  expect(texts).toContain('Grand Harbor Hotel');expect(texts).toContain('Salt & Vine');expect(texts).toContain('Maritime Museum');expect(texts).not.toContain('Menu')
  const hotel=menu.find(m=>m.text==='Grand Harbor Hotel')!
@@ -37,7 +37,7 @@ import {extractMentions as em2,hintCounts} from '@/lib/files/itinerary-mentions'
 import {relaxedContract,requiredKinds} from '@/lib/files/itinerary-selection'
 it('menu reserves slots for each requested kind even on a nav-heavy page with many other names',()=>{
  const noise=Array.from({length:80},(_,i)=>`Featured Partner Alpha${String.fromCharCode(65+i%26)}${i} Group.`).join(' ')
- const r=new SourceRecords();r.capture('web_fetch',{url:'https://x.test/p',title:'T',content:noise+' Dinner at Salt & Vine restaurant, a seafood bistro. Brunch at Blue Door Cafe. Stay at Harborview Inn, rooms per night. See the Maritime Museum tour.'},'2026-01-01T00:00:00Z')
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://site.test/p',title:'T',content:noise+' Dinner at Salt & Vine restaurant, a seafood bistro. Brunch at Blue Door Cafe. Stay at Harborview Inn, rooms per night. See the Maritime Museum tour.'},'2026-01-01T00:00:00Z')
  const menu=em2(r,48,['hotel','restaurant','activity']),texts=menu.map(m=>m.text)
  expect(menu.length).toBeLessThanOrEqual(48);expect(texts).toContain('Salt & Vine');expect(texts).toContain('Harborview Inn');expect(texts).toContain('Maritime Museum')
  expect(menu.find(m=>m.text==='Salt & Vine')!.hint).toBe('restaurant');expect(hintCounts(menu)).toMatch(/^h\d+_r\d+_a\d+_n\d+$/)
@@ -49,8 +49,8 @@ it('relaxed contract drops only unsupported kinds and keeps research-needed',()=
 })
 
 it('hints are advisory: a pick whose hint differs is still accepted when the span is literal',()=>{
- const r=new SourceRecords();r.capture('web_fetch',{url:'https://x.test/p',title:'T',content:'Dinner at Salt & Vine restaurant, a seafood bistro with cocktails.'},'2026-01-01T00:00:00Z')
- const menu=extractMentions(r,60,['activity']);const sv=menu.find(m=>m.text==='Salt & Vine')!
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://site.test/p',title:'T',content:'Dinner at Salt & Vine restaurant, a seafood bistro with cocktails.'},'2026-01-01T00:00:00Z')
+ const menu=extractMentions(r,60,['activity'],{evidence:false});const sv=menu.find(m=>m.text==='Salt & Vine')!
  const out=compileMentionSelection({candidates:[{kind:'activity',id:sv.id,reason:'r',catch:'c'}]},menu,r)
  expect('error' in out).toBe(false)
 })
