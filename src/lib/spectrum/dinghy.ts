@@ -607,7 +607,7 @@ export async function chatWithTools(
     })
     let selectedCandidates:Record<string,unknown>[]|undefined
     let selectionFailures=0
-    let viewReady=false
+    let viewReady=false,viewEntries:import('@/lib/files/itinerary-view').ViewLine[]=[]
     const verdicts=new Map<string,boolean>();let verifyCalls=0
     let pickedSoFar:Record<string,unknown>[]=[]
     let unsupportedKinds:string[]=[]
@@ -616,7 +616,7 @@ export async function chatWithTools(
     const defsNow = () => {
         const defs=tools.map((t) => ({type:'function' as const,function:{name:t.name,description:t.description,parameters:t.inputSchema as Record<string,unknown>}}))
         const ids=sourceRecords.pageIds()
-        return itineraryResearch&&ids.length&&!selectedCandidates&&viewReady ? [...defs,quoteToolDef()] : defs
+        return itineraryResearch&&ids.length&&!selectedCandidates&&viewReady ? [...defs,quoteToolDef(viewEntries.length)] : defs
     }
     let messages: Record<string, unknown>[] = [
         {
@@ -712,7 +712,7 @@ export async function chatWithTools(
                     const id=`required_read_${iteration}_${readsOk}`
                     messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
                     // A thin first page (few venue names) gets up to two more observed pages while time allows.
-                    if(readsOk>=3||buildPageView(sourceRecords).lines>=30||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
+                    if(readsOk>=3||buildPageView(sourceRecords).venueLines>=40||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
                     await opts.onStage?.('tool','research:read_more')
                     continue
                 }
@@ -727,7 +727,7 @@ export async function chatWithTools(
             if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
         }
         if(itineraryResearch&&mapResearchRead&&!selectedCandidates&&!menuShown){
-            menuShown=true;const view=buildPageView(sourceRecords);viewReady=view.lines>0
+            menuShown=true;const view=buildPageView(sourceRecords);viewReady=view.lines>0;viewEntries=view.entries
             await opts.onStage?.('tool',`itinerary:page_view:${view.pages}_${view.lines}`)
             if(viewReady)messages.push({role:'system',content:viewNote(view)})
         }
@@ -781,7 +781,7 @@ export async function chatWithTools(
             // The gateway may not honor tool_choice; the offered set (one tool) is the real constraint. Bounded nudge, never a text answer.
             if(selecting&&selectionFailures<3){
                 selectionFailures++;await opts.onStage?.('tool','invalid:selection:no_call')
-                messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with {kind,name,quote} copied from the page text. Do not answer in text.'});continue
+                messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with {kind,name,line} using the numbered page lines. Do not answer in text.'});continue
             }
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
             if(contextualResearch&&!recoveryUsed&&(!mapResearchRead||prematureResearchReply(reply))&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=20000)){
@@ -840,7 +840,7 @@ export async function chatWithTools(
                         verdicts.set(vkey,ok);return ok
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
                 }
-                const picked=await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick)
+                const picked=await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries)
                 if('error' in picked){
                     selectionFailures++;await opts.onStage?.('tool','invalid:selection:'+picked.dropped[0])
                     if(selectionFailures>=3)return finish({reply:'I read the public sources but could not tie any hotel, restaurant or activity name to an exact passage, so no researched recommendations were published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
@@ -857,7 +857,7 @@ export async function chatWithTools(
                         await opts.onStage?.('tool',`itinerary:partial_unverified:${missing.join('_')}`);await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
                         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,unsupported:missing,next:'Recommendations are attached server-side; no pick could be verified for '+missing.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
                     }
-                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,name,quote} copied from the page text for the missing kind(s) only.'})});continue
+                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,name,line} from the numbered page lines for the missing kind(s) only.'})});continue
                 }
                 selectedCandidates=pickedSoFar
                 await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
@@ -1016,4 +1016,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+                                              }
