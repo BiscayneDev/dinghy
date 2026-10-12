@@ -618,7 +618,7 @@ export async function chatWithTools(
     }
     let pickedSoFar:Record<string,unknown>[]=[]
     let unsupportedKinds:string[]=[]
-    let menuShown=false
+    let menuShown=false,widened=false
     // Itinerary searches are steered to guides and roundups that list several venues, not single news stories.
     const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;return itineraryResearch&&name==='web_search'&&typeof q==='string'&&!/\b(guide|best|top)\b/i.test(q)?{...(i as Record<string,unknown>),query:q+' best hotels restaurants things to do guide'}:i}
     let bypassCandidates:Record<string,unknown>[]|undefined
@@ -822,6 +822,51 @@ export async function chatWithTools(
             return finish({ reply, toolCalls: toolCallCount, iterations: iteration, tainted })
         }
 
+        // Missing kinds reopen research on the server: kind-specific searches and page reads feed a fresh view, then selection is offered again.
+        const widenForMissing=async(missing:string[]):Promise<boolean>=>{
+            if(widened||!missing.length||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<50000))return false
+            widened=true
+            const searcher=tools.find(t=>t.name==='web_search'),reader=tools.find(t=>t.name==='web_fetch')
+            if(!searcher||!reader)return false
+            const dest=destinationTokens(currentRequest).join(' ')
+            if(!dest)return false
+            const seenIds=new Set(sourceRecords.pageIds()),seenUrls=new Set(foundSources.map(s=>s.url))
+            const phrase:Record<string,string>={hotel:'best hotels where to stay in',restaurant:'best restaurants where to eat in',activity:'best things to do attractions in'}
+            let reads=0
+            for(const kind of missing.slice(0,2)){
+                if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<30000)break
+                const q=`${phrase[kind]} ${dest} guide`,sargs=JSON.stringify({query:q})
+                if(egressRejection('web_search',sargs,tainted,corpus))continue
+                await assertAccountActive(ctx.userId,ctx.chatGuid)
+                toolCallCount++
+                let hits:{title:string;url:string}[]=[]
+                try{
+                    const r=await withinTurn(opts.deadlineAt,signal=>searcher.execute({query:q},{...ctx,signal}))
+                    if(r.success){
+                        sourceRecords.capture('web_search',r.data,new Date().toISOString())
+                        for(const h of ((r.data as {results?:{title?:unknown;url?:unknown}[]}|undefined)?.results??[])){if(typeof h.url==='string'&&!seenUrls.has(h.url)&&!isHubUrl(h.url)){seenUrls.add(h.url);hits.push({title:typeof h.title==='string'?h.title:'',url:h.url})}}
+                    }
+                }catch(err){if(err instanceof TurnDeadlineExceeded)throw err}
+                hits=hits.map(x=>({x,sc:sourceScore(x.url,x.title)})).filter(y=>y.sc>-3).sort((a,b)=>b.sc-a.sc).map(y=>y.x).slice(0,2)
+                for(const h of hits){
+                    if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<22000)break
+                    if(egressRejection('web_fetch',JSON.stringify({url:h.url}),tainted,corpus))continue
+                    toolCallCount++
+                    try{
+                        const r=await withinTurn(opts.deadlineAt,async signal=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([reader.execute({url:h.url},{...ctx,signal}),new Promise<never>((_,rej)=>{timer=setTimeout(()=>rej(new Error('timeout')),TOOL_TIMEOUT_MS)})])}finally{if(timer)clearTimeout(timer)}})
+                        if(r.success&&sourceRecords.capture('web_fetch',r.data,new Date().toISOString()).some(x=>x.content)){reads++;if(!foundSources.some(x=>x.url===h.url))foundSources.push({title:h.title.replace(/[\r\n]/g,' ').slice(0,100),url:h.url})}
+                    }catch(err){if(err instanceof TurnDeadlineExceeded)throw err}
+                }
+            }
+            await opts.onStage?.('tool',`itinerary:widen:${missing.map(k=>k[0]).join('')}_${reads}`)
+            if(!reads)return false
+            const view=buildPageView(sourceRecords,4500,13000,seenIds)
+            if(!view.lines)return false
+            viewEntries=view.entries
+            await opts.onStage?.('tool',`itinerary:page_view:${view.pages}_${view.lines}`)
+            messages.push({role:'system',content:'More pages were read for the missing kind(s): '+missing.join(', ')+'. These are the NEW candidate lines; line numbers restart here and replace the earlier numbers.\n'+viewNote(view)})
+            return true
+        }
         const correctingFile=fileValidationPending
         let correctionCallUsed=false
         if(correctingFile)fileRepairAttempted=true
@@ -840,7 +885,7 @@ export async function chatWithTools(
                     const vkey=`${kind}|${name}|${quote}`
                     const cached=verdicts.get(vkey);if(cached!==undefined)return cached
                     // At most 12 real verification calls per run; beyond that a pick is unverified, never assumed.
-                    if(verifyCalls>=12)return false
+                    if(verifyCalls>=30)return false
                     verifyCalls++
                     try{
                         const ac=new AbortController();const timer=setTimeout(()=>ac.abort(),8000)
@@ -849,7 +894,7 @@ export async function chatWithTools(
                         const j=await r.json() as {choices?:{message?:{content?:unknown}}[]}
                         const c=j.choices?.[0]?.message?.content
                         clearTimeout(timer)
-                        const ok=typeof c==='string'&&/^\s*yes[.!]?\s*$/i.test(c)
+                        const ok=typeof c==='string'&&/^\W*yes\W*$/i.test(c)
                         verdicts.set(vkey,ok);return ok
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
                 }
@@ -866,7 +911,7 @@ export async function chatWithTools(
                         const miss=await enablePartial()
                         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates!.length,unsupported:miss,next:'Recommendations are attached server-side; no pick could be verified for '+miss.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
                     }
-                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:picked.error})});continue
+                    {const w=await widenForMissing(missingKinds(pickedSoFar,requiredKinds(currentRequest)));messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:picked.error+(w?' New source pages were just added below; use the new line numbers.':'')})});continue}
                 }
                 pickedSoFar=mergePicks(pickedSoFar,picked.candidates)
                 const missing=missingKinds(pickedSoFar,requiredKinds(currentRequest))
@@ -878,7 +923,7 @@ export async function chatWithTools(
                         await enablePartial()
                         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:pickedSoFar.length,unsupported:missing,next:'Recommendations are attached server-side; no pick could be verified for '+missing.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
                     }
-                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,line} from the candidate lines for the missing kind(s) only.'})});continue
+                    {const w=await widenForMissing(missing);messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with {kind,line} from the candidate lines for the missing kind(s) only.'+(w?' New source pages for the missing kind(s) were just added below; use the new line numbers.':'')})});continue}
                 }
                 selectedCandidates=pickedSoFar
                 await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
@@ -1039,4 +1084,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                                                    }
+                            }

@@ -208,7 +208,7 @@ it('off-destination: a line about another town is rejected unless the page is ab
 })
 it('verify prompt carries name, line, destination, and says no to news, openings, closures',()=>{
  const p=verifyPrompt('Kestrel Lodge','hotel','The Kestrel Lodge has rooms.','harbor')
- expect(p).toContain('Kestrel Lodge');expect(p).toContain('harbor');expect(p).toMatch(/future openings, closures, demolitions/);expect(p).toMatch(/currently open/)
+ expect(p).toContain('Kestrel Lodge');expect(p).toContain('harbor');expect(p).toMatch(/closure, demolition or future opening/);expect(p).toMatch(/Answer yes only if the line shows/)
 })
 it('source score: guides beat news stories; news signatures score low',()=>{
  expect(sourceScore('https://site.test/best-hotels-in-harbor-city-guide','Best hotels in Harbor City')).toBeGreaterThan(0)
@@ -278,4 +278,24 @@ describe('ui junk, kind and body cleanup',()=>{
   expect(era('# Day\n## 10:00 AM - Office visit','Friday office visit 10am').added).toBe(0)
   expect(era('# Day','Friday office visit 10am').added).toBe(1)
  })
+})
+describe('reasons and orphan intros',()=>{
+ it('strips review and story ui strings',()=>{
+  expect(stripUi("Read full review Save Story Readers' Choice Harbor Suites")).toBe('Harbor Suites')
+ })
+ it('drops an intro line for an unverified kind',()=>{
+  const r=nuv('# Plan\nPlan these activities for the evening.\n## Notes\nkeep',[],'plan a trip',['activity'] as any)
+  expect(r.body).not.toContain('Plan these activities');expect(r.body).toContain('keep')
+ })
+})
+it('a colon intro for an unverified kind drops with its filler',()=>{
+ const r=nuv('# Plan\nTry these activities:\nSomething generic\nMore filler\n## Notes\nkeep',[],'plan a trip',['activity'] as any)
+ expect(r.body).not.toContain('generic');expect(r.body).toContain('keep')
+})
+it('a bare-name reason borrows only its own section, never the next venue',async()=>{
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://g.test/a',title:'Harbor',content:'Harbor Inn\nHarbor Inn sits beside the quiet old water.\nLantern Table\nLantern Table serves loud seafood dinners tonight.\n'} as any,'2026-01-01T00:00:00Z')
+ const v=buildPageView(r),ln=v.entries.find(e=>e.name==='Harbor Inn')!.n
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',line:ln}]},r,'trip to Harbor',async()=>true,v.entries)
+ expect('error' in o).toBe(false);if('error' in o)return
+ const reason=String((o.candidates[0] as any).reason);expect(reason).not.toMatch(/seafood|Lantern/)
 })

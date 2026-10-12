@@ -118,7 +118,7 @@ const UNIT_GENERIC=new Set('am pm et est edt local time times meeting meetings c
 export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:string,unsupported:string[]=[]):{body:string;removed:number}{
  const allowed=new Set<string>([...wordsOf(request),...pickNames.flatMap(wordsOf),...GENERIC_CAPS,...UNIT_GENERIC])
  const kindRe=unsupported.map(k=>k==='activity'?'activit(?:y|ies)':k==='restaurant'?'(?:restaurants?|dining|meals?)':'(?:hotels?|stays?|lodging)')
- const refRe=kindRe.length?new RegExp('\\b(?:recommended|suggested|selected|chosen|picked|our|the)\\s+(?:\\w+\\s+)?(?:'+kindRe.join('|')+')\\b','i'):null
+ const refRe=kindRe.length?new RegExp('\\b(?:recommended|suggested|selected|chosen|picked|our|the|these|those|following|below|top|best|great)\\s+(?:\\w+\\s+)?(?:'+kindRe.join('|')+')\\b','i'):null
  const headKinds=unsupported.map(k=>k==='activity'?'activit(?:y|ies)|things to do|events?|nightlife|sightseeing|evening':k==='restaurant'?'restaurants?|dining|dinner|lunch|brunch|breakfast|eats|food':'hotels?|stays?|lodging|accommodations?')
  const headRe=headKinds.length?new RegExp('\\b(?:'+headKinds.join('|')+')\\b','i'):null
  const reqLc=request.toLowerCase()
@@ -128,6 +128,7 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
   if(!heading&&skipUnder){if(!line.trim()){keep.push(line)}else removed++;continue}
   if(heading)skipUnder=false
   if(!line.trim()){keep.push(line);continue}
+  if(!heading&&kindRe.length&&/:\s*$/.test(line)&&new RegExp('\\b(?:'+kindRe.join('|')+')\\b','i').test(line)){removed++;skipUnder=true;continue}
   if(heading&&headRe&&headRe.test(line)&&!headRe.test(request)){removed++;skipUnder=true;continue}
   if(!heading&&/\b(?:weekend events?|local events?|events? (?:this|happening|nearby)|festivals?|concerts?|live music|happening (?:this|in))\b/i.test(line)&&!/\b(?:events?|festivals?|concerts?|live music)\b/.test(reqLc)){removed++;continue}
   if(/\b(?:no|not|none|zero)\b[^.\n]*\b(?:hotels?|restaurants?|dining|activities|venues?)\b[^.\n]*\b(?:recommend\w*|verified|found|available)\b/i.test(line)||/\b(?:no|not)\s+(?:\w+\s+){0,2}recommend\w*\b/i.test(line)||(refRe&&refRe.test(line))){removed++;continue}
