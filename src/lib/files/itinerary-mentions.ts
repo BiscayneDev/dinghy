@@ -5,7 +5,7 @@ import type {SourceRecords} from './source-records'
  * the model only picks ids and supplies kind and judgment. No kind is inferred. */
 export type Kind='hotel'|'restaurant'|'activity'
 export type Mention={id:string;source:string;start:number;end:number;text:string;context:string;hint?:Kind}
-const CONNECT=new Set(['of','the','de','la','del','and','&','at','du','von','van'])
+const CONNECT=new Set(['of','the','de','la','del','&','du','von','van'])
 const STOP=new Set(['the','a','an','in','at','on','our','your','my','we','you','it','is','are','this','that','these','those','for','with','from','to','and','or','but','if','as','by','of','all','new','top','best','menu','home','about','contact','book','visit','stay','view','read','more','see','click','login','sign','search','skip','cookie','cookies','privacy','terms','policy','share','follow','subscribe','email','phone','call','open','closed','hours','price','prices','rating','ratings','reviews','review','monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','hotel','hotels','restaurant','restaurants','dining','activities','things','guide','map','photos','overview','hello','welcome','who','what','where','when','why','how','there','here','also','some','many','most','each','every','one','two','three','best','free','join','get','find','explore','discover','learn','shop','menu','order','now','today','tonight','weekend','back','next','previous','page','pages','copyright','rights','reserved','instagram','facebook','twitter','tiktok','youtube','google','yelp','tripadvisor','usa','us'])
 const LEAD=new Set(['the','a','an','in','at','on','our','your','my','we','you','it','this','that','for','with','from','to','near','visit','stay','book','see','view','read','explore','discover','join','get','find','order','welcome','hello','where','what','who','when','how','dinner','lunch','breakfast','rooms','try','enjoy','also','and','or','but','if','as','by','of'])
 const TRAIL=new Set(['monday','tuesday','wednesday','thursday','friday','saturday','sunday','january','february','march','april','may','june','july','august','september','october','november','december','today','tonight','now','and','or','of','the'])
@@ -20,7 +20,7 @@ export function hintFor(text:string,context:string):Kind|undefined {
  // A tie gives no hint rather than a wrong one.
  return sc[0].v>0&&sc[0].v-sc[1].v>=1?sc[0].k:undefined
 }
-export function extractMentions(records:SourceRecords,max=48,need:Kind[]=[]):Mention[] {
+export function extractMentions(records:SourceRecords,max=60,need:Kind[]=[]):Mention[] {
  const found=new Map<string,{source:string;start:number;end:number;text:string;count:number;multi:boolean}>()
  for(const source of records.pageIds()){
   const text=records.pageText(source);if(!text)continue
@@ -45,6 +45,28 @@ export function extractMentions(records:SourceRecords,max=48,need:Kind[]=[]):Men
    const ok=span.length>=4&&span.length<=80&&!STOP.has(low)&&!(single&&(sentenceInitial||span.length<5))
    if(ok){const prior=found.get(low);if(prior)prior.count++;else found.set(low,{source,start:first.s,end:last.e,text:span,count:1,multi:!single})}
    i=j+1
+  }
+ }
+ // List-like lines and headings: the text before a dash, colon, comma or bracket is often the venue name, e.g. "1. Pelican's Crab Shack - seafood".
+ for(const source of records.pageIds()){
+  const text=records.pageText(source);if(!text)continue
+  let pos=0
+  for(const raw of text.split('\n')){
+   const lineStart=pos;pos+=raw.length+1
+   if(raw.length<4||raw.length>140)continue
+   const lead=raw.match(/^[\s#>*•\-\d.)]*/)![0].length,body=raw.slice(lead)
+   const head=body.match(/^[^–—:,(|·]*?(?=\s[-–—]\s|[–—:,(|·]|$)/)![0].replace(/\s+$/,'')
+   const words=head.split(/\s+/).filter(Boolean)
+   if(!words.length||words.length>7||head.length<4||head.length>80)continue
+   if(!/^[\p{Lu}\d]/u.test(head))continue
+   if(/[.!?]$/.test(head)&&words.length>4)continue
+   const minor=(w:string)=>CONNECT.has(w.toLowerCase())||/^[\d&+#.\-]+$/.test(w)||/^\p{Lu}/u.test(w)
+   if(!words.every(minor))continue
+   const low=head.toLowerCase()
+   if(words.length===1&&(STOP.has(low)||head.length<5))continue
+   if(words.every(w=>STOP.has(w.toLowerCase())))continue
+   const start=lineStart+lead,prior=found.get(low)
+   if(prior)prior.count+=2;else found.set(low,{source,start,end:start+head.length,text:head,count:2,multi:words.length>1})
   }
  }
  const all=[...found.values()].sort((a,b)=>(Number(b.multi)-Number(a.multi))||b.count-a.count||a.start-b.start)

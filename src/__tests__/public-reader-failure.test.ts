@@ -19,5 +19,5 @@ it('turn cancellation aborts native fetch and clears its timer',async()=>{
  const controller=new AbortController(),pending=webFetch.execute({url},{...ctx,signal:controller.signal});controller.abort();expect((await pending).success).toBe(false);expect(observed?.aborted).toBe(true);expect(vi.getTimerCount()).toBe(0)
 })
 it('success still requires public content without failure metadata',async()=>{
- vi.stubGlobal('fetch',vi.fn(async()=>new Response('<title>Harbor</title><p>Public listing</p>')));const result=await webFetch.execute({url},ctx);expect(result.success).toBe(true);expect(result.publicReadFailure).toBeUndefined();expect(result.data).toMatchObject({url,content:'Harbor Public listing'})
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response('<title>Harbor</title><p>Public listing</p>')));const result=await webFetch.execute({url},ctx);expect(result.success).toBe(true);expect(result.publicReadFailure).toBeUndefined();expect(result.data).toMatchObject({url,content:'Harbor\nPublic listing'})
 })
