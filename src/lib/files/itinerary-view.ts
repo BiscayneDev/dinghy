@@ -73,6 +73,8 @@ function extractFromHead(head:string,text:string):string|null{
  // Address fragments ("100 Chopin Plaza", "Galen Dr") and generic labels are not venue names.
  if(pick.from>0&&/^\d+[a-z]?$/i.test(words[pick.from-1]))return null
  if(STREET_END.test(ws[ws.length-1].replace(/[^\p{L}]/gu,''))||ws.every(w=>GENERIC_WORDS.has(w.toLowerCase().replace(/[^\p{L}]/gu,''))))return null
+ // A possessive owner prefix is not the venue. Keep an immediately continued full venue name.
+ if(/['’]s$/i.test(ws[ws.length-1])&&!OWN_WORD.test(ws.join(' ')))return null
  const name=ws.join(' ').replace(/[.\-]+$/,'')
  if(!OWN_WORD.test(name)&&(/\b(?:menus?|months?|through|powered by)\b/i.test(name)||ws.every(w=>GEO_NAMES.includes(w.toLowerCase())||NAME_CONNECT.has(w.toLowerCase()))))return null
  // Run-together or camel-case tokens (PoweredBy, HotList, SearchHack) are page UI, and a lone common word needs a venue word on its line.
