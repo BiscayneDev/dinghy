@@ -1,5 +1,5 @@
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
-import {SELECT_CANDIDATES_TOOL,mentionToolDef,compileMentionSelection,injectCandidates} from '@/lib/files/itinerary-selection'
+import {SELECT_CANDIDATES_TOOL,mentionToolDef,compileMentionSelection,injectCandidates,requiredKinds,missingKinds,mergePicks} from '@/lib/files/itinerary-selection'
 import {extractMentions,menuNote,type Mention} from '@/lib/files/itinerary-mentions'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
@@ -607,6 +607,7 @@ export async function chatWithTools(
     let selectedCandidates:Record<string,unknown>[]|undefined
     let selectionFailures=0
     let mentionMenu:Mention[]=[]
+    let pickedSoFar:Record<string,unknown>[]=[]
     let menuShown=false
     let bypassCandidates:Record<string,unknown>[]|undefined
     const defsNow = () => {
@@ -812,15 +813,23 @@ export async function chatWithTools(
                 await opts.onStage?.('tool',SELECT_CANDIDATES_TOOL)
                 let parsed:unknown=null
                 try{parsed=JSON.parse(call.function.arguments||'{}')}catch{await opts.onStage?.('tool','invalid:selection:arguments_json')}
-                const picked=selectedCandidates?{error:'Candidates are already selected. Call create_file now.',dropped:['repeat']}:compileMentionSelection(parsed,mentionMenu,sourceRecords)
+                if(selectedCandidates){messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,already_selected:selectedCandidates.length,next:'Recommendations are already attached. Call create_file now.'})});continue}
+                const picked=compileMentionSelection(parsed,mentionMenu,sourceRecords)
                 if('error' in picked){
                     selectionFailures++;await opts.onStage?.('tool','invalid:selection:'+picked.dropped[0])
                     if(selectionFailures>=3)return finish({reply:'I read the public sources but could not tie any hotel, restaurant or activity name to an exact passage, so no researched recommendations were published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
                     messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:picked.error})});continue
                 }
-                selectedCandidates=picked.candidates
-                await opts.onStage?.('tool',`itinerary:candidates_selected:${picked.candidates.length}`)
-                messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:picked.candidates.length,dropped:picked.dropped.length,next:'Recommendations are attached server-side. Now call create_file with title, body (agenda and day headings only), format and kind itinerary. Do not include candidates, stay, options or sources blocks.'})});continue
+                pickedSoFar=mergePicks(pickedSoFar,picked.candidates)
+                const missing=missingKinds(pickedSoFar,requiredKinds(currentRequest))
+                if(missing.length){
+                    selectionFailures++;await opts.onStage?.('tool',`invalid:selection:missing_kind:${missing.join('+')}`)
+                    if(selectionFailures>=3)return finish({reply:'I read the public sources but they did not support a '+missing.join(' or ')+' pick, so no researched itinerary was published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
+                    messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Accepted '+pickedSoFar.length+' picks so far, but the request also needs at least one: '+missing.join(', ')+'. Call again with ids from the menu for the missing kind(s) only, kind chosen from the context.'})});continue
+                }
+                selectedCandidates=pickedSoFar
+                await opts.onStage?.('tool',`itinerary:candidates_selected:${selectedCandidates.length}`)
+                messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,next:'Recommendations are attached server-side. Now call create_file with title, body (agenda and day headings only), format and kind itinerary. Do not include candidates, stay, options or sources blocks.'})});continue
             }
             const tool = tools.find((t) => t.name === call.function.name)
             let content: string
@@ -850,7 +859,12 @@ export async function chatWithTools(
                         // If the gateway ignored the offered set and the call carries its own candidates, the compiler still validates them in full below.
                         if(Array.isArray(own)){await opts.onStage?.('tool','itinerary:inline_candidates');bypassCandidates=own as Record<string,unknown>[]}
                         else if(!selectedCandidates||!input||typeof input!=='object'){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Recommendations are not selected yet. No file was created.'})});continue}
-                        else input=injectCandidates(input,selectedCandidates)
+                        else{
+                            input=injectCandidates(input,selectedCandidates)
+                            const b=(input as {body?:unknown}).body
+                            // The server renders stay/options/sources from the stored picks; any model-authored copies are dropped, not errors.
+                            if(typeof b==='string'&&/(?:^|\n)\s*:::(?:stay|options|sources)\b/i.test(b)){await opts.onStage?.('tool','itinerary:manual_blocks_stripped');input={...(input as Record<string,unknown>),body:b.replace(/(^|\n)[ \t]*:::(?:stay|options|sources)\b[^\n]*\n[\s\S]*?\n[ \t]*:::[ \t]*(?=\n|$)/gi,'$1')}}
+                        }
                     }
                     const schemaError=inputSchemaError(input,tool.inputSchema)
                     if(schemaError){validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
@@ -966,4 +980,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-            }
+                                                  }
