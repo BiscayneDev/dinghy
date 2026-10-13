@@ -294,7 +294,7 @@ it('standard founder itinerary runs routed search then publishes two hotels thre
   const req=JSON.parse(init.body)
   if(req.max_tokens===1800){const pages=JSON.parse(req.messages[1].content.split('Pages: ')[1].split('\nKnown verified places')[0]),id=pages.find((p:any)=>p.url===pageUrl).sourceId;return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({venues:rows.map(([kind,name,why])=>({kind,name,why,sourceId:id}))})}}]}))}
   if(req.max_tokens===451)return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({checks:rows.map(([_k,name])=>({name,ok:true}))})}}]}))
-  const name=req.tool_choice?.function?.name||req.tools?.[0]?.function.name||'web_search';if(req.max_tokens===1600)loopTools.push(name)
+  const name=req.tool_choice?.function?.name||req.tools?.[0]?.function.name||'web_search';if(req.max_tokens===800)loopTools.push(name)
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'fixture-'+loopTools.length,function:{name,arguments:JSON.stringify(name==='web_fetch'?{url:pageUrl}:{query:'Harbor Florida hotels restaurants weekend guide'})}}]}}]}))
  }))
  const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+90000,onStage:async(_s,d)=>{if(d)stages.push(d)}},gateTools([...toolsFor(ctx),...files.tools],[ask]).active,ctx)
