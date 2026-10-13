@@ -1,4 +1,4 @@
-import {chooseItineraryVenues} from '@/lib/files/itinerary-choose'
+import {chooseItineraryVenues,parseChosenVenues} from '@/lib/files/itinerary-choose'
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,namedLookupMatch,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence,diverseResearchSources} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
@@ -982,7 +982,7 @@ export async function chatWithTools(
                                     if(!response?.ok)continue
                                     const data=await response.json() as {choices?:{message?:{content?:string;tool_calls?:{id:string;type:string;function:{name:string;arguments:string}}[]}}[]}
                                     const message=data.choices?.[0]?.message,calls=message?.tool_calls?.slice(0,6).map(c=>({...c,type:'function'}))||[]
-                                    if(!calls.length){if(message?.content?.includes('"venues"')){let rows:unknown[]=[];try{rows=JSON.parse(message.content.slice(message.content.indexOf('{'),message.content.lastIndexOf('}')+1)).venues||[]}catch{};const kinds=rows.map(r=>(r as {kind:string}).kind);if(composeNow||['hotel','restaurant','activity'].every(k=>kinds.filter(x=>x===k).length>=(k==='restaurant'?3:2))){composed=message.content;break}}if(composeNow)break;loopMessages.push({role:'user',content:'Still missing coverage. Search and open visitor guides for two hotels near the requested neighborhood, three group dining options and two weekend activities in the requested city. Use parallel tool calls.'});continue}
+                                    if(!calls.length){if(message?.content?.includes('"venues"')){let rows:ReturnType<typeof parseChosenVenues>=[];try{rows=parseChosenVenues(JSON.parse(message.content.slice(message.content.indexOf('{'),message.content.lastIndexOf('}')+1)),sourceRecords)}catch{};const kinds=rows.map(r=>r.kind);if(composeNow||['hotel','restaurant','activity'].every(k=>kinds.filter(x=>x===k).length>=(k==='restaurant'?3:2))){composed=JSON.stringify({venues:rows});break}}if(composeNow)break;loopMessages.push({role:'user',content:'Some picks were dropped because their names were absent from the linked pages actually read. Search and read pages about those places before composing again. Still missing coverage. Search and open visitor guides for two hotels near the requested neighborhood, three group dining options and two weekend activities in the requested city. Use parallel tool calls.'});continue}
                                     loopMessages.push({role:'assistant',content:null,tool_calls:calls})
                                     const results=await Promise.all(calls.map(async call=>{const tool=active.find(t=>t.name===call.function.name);if(!tool)return {call,content:'Unavailable'};try{const input=JSON.parse(call.function.arguments);if(tool.name==='web_search')delete input.recentDays;if(egressRejection(tool.name,JSON.stringify(input),tainted,corpus))return {call,content:'Blocked'}
                                       let result:import('@/lib/llm/types').ToolResult={success:false}
@@ -1212,4 +1212,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                           }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            }

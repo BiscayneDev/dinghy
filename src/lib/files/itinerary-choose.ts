@@ -27,7 +27,7 @@ export function parseChosenVenues(input:unknown,records:SourceRecords):ChosenVen
  const out:ChosenVenue[]=[],seen=new Set<string>(),counts:Record<PlaceKind,number>={hotel:0,restaurant:0,activity:0},caps:Record<PlaceKind,number>={hotel:2,restaurant:3,activity:3}
  for(const row of rows){
   const r=row as {name?:unknown;kind?:unknown;why?:unknown;sourceId?:unknown;sourceUrl?:unknown}
-  if(r&&typeof r.sourceUrl==='string'){const id=records.pageIds().find(id=>records.pageUrl(id)?.replace(/\/$/,'')===String(r.sourceUrl).replace(/\/$/,''));if(id)r.sourceId=id}
+  if(r&&typeof r.sourceUrl==='string'&&(typeof r.sourceId!=='string'||!records.pageText(r.sourceId))){const id=records.pageIds().find(id=>records.pageUrl(id)?.replace(/\/$/,'')===String(r.sourceUrl).replace(/\/$/,''));if(id)r.sourceId=id}
   if(!r||typeof r.name!=='string'||typeof r.why!=='string'||typeof r.sourceId!=='string'||!['hotel','restaurant','activity'].includes(String(r.kind)))continue
   const name=decode(r.name).replace(/[\n\r<>|]/g,' ').replace(/\s+/g,' ').trim(),why=decode(r.why).replace(/\s+/g,' ').trim().slice(0,300)
   const text=records.pageText(r.sourceId)
