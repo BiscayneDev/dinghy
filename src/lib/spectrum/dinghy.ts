@@ -761,7 +761,7 @@ export async function chatWithTools(
                     const id=`required_read_${iteration}_${readsOk}`
                     messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
                     // Read across kinds. Provider listings must not trigger the public-page stop rule.
-                    if(readsOk>=3||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<35000))break
+                    if(readsOk>=4||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<35000))break
                     await opts.onStage?.('tool','research:read_more')
                     continue
                 }
