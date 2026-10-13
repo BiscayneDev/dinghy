@@ -99,7 +99,7 @@ it('free conversation gives early composition the same schema and enough output 
  expect(source).not.toContain('max_tokens:composeNow?1800:800')
  expect(source).toContain("response_format:{type:'json_object'}")
  expect(source).toContain('step<20&&!researchSignal.aborted')
- expect(source).toContain('Read-page sources available: ')
+ expect(source).toContain('Read-page source IDs and URLs available: ')
 })
 
 it('extract failure reaches the normal reader and repeated pages do not duplicate full text in the research conversation',()=>{const s=readFileSync('src/lib/spectrum/dinghy.ts','utf8');expect(s).toContain('A timeout or network failure must still reach the ordinary reader.');expect(s).toContain('This page was read again below. Use the latest read of this URL.');})
@@ -127,7 +127,7 @@ it('a wrong but valid source ID is repaired only to the actual read URL containi
  expect(parseChosenVenues({venues:[{name:'Invented Inn',kind:'hotel',why:'Courtyard rooms are available.',sourceId:a.id,sourceUrl:b.url}]},r)).toHaveLength(0)
 })
 
-it('final composition replaces duplicated research payloads with metadata while keeping latest page text together',()=>{const s=readFileSync('src/lib/spectrum/dinghy.ts','utf8');expect(s).toContain('Full latest read pages are collected below for composition.');expect(s).toContain('itinerary:compose_rows:');})
+it('final composition replaces duplicated research payloads with metadata while keeping latest page text together',()=>{const s=readFileSync('src/lib/spectrum/dinghy.ts','utf8');expect(s).toContain('messages:composeMessages,tool_choice:');expect(s).toContain('itinerary:compose_rows:');})
 
 import {searchFailureCode} from '@/lib/tools/web'
 it('search failures expose only sanitized provider failure categories',()=>{
@@ -143,4 +143,10 @@ it('verified venue cards retain their research page rather than provider provena
  const out=await chooseItineraryVenues({request:'Harbor',destination:'Harbor',records,signal:new AbortController().signal,json:async()=>JSON.stringify({venues:[{name:'Reed Cafe',kind:'restaurant',why:'Soup and bread are served here.',sourceId:page.id}]}),verify:async()=>[{line:1,kind:'restaurant',name:'Reed Cafe',address:'Harbor',lat:1,lon:2,id:'fixture',source:provider.id,start:0,end:9}]})
  expect(records.pageUrl(out.picks[0].place.source)).toBe(page.url)
  expect(records.pageText(out.picks[0].place.source)?.slice(out.picks[0].place.start,out.picks[0].place.end)).toBe('Reed Cafe')
+})
+
+it('a rebound research name never binds the provider address as a research excerpt',async()=>{
+ const {records,page}=fixture();const p=place(1,'hotel','Reed Hotel',records)
+ const out=await chooseItineraryVenues({request:'Harbor',destination:'Harbor',records,signal:new AbortController().signal,json:async()=>JSON.stringify({venues:[{name:'Reed Hotel',kind:'hotel',why:'Courtyard rooms and a rooftop pool.',sourceId:page.id}]}),verify:async()=>[p]})
+ expect(out.picks[0].place.source).toBe(page.id);expect(out.picks[0].place.address).toBe('')
 })
