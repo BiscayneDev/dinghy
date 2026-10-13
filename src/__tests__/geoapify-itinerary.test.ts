@@ -27,9 +27,25 @@ it('per-kind calls preserve exact names and addresses, drop nameless and street 
  const mismatch=compileApiPlaces({candidates:[{kind:'restaurant',line:places.find(p=>p.kind==='hotel')!.line}]},places,r)
  expect(mismatch.dropped).toContain('kind_mismatch');expect(GEOAPIFY_ATTRIBUTION).toContain('© OpenStreetMap contributors')
 })
-it('ambiguous destinations fail softly rather than choose an equal-ranked city',async()=>{
- vi.stubEnv('GEOAPIFY_API_KEY','fictional-secret');vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({results:[{lat:25,lon:-80,rank:{confidence:1}},{lat:26,lon:-81,rank:{confidence:1}}]}))))
- expect(await geoapifyPlaces('Harbor',['hotel'],new SourceRecords())).toBeNull()
+it('top city rank wins equal confidence without a country filter or bias',async()=>{
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-secret');let filter=''
+ vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{
+  if(u.pathname.includes('geocode')){expect(u.searchParams.get('type')).toBe('city');expect(u.searchParams.has('filter')).toBe(false);return new Response(JSON.stringify({results:[{lat:26,lon:-81,result_type:'city',rank:{confidence:1,importance:0.2}},{lat:25,lon:-80,result_type:'city',rank:{confidence:1,importance:0.8}}]}))}
+  filter=u.searchParams.get('filter')!;return new Response(JSON.stringify({features:[{properties:{name:'Harbor Inn',categories:['accommodation.hotel'],lat:25,lon:-80,place_id:'fictional'}}]}))
+ }))
+ expect(await geoapifyPlaces('Harbor',['hotel'],new SourceRecords())).not.toBeNull();expect(filter).toBe('circle:-80,25,4000')
+})
+it('safe fallback reasons never contain the key or API URL',async()=>{
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-secret');let reason=''
+ const cb=(r:string)=>{reason=r}
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response('',{status:403})))
+ expect(await geoapifyPlaces('Harbor',['hotel'],new SourceRecords(),undefined,cb)).toBeNull();expect(reason).toBe('geocode_error_403')
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({results:[]}))))
+ await geoapifyPlaces('Harbor',['hotel'],new SourceRecords(),undefined,cb);expect(reason).toBe('geocode_empty')
+ vi.stubGlobal('fetch',vi.fn(async()=>{throw new DOMException('fictional-secret','TimeoutError')}))
+ await geoapifyPlaces('Harbor',['hotel'],new SourceRecords(),undefined,cb);expect(reason).toBe('timeout');expect(reason).not.toMatch(/secret|https/)
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({results:[{lat:25,lon:-80,rank:{confidence:0.1}}]}))))
+ await geoapifyPlaces('Harbor',['hotel'],new SourceRecords(),undefined,cb);expect(reason).toBe('geocode_low_confidence')
 })
 it('web reasons are confined to the selected provider venue section',()=>{
  const r=new SourceRecords(),rec=r.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',title:'Geoapify listing',content:`Lantern Cafe

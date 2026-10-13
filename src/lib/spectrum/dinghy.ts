@@ -703,9 +703,10 @@ export async function chatWithTools(
             apiAttempted=true;const destination=destinationTokens(currentRequest).join(' ')
             if(destination&&!egressRejection('web_search',JSON.stringify({query:destination}),tainted,corpus)){
                 await assertAccountActive(ctx.userId,ctx.chatGuid)
-                apiPlaces=await withinTurn(opts.deadlineAt,signal=>geoapifyPlaces(destination,requiredKinds(currentRequest) as PlaceKind[],sourceRecords,signal))
+                let fallbackReason='unknown'
+                apiPlaces=await withinTurn(opts.deadlineAt,signal=>geoapifyPlaces(destination,requiredKinds(currentRequest) as PlaceKind[],sourceRecords,signal,reason=>{fallbackReason=reason}))
                 if(apiPlaces){mapResearchRead=true;foundSources.push({title:'Geoapify venue listings',url:'https://www.geoapify.com/places-api/'})}
-                await opts.onStage?.('tool',`itinerary:places_api:${apiPlaces?'ready_'+apiPlaces.length:'fallback'}`)
+                await opts.onStage?.('tool',`itinerary:places_api:${apiPlaces?'ready_'+apiPlaces.length:'fallback_'+fallbackReason}`)
             }
         }
         // A required read is an execution dependency, not a suggestion to the model.
@@ -1113,4 +1114,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                    }
+}
