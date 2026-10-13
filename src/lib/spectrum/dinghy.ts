@@ -972,7 +972,7 @@ export async function chatWithTools(
                                 const compiled=compileApiPlaces({candidates:verifiedPlaces.map(p=>({kind:p.kind,line:p.line}))},verifiedPlaces,sourceRecords)
                                 if('candidates' in compiled){
                                     const pickBySource=new Map(outcome.picks.map(p=>[p.place.source,p]))
-                                    const chosen=compiled.candidates.flatMap(c=>{const pick=pickBySource.get((c.name as {source?:string}).source||'');return pick?[{...c,reason:pick.why,catch:pick.why.length>140?pick.why.slice(0,137)+'...':pick.why}]:[]})
+                                    const chosen:Record<string,unknown>[]=[...compiled.candidates].flatMap(c=>{const pick=pickBySource.get((c.name as {source?:string}).source||'');return pick?[{...c,reason:pick.why,catch:pick.why.length>140?pick.why.slice(0,137)+'...':pick.why}]:[]})
                                     apiCandidates.splice(0,apiCandidates.length,...chosen)
                                     reasonCitations=chosen.flatMap(c=>{const src=(c.name as {source?:string}).source||'',pick=pickBySource.get(src)!,url=sourceRecords.pageUrl(pick.sourceId);return url?[{line:0,source:pick.sourceId,url,claim:pick.why,venueName:pick.place.name,candidateSource:src}]:[]})
                                 }
