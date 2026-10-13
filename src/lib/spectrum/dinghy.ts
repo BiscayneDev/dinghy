@@ -666,7 +666,7 @@ export async function chatWithTools(
     let successfulSearches = 0
     let sourceOnly = true
     const foundSources: { title: string; url: string }[] = []
-    const currentRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
+    const currentRequest = contract?.request ?? [...history].reverse().find(m => m.role === 'user')?.content ?? ''
     let recoveryUsed=false
     let recoveryTool:string|undefined
     let validationFailures=0
@@ -1046,7 +1046,8 @@ export async function chatWithTools(
                             if(typeof b==='string'&&/(?:^|\n)\s*:::(?:stay|options|sources)\b/i.test(b)){await opts.onStage?.('tool','itinerary:manual_blocks_stripped');input={...(input as Record<string,unknown>),body:b.replace(/(^|\n)[ \t]*:::(?:stay|options|sources)\b[^\n]*\n[\s\S]*?\n[ \t]*:::[ \t]*(?=\n|$)/gi,'$1')}}
                             if(apiPlaces){
                                 // Evidence-checked citations only: venue name plus its fetched source link, one per venue.
-                                const citations=reasonCitations.filter(c=>{const p=apiPlaces!.find(p=>p.line===c.line);return p&&selectedCandidates.some(pk=>(pk.name as {source:string}).source===p.source)})
+                                const citationPicks=selectedCandidates
+                                const citations=reasonCitations.filter(c=>{const p=apiPlaces!.find(p=>p.line===c.line);return p&&citationPicks.some(pk=>(pk.name as {source:string}).source===p.source)})
                                 const seenCit=new Set<string>(),citLines:string[]=[]
                                 for(const c of citations){const p=apiPlaces!.find(p=>p.line===c.line)!,key=p.line+'|'+c.source;if(seenCit.has(key))continue;seenCit.add(key);citLines.push('- '+p.name+': {{source:'+c.source+'.url}}')}
                                 input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))+(citLines.length?'\n\n## Recommendation evidence\n'+citLines.join('\n'):'')}
