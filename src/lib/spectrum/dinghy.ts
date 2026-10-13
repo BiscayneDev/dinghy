@@ -1013,7 +1013,8 @@ export async function chatWithTools(
                             // The server renders stay/options/sources from the stored picks; any model-authored copies are dropped, not errors.
                             if(typeof b==='string'&&/(?:^|\n)\s*:::(?:stay|options|sources)\b/i.test(b)){await opts.onStage?.('tool','itinerary:manual_blocks_stripped');input={...(input as Record<string,unknown>),body:b.replace(/(^|\n)[ \t]*:::(?:stay|options|sources)\b[^\n]*\n[\s\S]*?\n[ \t]*:::[ \t]*(?=\n|$)/gi,'$1')}}
                             if(apiPlaces){
-                                const citations=apiPlaces.filter(p=>p.webSource&&selectedCandidates.some(c=>(c.name as {source:string}).source===p.source&&c.reason===p.webReason)).map(p=>'- '+p.name+': {{source:'+p.webSource+'.url}}')
+                                const citationPicks=selectedCandidates
+                                const citations=apiPlaces.filter(p=>p.webSource&&citationPicks.some(c=>(c.name as {source:string}).source===p.source&&c.reason===p.webReason)).map(p=>'- '+p.name+': {{source:'+p.webSource+'.url}}')
                                 input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))+(citations.length?'\n\n## Recommendation evidence\n'+citations.join('\n'):'')}
                             };
                         }
@@ -1132,4 +1133,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                            }
+}
