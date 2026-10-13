@@ -28,16 +28,23 @@ it('accepts model judgment only with valid per-claim sources, request fit and a 
  const accepted=await validateVenueReasons({reasons:[reason]},request,packets,records,judge)
  expect(accepted.accepted).toHaveLength(1);expect(accepted.accepted[0].citations[0].url).toBe('https://fictional.test/review');expect(judge).toHaveBeenCalledOnce()
  const unsupported=await validateVenueReasons({reasons:[{...reason,why:'A rooftop pool just five minutes from your office.'}]},request,packets,records,async()=>false)
- expect(unsupported.rejected[0].code).toBe('unsupported')
+ expect(unsupported.rejected[0].code).toBe('judge_no')
  const invented=await validateVenueReasons({reasons:[{...reason,fitBasis:['vegetarian allergy']}]},request,packets,records,judge)
- expect(invented.rejected[0].code).toBe('fit_basis')
+ expect(invented.accepted[0].fitBasis).toEqual([request]);expect(judge.mock.calls.at(-1)![0].fitBasis).toEqual([request])
  const wrongSource=await validateVenueReasons({reasons:[{...reason,claims:[{text:'Pool',evidenceIds:['ev2_1']}]}]},request,packets,records,judge)
  expect(wrongSource.rejected[0].code).toBe('evidence')
  expect(venueSynthesisPrompt(request,packets)).toContain(request);expect(venueReasonJudgePrompt(judge.mock.calls[0][0])).toContain('Reject changed numbers')
 })
 it('synthesis contract spells out validator bounds and permits attributed unclassified descriptions',()=>{
  const p=venueSynthesisPrompt('visiting founders working sessions',[])
- for(const term of ['15-300','1-250','1-200','at most120','not src IDs','copied verbatim','unknowns'])expect(p).toContain(term)
+ for(const term of ['15-300','1-250','1-200','at most120','not src IDs','server supplies','unknowns'])expect(p).toContain(term)
  const j=venueReasonJudgePrompt({request:'visiting founders',venue,why:'The page describes a quiet room for conversation.',claims:[],fit:'For conversation',fitBasis:['visiting founders'],evidence:[]})
  expect(j).toContain('Unclassified is unknown ownership');expect(j).toContain('Subjective fit');expect(j).not.toContain('reject all first-party')
+})
+it('judge operational failures have finite distinct codes, never a fake negative quality verdict',async()=>{
+ const records=new SourceRecords(),packets=await collectVenueEvidence([venue],destination,records,{search:async()=>({results:[{url:'https://fictional.test/review'}]}),read:async()=>({title:'Lantern Table Harbor',content:'Lantern Table offers seasonal vegetable bowls in Harbor.'})})
+ const reason={line:1,why:'Seasonal bowls offer variety after work.',claims:[{text:'Seasonal vegetable bowls',evidenceIds:[packets[0].evidence[0].id]}],fit:'Variety after work.',unknowns:[]}
+ for(const verdict of ['no','timeout','http','error','invalid'] as const){const out=await validateVenueReasons({reasons:[reason]},'Dinner after work',packets,records,async()=>({verdict}));expect(out.rejected[0].code).toBe('judge_'+verdict)}
+ const out=await validateVenueReasons({reasons:[reason]},'Dinner after work',packets,records,async input=>{expect(input.fitBasis).toEqual(['Dinner after work']);return {verdict:'yes'}})
+ expect(out.accepted).toHaveLength(1)
 })
