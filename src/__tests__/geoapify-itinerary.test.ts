@@ -156,7 +156,7 @@ it('named search uses token match within the same city and kind; unrelated names
  vi.stubEnv('GEOAPIFY_API_KEY','fictional-key');const urls:URL[]=[]
  vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{urls.push(u);if(u.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,city:'Harbor'}]}));return new Response(JSON.stringify({features:[{properties:{name:'Reed Museum',place_id:'reed',categories:['entertainment.museum'],lat:25,lon:-80,formatted:'42 Quay St'}},{properties:{name:'Reed Museum Annex',place_id:'annex',categories:['entertainment.museum'],lat:25,lon:-80}},{properties:{name:'Grove Museum',place_id:'grove',categories:['entertainment.museum'],lat:25,lon:-80}}]}))}))
  const out=await geoapifyPlaces('Harbor',['activity'],new SourceRecords(),undefined,undefined,{namedCandidates:[{name:'Reed Museum',kind:'activity'}]})
- expect(out?.map(p=>p.name)).toEqual(['Reed Museum','Reed Museum Annex']);expect(out?.[0].discovered).toBe(true);expect(urls[1].searchParams.get('name')).toBe('Reed Museum');expect(urls[1].searchParams.get('filter')).toBe('circle:-80,25,15000')
+ expect(out?.map(p=>p.name)).toEqual(['Reed Museum','Reed Museum Annex']);expect(out?.[0].discovered).toBe(true);expect(urls[1].searchParams.get('name')).toBe('Reed');expect(urls[1].searchParams.get('filter')).toBe('circle:-80,25,15000')
 })
 
 it('one failing category does not discard verified venues from other categories',async()=>{
