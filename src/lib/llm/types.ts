@@ -20,6 +20,7 @@ export interface ToolCallResult {
 export interface ToolResult {
   /** Finite public reader metadata; never raw error text or a URL. */
   publicReadFailure?: 'http' | 'timeout' | 'network' | 'invalid_input'
+  publicSearchFailure?: 'quota' | 'auth' | 'rate' | 'http' | 'network' | 'invalid_input' | 'unconfigured'
   success: boolean
   data?: unknown
   error?: string
