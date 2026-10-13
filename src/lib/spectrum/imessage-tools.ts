@@ -78,7 +78,7 @@ export const IMESSAGE_X_TOOLS: Tool[] = [twitterSearch, twitterTimeline, twitter
 
 /** Web search is offered only when its key is configured. */
 export function searchEnabled(): boolean {
-    return Boolean(process.env.TAVILY_API_KEY)
+    return Boolean(process.env.EXA_API_KEY || process.env.TAVILY_API_KEY)
 }
 
 /**
@@ -189,4 +189,4 @@ export async function loadImessageToolContext(chatGuid: string): Promise<UserCon
             : 'America/New_York',
         tokens,
     }
-}
+    }
