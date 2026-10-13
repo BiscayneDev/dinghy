@@ -173,3 +173,20 @@ it('keeps completed evidence when a sibling read times out and reads the provide
  expect(read.mock.calls.some(c=>c[0]===v.website)).toBe(true);expect(packets[0].status).toBe('ready');expect(packets[0].evidence.length).toBeGreaterThan(0)
  const count=records.size();await new Promise(r=>setTimeout(r,50));expect(records.size()).toBe(count)
 })
+
+it('excludes CSS and testimonials while retaining concrete same-venue menu facts',()=>{
+ const facts='Lantern Table serves seasonal vegetable bowls and flaxseed flatbread.'
+ const text='Harbor\n'+facts+'\nI ordered the pizza and it was amazing.\nUse font-family: menu; background-color: blue;\nWe got an upgrade to the corner room with garden views.'
+ expect(relevantVenueExcerpts([text],text,venue)).toEqual([facts])
+})
+it('normalizes directional address spelling without hiding different street numbers',async()=>{
+ const v={...venue,address:'42 Northeast 2nd Avenue',website:'https://fictional.test'}
+ const records=new SourceRecords(),text='Lantern Table Harbor\nWe serve seasonal vegetable bowls.\n42 NE 2nd Ave'
+ const packets=await collectVenueEvidence([v],destination,records,{search:async()=>({results:[]}),read:async()=>({title:'Lantern Table Harbor',content:text})})
+ const reason={line:1,why:'Seasonal vegetable bowls.',claims:[{text:'Seasonal vegetable bowls.',evidenceIds:[packets[0].evidence[0].id]}],unknowns:[]}
+ const judge=vi.fn(async(input:Parameters<import('@/lib/files/itinerary-venue-evidence').EvidenceJudge>[0])=>{expect(input.contradictionContext?.some(c=>c.excerpt==='42 NE 2nd Ave')).toBe(true);return true})
+ expect((await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,judge)).accepted).toHaveLength(1)
+ const wrong=packets.map(p=>({...p,venue:{...v,address:'43 Northeast 2nd Avenue'}}))
+ expect((await validateVenueReasons({reasons:[reason]},'Dinner',wrong,records,judge)).rejected[0].code).toBe('judge_no_identity')
+ expect(judge).toHaveBeenCalledOnce()
+})
