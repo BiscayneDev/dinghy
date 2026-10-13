@@ -143,7 +143,7 @@ function renderStay(lines: string[]): string {
         const p = img(photo)
         const url = httpUrl(link)
         const pic = p ? `<div class="st-pic"><img src="${esc(p)}" alt="${esc(name)}" loading="lazy" decoding="async"></div>` : `<div class="st-pic st-blank" style="--h:${hue(name)}" aria-hidden="true"></div>`
-        return `<article class="st">${pic}<div class="st-b"><div class="st-top"><h4>${esc(name)}</h4>${price ? `<span class="st-p">${esc(price)}</span>` : ''}</div><div class="st-m">${[knownValue(rating) && `★ ${esc(rating)}`, area && esc(area)].filter(Boolean).join(' · ')}</div>${catchTxt ? `<p class="st-c"><span>Catch</span>${esc(catchTxt)}</p>` : ''}${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(host(url))}</a>` : ''}</div></article>`
+        return `<article class="st">${pic}<div class="st-b"><div class="st-top"><h4>${esc(name)}</h4>${knownValue(price) ? `<span class="st-p">${esc(price)}</span>` : ''}</div><div class="st-m">${[knownValue(rating) && `★ ${esc(rating)}`, area && esc(area)].filter(Boolean).join(' · ')}</div>${catchTxt ? `<p class="st-c"><span>Catch</span>${esc(catchTxt)}</p>` : ''}${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(host(url))}</a>` : ''}</div></article>`
     })
     return `<div class="sts">${cards.join('')}</div>`
 }
