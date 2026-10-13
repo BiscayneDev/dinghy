@@ -66,3 +66,10 @@ it('bare venue names under explicit kind headings count as useful research pages
  const a=page('Harbor sights','## Attractions\nTide Hall\nShell House')
  expect(activityPageEvidence(a,a.pageIds())).toMatchObject({usable:true,venueLines:2})
 })
+
+import {diverseResearchSources} from '@/lib/files/itinerary-research'
+it('public reading covers requested kinds and ignores provider listings',()=>{
+ const sources=[{url:'https://www.geoapify.com/places-api/',title:'Geoapify listings'},{url:'https://fictional.test/hotel-experiences',title:'Hotel experiences'},{url:'https://fictional.test/stays',title:'Best hotels'},{url:'https://fictional.test/dining',title:'Best restaurants in Harbor'},{url:'https://fictional.test/sights',title:'Things to do in Harbor'}]
+ const out=diverseResearchSources(sources,['hotel','restaurant','activity'])
+ expect(out.slice(0,3).map(s=>s.url)).toEqual([sources[1].url,sources[3].url,sources[4].url]);expect(out.some(s=>s.url.includes('geoapify'))).toBe(false)
+})
