@@ -954,10 +954,15 @@ export async function chatWithTools(
                                         // Bounded separate routed verdict; anything but a clear YES rejects the reason.
                                         try{
                                             const jr=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:AbortSignal.any([...(signal?[signal]:[]),...(jsignal?[jsignal]:[]),AbortSignal.timeout(6000)]),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You are an evidence judge. Reply with exactly one word.'},{role:'user',content:venueReasonJudgePrompt(input)}],stream:false,max_tokens:8})}))
-                                            if(!jr.ok)return false
-                                            const jj=await jr.json() as {choices?:{message?:{content?:unknown}}[]}
-                                            return /^\W*yes\W*$/i.test(String(jj.choices?.[0]?.message?.content||''))
-                                        }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
+                                            if(!jr.ok){await opts.onStage?.('tool','itinerary:judge:http');return {verdict:'http'}}
+                                            const jj=await jr.json() as {choices?:{finish_reason?:string;message?:{content?:unknown}}[]}
+                                            const finish=jj.choices?.[0]?.finish_reason
+                                            await opts.onStage?.('tool','itinerary:judge_finish:'+(['stop','length','tool_calls','content_filter'].includes(finish||'')?finish:'other'))
+                                            const answer=String(jj.choices?.[0]?.message?.content||'').trim()
+                                            const yes=/^\W*yes\W*$/i.test(answer)
+                                            await opts.onStage?.('tool','itinerary:judge:'+(yes?'yes':/^\W*no\W*$/i.test(answer)?'no':!answer?'empty':'other'))
+                                            return {verdict:yes?'yes':/^\W*no\W*$/i.test(answer)?'no':'invalid'}
+                                        }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;const verdict=err instanceof Error&&/timeout|abort/i.test(err.name)?'timeout' as const:'error' as const;await opts.onStage?.('tool','itinerary:judge:'+verdict);return {verdict}}
                                     }
                                     const v=await validateVenueReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,judge)
                                     acceptedReasons.push(...v.accepted)
@@ -1046,6 +1051,8 @@ export async function chatWithTools(
                             // The server renders stay/options/sources from the stored picks; any model-authored copies are dropped, not errors.
                             if(typeof b==='string'&&/(?:^|\n)\s*:::(?:stay|options|sources)\b/i.test(b)){await opts.onStage?.('tool','itinerary:manual_blocks_stripped');input={...(input as Record<string,unknown>),body:b.replace(/(^|\n)[ \t]*:::(?:stay|options|sources)\b[^\n]*\n[\s\S]*?\n[ \t]*:::[ \t]*(?=\n|$)/gi,'$1')}}
                             if(apiPlaces){
+                                // Freehand metadata never invents calendar dates outside the supplied agenda.
+                                {const {subtitle:_subtitle,...metadataSafe}=input as Record<string,unknown>;input=metadataSafe}
                                 // Evidence-checked citations only: venue name plus its fetched source link, one per venue.
                                 const citationPicks=selectedCandidates
                                 const citations=reasonCitations.filter(c=>{const p=apiPlaces!.find(p=>p.line===c.line);return p&&citationPicks.some(pk=>(pk.name as {source:string}).source===p.source)})
@@ -1169,4 +1176,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                               }
+        }
