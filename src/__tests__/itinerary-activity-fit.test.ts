@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest'
 import {SourceRecords} from '@/lib/files/source-records'
-import {incidentalActivityTags,activityFitPrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
+import {parseActivityJudge,activityFitJudgePrompt,incidentalActivityTags,activityFitPrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
 it('flags marker subtypes without venue-name hardcodes and retains novel experience categories',()=>{
  expect(incidentalActivityTags(['tourism.attraction.marker'],{})).toBe(true);expect(incidentalActivityTags(['tourism.attraction'],{historic:'commemorative'})).toBe(true);expect(incidentalActivityTags(['tourism.attraction'],{tourism:'museum'})).toBe(false)
 })
@@ -34,4 +34,11 @@ it('request authority is server-held and field failures have finite codes',async
  const row={line:1,decision:'recommend',experience:'Hands-on printmaking sessions',evidenceIds:['ev1_1'],reason:'An active break after work.',unknowns:[]}
  expect((await validateActivityFit({activities:[row]},'fun weekend',[packet],records,async input=>({verdict:input.request==='fun weekend'?'yes':'no'}))).accepted).toHaveLength(1)
  expect((await validateActivityFit({activities:[{...row,experience:'x'.repeat(251)}]},'fun weekend',[packet],records,async()=>true)).rejected[0].code).toBe('experience_bounds')
+})
+
+it('typed experience verdicts fail closed and carry only finite diagnostic reasons',()=>{
+ expect(parseActivityJudge('{"verdict":"yes","reason":"none"}')).toEqual({verdict:'yes',reason:'none'})
+ expect(parseActivityJudge('{"verdict":"no","reason":"incidental"}')).toEqual({verdict:'no',reason:'incidental'})
+ for(const raw of ['YES','{"verdict":"yes","reason":"uncertain"}','{"verdict":"no","reason":"none"}','{"verdict":"no","reason":"private venue text"}'])expect(parseActivityJudge(raw).verdict).toBe('invalid')
+ expect(activityFitJudgePrompt({request:'fun weekend',verdict:{line:1,decision:'recommend',experience:'Hands-on workshop',evidenceIds:[],reason:'Weekend outing',unknowns:[]},packet:{venue:{line:1,kind:'activity',name:'Reed Workshop'},status:'missing',evidence:[],notes:[]}})).toContain('honestly listed as unknown')
 })
