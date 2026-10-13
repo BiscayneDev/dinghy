@@ -136,3 +136,11 @@ it('search failures expose only sanitized provider failure categories',()=>{
  expect(searchFailureCode(new Error('Tavily API error: 429'))).toBe('rate')
  expect(searchFailureCode(new Error('private arbitrary text'))).toBe('network')
 })
+
+it('verified venue cards retain their research page rather than provider provenance',async()=>{
+ const records=new SourceRecords();const page=records.capture('web_fetch',{url:'https://fixture.test/guide',content:'Reed Cafe serves soup and bread.'},'now')[0]
+ const provider=records.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',content:'Reed Cafe address'},'now')[0]
+ const out=await chooseItineraryVenues({request:'Harbor',destination:'Harbor',records,signal:new AbortController().signal,json:async()=>JSON.stringify({venues:[{name:'Reed Cafe',kind:'restaurant',why:'Soup and bread are served here.',sourceId:page.id}]}),verify:async()=>[{line:1,kind:'restaurant',name:'Reed Cafe',address:'Harbor',lat:1,lon:2,id:'fixture',source:provider.id,start:0,end:9}]})
+ expect(records.pageUrl(out.picks[0].place.source)).toBe(page.url)
+ expect(records.pageText(out.picks[0].place.source)?.slice(out.picks[0].place.start,out.picks[0].place.end)).toBe('Reed Cafe')
+})
