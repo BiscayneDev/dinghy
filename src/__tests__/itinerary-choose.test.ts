@@ -126,3 +126,5 @@ it('a wrong but valid source ID is repaired only to the actual read URL containi
  expect(out[0].sourceId).toBe(b.id)
  expect(parseChosenVenues({venues:[{name:'Invented Inn',kind:'hotel',why:'Courtyard rooms are available.',sourceId:a.id,sourceUrl:b.url}]},r)).toHaveLength(0)
 })
+
+it('final composition replaces duplicated research payloads with metadata while keeping latest page text together',()=>{const s=readFileSync('src/lib/spectrum/dinghy.ts','utf8');expect(s).toContain('Full latest read pages are collected below for composition.');expect(s).toContain('itinerary:compose_rows:');})
