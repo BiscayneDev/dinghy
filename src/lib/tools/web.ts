@@ -76,7 +76,7 @@ export const webSearch: Tool = {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      return { success: false, error: `Search failed: ${msg}` }
+      return { success: false, error: `Search failed: ${msg}`, publicSearchFailure:searchFailureCode(err) }
     }
   },
 }
@@ -171,4 +171,4 @@ export const webFetch: Tool = {
       return { success: false, publicReadFailure: err instanceof z.ZodError ? 'invalid_input' : 'network', error: `Fetch failed: ${msg}` }
     }
   },
-  }
+        }
