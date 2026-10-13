@@ -1,3 +1,4 @@
+import {captureItineraryDiagnostic} from './itinerary-diagnostic'
 import {activityFitPrompt,activityFitJudgePrompt,activityFitRepairPrompt,repairableActivityRejection,parseActivityJudge,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiEvidenceVenues,applyVerifiedApiReasons,activityResearchSlate,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,parseVenueReasonJudge,venueReasonRepairPrompt,type EvidenceJudge,type VerifiedVenueReason} from '@/lib/files/itinerary-venue-evidence'
@@ -943,7 +944,7 @@ export async function chatWithTools(
                     // judge per reason keep latency bounded against the turn deadline. No judge, no recommendation why.
                     if(searcher&&reader&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>45000)){
                         await assertAccountActive(ctx.userId,ctx.chatGuid)
-                        const io={search:async(query:string,signal:AbortSignal)=>{if(egressRejection('web_search',JSON.stringify({query}),tainted,corpus))return {};toolCallCount++;const r=await searcher.execute({query,maxResults:3},{...ctx,signal});return r.success?r.data:{}},read:async(url:string,signal:AbortSignal)=>{if(egressRejection('web_fetch',JSON.stringify({url}),tainted,corpus))return {};toolCallCount++;const r=await reader.execute({url},{...ctx,signal});return r.success?r.data:{}}}
+                        const io={search:async(query:string,signal:AbortSignal)=>{if(egressRejection('web_search',JSON.stringify({query}),tainted,corpus))return {};toolCallCount++;const r=await searcher.execute({query,maxResults:3},{...ctx,signal});captureItineraryDiagnostic('evidence_search',{query,success:r.success,data:r.data});return r.success?r.data:{}},read:async(url:string,signal:AbortSignal)=>{if(egressRejection('web_fetch',JSON.stringify({url}),tainted,corpus))return {};toolCallCount++;const r=await reader.execute({url},{...ctx,signal});captureItineraryDiagnostic('evidence_read',{url,success:r.success,data:r.data});return r.success?r.data:{}}}
                         try{
                             const pickedSources=new Set(apiCandidates.map(c=>(c.name as {source:string}).source))
                             const activityPlaces=activityResearchSlate(reasonPlaces,pickedSources)
@@ -951,6 +952,7 @@ export async function chatWithTools(
                             const researchPicks=[...apiCandidates,...activityPool.filter(c=>!apiCandidates.some(p=>(p.name as {source:string}).source===(c.name as {source:string}).source))]
                             const venues=apiEvidenceVenues(researchPicks,reasonPlaces)
                             const packets=await withinTurn(opts.deadlineAt,signal=>collectVenueEvidence(venues,{query:destLabel||destinationTokens(currentRequest).join(' '),matchTerms:destTerms.length?destTerms:destinationTokens(currentRequest)},sourceRecords,io,{budgetMs:6000,concurrency:3,signal}))
+                            captureItineraryDiagnostic('packets',packets)
                             const ready=packets.filter(pk=>pk.status==='ready').length
                             await opts.onStage?.('tool',`itinerary:venue_evidence:r${ready}_m${packets.length-ready}`)
                                     const routedVerdict=async(prompt:string,jsignal?:AbortSignal):Promise<{verdict:'yes'|'no'|'http'|'timeout'|'error'|'invalid'}>=>{
@@ -968,10 +970,12 @@ export async function chatWithTools(
                                         }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;const verdict=err instanceof Error&&/timeout|abort/i.test(err.name)?'timeout' as const:'error' as const;await opts.onStage?.('tool','itinerary:judge:'+verdict);return {verdict}}
                                     }
                             const activityVerdict=async(prompt:string)=>{
+                                captureItineraryDiagnostic('activity_judge_input',prompt)
                                 try{
                                     const jr=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(6000)]):AbortSignal.timeout(6000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Verify visitor experience against evidence. Return only the specified JSON verdict.'},{role:'user',content:prompt}],stream:false,max_tokens:120})}))
                                     if(!jr.ok)return {verdict:'http' as const}
                                     const jj=await jr.json() as {choices?:{message?:{content?:string}}[]}
+                                    captureItineraryDiagnostic('activity_judge_output',jj.choices?.[0]?.message?.content)
                                     const verdict=parseActivityJudge(jj.choices?.[0]?.message?.content||'')
                                     await opts.onStage?.('tool','itinerary:activity_judge:'+verdict.verdict+(verdict.reason?'_'+verdict.reason:''))
                                     return verdict
@@ -982,6 +986,7 @@ export async function chatWithTools(
                                 let fits:import('@/lib/files/itinerary-activity-fit').ActivityFit[]=[]
                                 if(ar.ok){try{
                                     const aj=await ar.json() as {choices?:{message?:{content?:string}}[]}
+                                    captureItineraryDiagnostic('activity_proposal',aj.choices?.[0]?.message?.content)
                                     const av=await validateActivityFit(JSON.parse((aj.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,input=>activityVerdict(activityFitJudgePrompt(input)))
                                     fits=av.accepted
                                     for(const code of [...new Set(av.rejected.map(r=>r.code))])await opts.onStage?.('tool','itinerary:activity_rejected:'+code)
@@ -995,10 +1000,12 @@ export async function chatWithTools(
                                 await opts.onStage?.('tool',`itinerary:activity_fit:o${activitySelection.omitted}_r${activitySelection.reselected}`)
                             }
                             const judge:EvidenceJudge=async(input,jsignal)=>{
+                                captureItineraryDiagnostic('reason_judge_input',input)
                                 try{
                                     const jr=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:AbortSignal.any([...(signal?[signal]:[]),...(jsignal?[jsignal]:[]),AbortSignal.timeout(6000)]),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Verify cited venue claims. Return only the specified JSON verdict.'},{role:'user',content:venueReasonJudgePrompt(input)}],stream:false,max_tokens:120})}))
                                     if(!jr.ok)return {verdict:'http'}
                                     const jj=await jr.json() as {choices?:{message?:{content?:string}}[]},v=parseVenueReasonJudge(jj.choices?.[0]?.message?.content||'')
+                                    captureItineraryDiagnostic('reason_judge_output',jj.choices?.[0]?.message?.content)
                                     await opts.onStage?.('tool','itinerary:reason_judge:'+v.verdict+(v.reason?'_'+v.reason:''));return v
                                 }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return {verdict:err instanceof Error&&/timeout|abort/i.test(err.name)?'timeout':'error'}}
                             }
@@ -1016,6 +1023,7 @@ export async function chatWithTools(
                                         const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Write evidence-grounded venue reasons. Return only JSON.'},{role:'user',content:venueSynthesisPrompt(currentRequest,[packet])}],stream:false,max_tokens:900})}))
                                         if(!r.ok)return []
                                         const j=await r.json() as {choices?:{message?:{content?:string}}[]},raw=j.choices?.[0]?.message?.content||''
+                                        captureItineraryDiagnostic('reason_proposal',{line:packet.venue.line,raw})
                                         const parsed=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')) as {reasons?:{line?:number}[]}
                                         return Array.isArray(parsed.reasons)?parsed.reasons.filter(reason=>reason.line===packet.venue.line):[]
                                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return []}
@@ -1234,4 +1242,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                        }
+                                                                                                                                                                            }
