@@ -28,7 +28,7 @@ describe('typed deliverable contract',()=>{
 it('a direct itinerary correction carries the original agenda and requires a new file in this turn',async()=>{
  const original='Make an itinerary for visiting founders in Harbor on Friday. Office tour at 10am, working sessions, hotels, restaurants and weekend activities.'
  const correction='No, Harbor North Coast, not the inland city.'
- const history=[{role:'user',content:original},{role:'assistant',content:'An itinerary was made for the inland city.'},{role:'user',content:correction}]
+ const history:Parameters<typeof chatWithTools>[0]=[{role:'user',content:original},{role:'assistant',content:'An itinerary was made for the inland city.'},{role:'user',content:correction}]
  const contract=selectDeliverable(history)
  expect(contract?.kind).toBe('itinerary');expect(contract?.request).toContain('Office tour at 10am');expect(contract?.request).toContain(correction)
  const search={name:'web_search',description:'test',inputSchema:{},execute:vi.fn(async()=>({success:false,error:'Research blocked'}))}
