@@ -25,7 +25,7 @@ it('the prominent city wins over a same-named small city even at lower confidenc
  }))
  const resolved:{label?:string}={}
  expect(await geoapifyPlaces('miami',['hotel'],new SourceRecords(),undefined,undefined,{resolved})).toBeNull()
- expect(filter).toContain('-80.19,25.76');expect(resolved.label).toBe('Miami, FL, US')
+ expect(filter).toContain('-80.19,25.76');expect(resolved.label).toBe('Miami, FL')
 })
 it('a state hint filters to the matching state and mismatches fail closed',async()=>{
  vi.stubEnv('GEOAPIFY_API_KEY','fictional-secret');let filter='',reason=''

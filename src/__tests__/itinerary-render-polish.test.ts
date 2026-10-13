@@ -17,7 +17,7 @@ it('markdown and case-normalized names can find a clean own-page sentence',async
 })
 it('renders a real named itinerary cover on web and PDF, with long reasons kept together',async()=>{
  const doc={title:'Harbor City · Friday and weekend',body:'## Friday\n- 10am: Office visit\n- Working sessions: venue and duration to confirm.\n## Weekend\n- Do: Tide Museum\n## Hotels\n:::stay\nHarbor Inn | unknown | unknown | unknown | Hours unverified | | https://fictional.test/inn\n:::\n\nSelection reasons:\n- Harbor Inn has quiet rooms beside the quay.\n\n## Dining\n:::options\nLantern Cafe | unknown | Healthy bowls beside the quay. | Hours unverified https://fictional.test/cafe\n:::'}
- expect(itineraryCover(doc)?.name).toBe('Harbor Inn')
+ expect(itineraryCover(doc)?.name).toBe(doc.title)
  const html=renderHtml(doc);expect(html).toContain('itinerary-cover');expect(html).toContain('Itinerary · unverified picks');expect(html).not.toContain('Researched itinerary');expect(renderHtml({...doc,body:doc.body+'\n\n## Recommendation evidence\n- A source-supported strength.'})).toContain('Researched itinerary')
  await mkdir('/tmp/itinerary-polish',{recursive:true});await writeFile('/tmp/itinerary-polish/page.html',html);await writeFile('/tmp/itinerary-polish/file.pdf',await renderPdf(doc))
  const long={...doc,body:doc.body.replace('## Hotels',Array.from({length:13},(_,i)=>'- Agenda note '+i+' preserves the requested work and leaves timing open.').join('\n')+'\n## Hotels')}
@@ -74,4 +74,9 @@ it('all PDF heading depths keep their first long option row on the same page',as
 it('renders distinct provider-fact reasons and one disclaimer in the visual proof',async()=>{
  const doc={title:'Harbor Friday and weekend',body:'## Friday\n- 10am: Office visit\n- Working sessions: venue and duration to confirm.\n## Weekend\n- Do: Tide Museum\n\nVenue names, categories and addresses: Geoapify · © OpenStreetMap contributors. Provider listings do not confirm current hours, availability, prices or quality.\n\n## Hotels\n:::stay\nHarbor Inn | unknown | unknown | 10 Reed Way | Address: 10 Reed Way | | https://fictional.test/inn\n:::\nSelection reasons:\n- Harbor Inn: listed at 10 Reed Way.\n\n## Dining\n:::options\nLantern Cafe | unknown | Lantern Cafe: provider lists thai cuisine. | Address: 42 Quay St https://fictional.test/cafe\n:::\n\n## Activities\n:::options\nTide Museum | unknown | Tide Museum: provider type is museum. | Address: 8 Dock Lane https://fictional.test/museum\n:::'}
  await mkdir('/tmp/reasons-proof',{recursive:true});await writeFile('/tmp/reasons-proof/page.html',renderHtml(doc));await writeFile('/tmp/reasons-proof/file.pdf',await renderPdf(doc));expect(renderHtml(doc)).not.toContain('>unknown<');const {flattenBlocks}=await import('@/lib/files/render');expect(flattenBlocks(doc.body)).not.toContain('unknown')
+})
+
+it('itinerary cover uses the trip title and never a raw country-code suffix',()=>{
+ const c=itineraryCover({title:'Itinerary for Harbor, FL, us',body:'Selection reasons:\n:::stay\nHarbor Inn | unknown | unknown | unknown | unknown | | https://fixture.test/inn\n:::'})
+ expect(c?.name).toBe('Itinerary for Harbor, FL');expect(c?.destination).toBe('Hotels, dining and activities')
 })

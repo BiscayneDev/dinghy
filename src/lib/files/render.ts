@@ -354,13 +354,13 @@ export function renderTable(t: Tokens.Table): string {
     return `<table class="tbl"><thead>${head}</thead><tbody>${rows}</tbody></table>`
 }
 
-/** Source-bound hotel names are a useful cover when no verified venue photo was captured. */
+/** Trip identity owns the itinerary cover, never its first recommendation. */
 export function itineraryCover(doc:DinghyDoc):{name:string;destination:string;researched:boolean}|null{
  if(!/Selection reasons:/i.test(doc.body))return null
  const stay=splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='stay')
  if(!stay||stay.kind!=='block')return null
- const name=decodeEntities(stay.lines.find(l=>l.trim())?.split(' | ')[0]?.trim()??'')
- return name?{name,destination:doc.title,researched:/^## Recommendation evidence\s*$/m.test(doc.body)}:null
+ const name=decodeEntities(doc.title).replace(/,\s*us$/i,'')
+ return name?{name,destination:'Hotels, dining and activities',researched:/^## Recommendation evidence\s*$/m.test(doc.body)}:null
 }
 function coverHtml(cover:{name:string;destination:string;researched:boolean}):string{
  return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">${cover.researched?'Researched itinerary':'Itinerary · unverified picks'}</span><span class="hero-n hero-title">${esc(cover.name)}</span><span class="hero-s">${esc(cover.destination)}</span></div></div>`
