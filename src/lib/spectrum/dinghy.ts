@@ -642,7 +642,7 @@ export async function chatWithTools(
     }
     const widenAttempts:Record<string,number>={}
     // Itinerary searches are steered to guides and roundups that list several venues, not single news stories.
-    const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;return itineraryResearch&&name==='web_search'&&typeof q==='string'&&!/\b(guide|best|top)\b/i.test(q)?{...(i as Record<string,unknown>),query:q+' best hotels restaurants things to do guide'}:i}
+    const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;if(!itineraryResearch||name!=='web_search'||typeof q!=='string')return i;const destination=resolveDestination(currentRequest)?.query||destinationTokens(currentRequest).join(' ');const kind=/restaurant|dining|food|eat/i.test(q)?'restaurant':/hotel|lodging|stay/i.test(q)?'hotel':/things to do|activities|attraction|weekend/i.test(q)?'activity':null;return kind&&destination?{...(i as Record<string,unknown>),query:widenQuery(kind,destination)}:i}
     let bypassCandidates:Record<string,unknown>[]|undefined
     const defsNow = () => {
         const defs=tools.map((t) => ({type:'function' as const,function:{name:t.name,description:t.description,parameters:t.inputSchema as Record<string,unknown>}}))
