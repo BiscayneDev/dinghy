@@ -75,7 +75,7 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  const matched:{place:ApiPlace;venue:ChosenVenue}[]=[]
  for(const p of places||[]){
   const v=venues.find(v=>v.kind===p.kind&&namedLookupMatch(v.name,p.name))
-  if(v&&!matched.some(m=>norm(m.place.name)===norm(p.name)&&m.place.kind===p.kind)){const page=opts.records.capture('web_fetch',{url:opts.records.pageUrl(v.sourceId),title:v.name,content:v.name+'\n'+(opts.records.pageText(v.sourceId)||'')},new Date().toISOString())[0];matched.push({place:{...p,name:v.name,source:page.id,start:0,end:v.name.length},venue:v})}
+  if(v&&!matched.some(m=>norm(m.place.name)===norm(p.name)&&m.place.kind===p.kind)){const page=opts.records.capture('web_fetch',{url:opts.records.pageUrl(p.source),title:v.name,content:v.name+'\n'+(opts.records.pageText(p.source)||'')},new Date().toISOString())[0];matched.push({place:{...p,name:v.name,source:page.id,start:0,end:v.name.length},venue:v})}
  }
  const verified=matched.length
  for(const v of venues)if(!matched.some(m=>m.venue===v)){const text=opts.records.pageText(v.sourceId)||'',start=text.toLowerCase().indexOf(v.name.toLowerCase());matched.push({venue:v,place:{line:matched.length+1,kind:v.kind,name:v.name,address:'',lat:0,lon:0,id:'source-'+v.sourceId+'-'+start,source:v.sourceId,start,end:start+v.name.length,discovered:true}})}
