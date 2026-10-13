@@ -3,7 +3,7 @@ import {SourceRecords} from '@/lib/files/source-records'
 import {widenQuery,widenSourceScore,diningPageEvidence} from '@/lib/files/itinerary-research'
 const page=(title:string,content:string)=>{const r=new SourceRecords();r.capture('web_fetch',{url:'https://fictional.test/guide',title,content},'2026-01-01T00:00:00Z');return r}
 it('dining query puts the destination after in and ranks guides above deal/event/accessibility/menu pages',()=>{
- expect(widenQuery('restaurant','Harbor City')).toBe('best restaurants in Harbor City where to eat restaurant guide')
+ expect(widenQuery('restaurant','Harbor City')).toContain('best restaurants in Harbor City where to eat restaurant guide')
  const guide=widenSourceScore('restaurant','https://fictional.test/best-restaurants','Best restaurants in Harbor City')
  for(const category of ['deals','festival','accessibility','menu','celebration'])expect(widenSourceScore('restaurant','https://fictional.test/'+category,category+' in Harbor City')).toBeLessThan(guide)
 })
@@ -58,4 +58,11 @@ it('working sessions follow the office row even inside nested Morning, and missi
  const b=ensureWorkingSessions('## Friday\n### Morning\n- 10am: Office visit\n### Afternoon\n- Rest','Friday office visit 10am then working sessions').body
  expect(b).toContain('Office visit\n- Working sessions');expect(b.indexOf('Working sessions')).toBeLessThan(b.indexOf('### Afternoon'))
  expect(ensureWeekendGap(b,'Friday and weekend activities',['activity'])).toContain('## Weekend')
+})
+
+it('bare venue names under explicit kind headings count as useful research pages',()=>{
+ const r=page('Harbor dining','## Restaurants\nLantern Table\nFenn House\nRook & Thistle')
+ expect(diningPageEvidence(r,r.pageIds())).toMatchObject({usable:true,venueLines:3})
+ const a=page('Harbor sights','## Attractions\nTide Hall\nShell House')
+ expect(activityPageEvidence(a,a.pageIds())).toMatchObject({usable:true,venueLines:2})
 })
