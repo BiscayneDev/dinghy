@@ -96,3 +96,8 @@ it('city words never turn different hotel names into a match',()=>{
  expect(namedLookupMatch('AC Hotel Harbor Quay','AC Hotel Harbor Quay')).toBe(true)
  expect(namedLookupMatch('W Harbor','W Harbor')).toBe(true)
 })
+it('keeps a sourced venue when a model explanation exceeds the length cap',()=>{
+ const {records,page}=fixture()
+ const picks=parseChosenVenues({venues:[{name:'Reed Hotel',kind:'hotel',why:'Rooms with a rooftop pool. '+('Useful rooms. '.repeat(30)),sourceId:page.id}]},records)
+ expect(picks).toHaveLength(1);expect(picks[0].why.length).toBeLessThanOrEqual(300)
+})
