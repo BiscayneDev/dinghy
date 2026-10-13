@@ -48,3 +48,12 @@ it('repair targets only unsupported claims, not incidental or missing experience
  const prompt=activityFitRepairPrompt('fun weekend',packets,[{line:1,code:'judge_no_unsupported_claim'},{line:2,code:'judge_no_no_experience'},{line:3,code:'judge_no_incidental'}])
  expect(prompt).toContain('Fictional 1');expect(prompt).not.toContain('Fictional 2');expect(prompt).not.toContain('Fictional 3');expect(prompt).toContain('ONE exact substring')
 })
+
+it('optional unknowns do not create authority; malformed caveats remain rejected with finite codes',async()=>{
+ const records=new SourceRecords(),r=records.capture('web_fetch',{url:'https://fictional.test/workshop',content:'Reed Workshop offers hands-on printmaking sessions in Harbor.'},'fictional')[0]
+ const packet={venue:{line:1,name:'Reed Workshop',kind:'activity' as const},status:'ready' as const,notes:[],evidence:[{id:'ev1_1',source:r.id,url:r.url,title:'Reed Workshop',excerpt:r.content!,origin:'fetched_page' as const,sourceRole:'unclassified' as const}]}
+ const row={line:1,decision:'recommend',experience:'Hands-on printmaking sessions',evidenceIds:['ev1_1'],reason:'A possible weekend visit'}
+ expect((await validateActivityFit({activities:[row]},'fun weekend',[packet],records,async()=>true)).accepted[0].unknowns).toEqual([])
+ expect((await validateActivityFit({activities:[row]},'fun weekend',[packet],records,async()=>false)).accepted).toHaveLength(0)
+ for(const [unknowns,code] of [[{},'unknowns_array'],[false,'unknowns_array'],[[9],'unknowns_item'],[['x'.repeat(121)],'unknowns_bounds']] as const)expect((await validateActivityFit({activities:[{...row,unknowns}]},'fun weekend',[packet],records,async()=>true)).rejected[0].code).toBe(code)
+})
