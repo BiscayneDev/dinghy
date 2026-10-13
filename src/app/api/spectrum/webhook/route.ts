@@ -19,7 +19,7 @@ import { handleSpectrumMessage, type InboundMessage, type InboundSpace } from '@
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 // Headroom for the post-response tail: history load + LLM call + send.
-export const maxDuration = 120
+export const maxDuration = 300
 // Upper bound on waiting for the SDK to dispatch the handler after the 200.
 const DISPATCH_WAIT_MS = 5_000
 
