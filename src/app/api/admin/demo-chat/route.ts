@@ -1,4 +1,3 @@
-import {withItineraryDiagnostic} from '@/lib/spectrum/itinerary-diagnostic'
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { getAdminSession } from '@/lib/auth/admin'
@@ -32,7 +31,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
 export async function POST(req: Request): Promise<NextResponse> {
     if (!(await getAdminSession())) return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
-    const body = (await req.json().catch(() => null)) as { slug?: unknown; message?: unknown; connect?: unknown; diagnostic?:unknown } | null
+    const body = (await req.json().catch(() => null)) as { slug?: unknown; message?: unknown; connect?: unknown } | null
     const guid = demoGuid(typeof body?.slug === 'string' ? body.slug : '')
     if (!guid) return NextResponse.json({ error: 'bad slug (a-z, 0-9, - _, 2-40 chars)' }, { status: 400 })
     await ensureAllowed(guid)
@@ -42,17 +41,11 @@ export async function POST(req: Request): Promise<NextResponse> {
     const text = typeof body?.message === 'string' ? body.message.trim() : ''
     if (!text || text.length > 2000) return NextResponse.json({ error: 'message required (max 2000 chars)' }, { status: 400 })
     const space = demoSpace(guid, { persist: false })
-    const run=()=>handleSpectrumMessage(space, {
+    await handleSpectrumMessage(space, {
         id: `demo-${randomUUID()}`,
         content: { type: 'text', text } as never,
         sender: { id: guid },
         timestamp: new Date(),
     })
-    if(body?.diagnostic===true){
-        if(guid!=='demo;-;city-dining-diag-20261013'||!text.includes('fictional founders')||!text.includes('fictional Harbor Founders'))return NextResponse.json({error:'Synthetic diagnostic scope only'},{status:400})
-        const capture=await withItineraryDiagnostic(run)
-        return NextResponse.json({sent:space.sent,history:await loadHistory(guid,60),diagnostic:capture.diagnostic},{headers:{'Cache-Control':'private, no-store'}})
-    }
-    await run()
     return NextResponse.json({ sent: space.sent, history: await loadHistory(guid, 60) })
 }
