@@ -12,7 +12,7 @@ const norm=(s:string)=>decode(s).replace(/\s+/g,' ').trim().toLowerCase()
 const unsafe=/\b(?:ignore (?:all |previous )?instructions|system prompt|api key|password|forward (?:this|all)|assistant must)\b/i
 
 /** Public research pages the chooser may pick from: fetched pages only, never the provider record. */
-function chooserPages(records:SourceRecords,maxPages=6,chars=14000){
+function chooserPages(records:SourceRecords,maxPages=4,chars=9000){
  return records.pageIds().filter(id=>records.pageUrl(id)!==PROVIDER_URL).slice(0,maxPages).map(id=>({sourceId:id,title:records.pageTitle(id)||'',url:records.pageUrl(id)||'',text:(records.pageText(id)||'').replace(/!\[[^\]]*\]\([^\n]*\)/g,'').replace(/\[([^\]]+)\]\(https?:[^\n)]*\)/g,'$1').replace(/https?:\/\/\S+/g,'').slice(0,chars)})).filter(p=>p.text)
 }
 
@@ -89,7 +89,7 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  try{
   const raw=await opts.json(chooseVenuesPrompt(opts.request,opts.records),1800,opts.signal)
   venues=parseChosenVenues(JSON.parse(raw.slice(raw.indexOf('{'),raw.lastIndexOf('}')+1)),opts.records)
- }catch{await opts.onStage?.('itinerary:choose_unparsed');return empty}
+ }catch(error){await opts.onStage?.(error instanceof SyntaxError?'itinerary:choose_bad_json':'itinerary:choose_call_failed');return empty}
  if(!venues.length)return empty
  const verify=opts.verify??((noms:{name:string;kind:PlaceKind}[],records:SourceRecords,signal:AbortSignal)=>geoapifyPlaces(opts.destination,[...new Set(noms.map(n=>n.kind))],records,signal,undefined,{...opts.hints,namedCandidates:noms}))
  const places=await verify(venues.map(v=>({name:v.name,kind:v.kind})),opts.records,opts.signal).catch(():null=>null)
@@ -108,4 +108,4 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
   else await opts.onStage?.('itinerary:sanity_unparsed')
  }catch{await opts.onStage?.('itinerary:sanity_skipped')}
  return {picks:picks.map(m=>({place:m.place,why:m.venue.why,sourceId:m.venue.sourceId})),chosen:venues.length,verified,dropped:venues.length-picks.length}
-   }
+}
