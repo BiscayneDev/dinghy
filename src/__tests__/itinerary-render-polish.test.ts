@@ -56,3 +56,22 @@ it('compound EveningDinner slots are dining, not a place to recommend a hotel',(
  const o=neutralizeUnpickedVenues('## EveningDinner\nHarbor Inn has a cozy lounge.\nLantern Cafe serves dinner.',['Harbor Inn','Lantern Cafe'],'EveningDinner in Harbor',[],[{kind:'hotel',name:'Harbor Inn'},{kind:'restaurant',name:'Lantern Cafe'}])
  expect(o.body).not.toContain('Harbor Inn');expect(o.body).toContain('Lantern Cafe')
 })
+
+it('all PDF heading depths keep their first long option row on the same page',async()=>{
+ const {execFileSync}=await import('node:child_process')
+ await mkdir('/tmp/reasons-proof',{recursive:true})
+ // Exercise different starting positions around a page boundary, including H3 and wrapped headings.
+ for(const depth of [2,3])for(const count of [12,17,22]){
+  const body='## Friday\n'+Array.from({length:count},(_,i)=>'- Supplied agenda item '+i+' with timing to confirm.').join('\n')+'\n\n'+'#'.repeat(depth)+' Activities\n:::options\nTide Museum | unknown | Tide Museum: provider type is museum. | Address: 42 Quay St, Harbor https://fictional.test/'+ 'museum-source-page-'.repeat(6)+'\n:::'
+  const path='/tmp/reasons-proof/heading-'+depth+'-'+count+'.pdf'
+  await writeFile(path,await renderPdf({title:'Harbor Friday and weekend',body}))
+  const text=execFileSync('pdftotext',[path,'-'],{encoding:'utf8'})
+  const page=text.split('\f').find(p=>p.includes('Activities'))!
+  expect(page).toContain('Tide Museum')
+ }
+})
+
+it('renders distinct provider-fact reasons and one disclaimer in the visual proof',async()=>{
+ const doc={title:'Harbor Friday and weekend',body:'## Friday\n- 10am: Office visit\n- Working sessions: venue and duration to confirm.\n## Weekend\n- Do: Tide Museum\n\nVenue names, categories and addresses: Geoapify · © OpenStreetMap contributors. Provider listings do not confirm current hours, availability, prices or quality.\n\n## Hotels\n:::stay\nHarbor Inn | unknown | unknown | 10 Reed Way | Address: 10 Reed Way | | https://fictional.test/inn\n:::\nSelection reasons:\n- Harbor Inn: listed at 10 Reed Way.\n\n## Dining\n:::options\nLantern Cafe | unknown | Lantern Cafe: provider lists thai cuisine. | Address: 42 Quay St https://fictional.test/cafe\n:::\n\n## Activities\n:::options\nTide Museum | unknown | Tide Museum: provider type is museum. | Address: 8 Dock Lane https://fictional.test/museum\n:::'}
+ await mkdir('/tmp/reasons-proof',{recursive:true});await writeFile('/tmp/reasons-proof/page.html',renderHtml(doc));await writeFile('/tmp/reasons-proof/file.pdf',await renderPdf(doc));expect(renderHtml(doc)).not.toContain('>unknown<');const {flattenBlocks}=await import('@/lib/files/render');expect(flattenBlocks(doc.body)).not.toContain('unknown')
+})
