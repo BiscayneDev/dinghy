@@ -947,7 +947,7 @@ export async function chatWithTools(
                         try{
                             const pickedSources=new Set(apiCandidates.map(c=>(c.name as {source:string}).source))
                             const activityPlaces=[...reasonPlaces.filter(p=>p.kind==='activity'&&pickedSources.has(p.source)),...reasonPlaces.filter(p=>p.kind==='activity'&&!pickedSources.has(p.source)).slice(0,6)]
-                            const activityPool=activityPlaces.flatMap(p=>{const result=compileApiPlaces({candidates:[{kind:'activity',line:p.line}]},[p],sourceRecords);return 'candidates' in result?result.candidates.map(c=>({...c,evidenceLine:p.line})):[]})
+                            const activityPool:Record<string,unknown>[]=activityPlaces.flatMap(p=>{const result=compileApiPlaces({candidates:[{kind:'activity',line:p.line}]},[p],sourceRecords);return 'candidates' in result?result.candidates.map(c=>({...c,evidenceLine:p.line})):[]})
                             const researchPicks=[...apiCandidates,...activityPool.filter(c=>!apiCandidates.some(p=>(p.name as {source:string}).source===(c.name as {source:string}).source))]
                             const venues=apiEvidenceVenues(researchPicks,reasonPlaces)
                             const packets=await withinTurn(opts.deadlineAt,signal=>collectVenueEvidence(venues,{query:destLabel||destinationTokens(currentRequest).join(' '),matchTerms:destTerms.length?destTerms:destinationTokens(currentRequest)},sourceRecords,io,{budgetMs:6000,concurrency:3,signal}))
@@ -1195,4 +1195,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                        }
+}
