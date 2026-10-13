@@ -1,5 +1,5 @@
 import {it,expect,vi,afterEach} from 'vitest'
-import {geoapifyPlaces,compileApiPlaces,apiPlaceMenu,GEOAPIFY_ATTRIBUTION,apiReasonFacts,applyApiReasons,apiReasonPrompt} from '@/lib/files/geoapify-itinerary'
+import {geoapifyPlaces,compileApiPlaces,apiPlaceMenu,GEOAPIFY_ATTRIBUTION,apiReasonFacts,applyApiReasons,apiReasonPrompt,researchApiReasons,venueReasonSentence} from '@/lib/files/geoapify-itinerary'
 import {SourceRecords} from '@/lib/files/source-records'
 import {compileItineraryCandidates} from '@/lib/files/itinerary-candidates'
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals()})
@@ -92,6 +92,27 @@ it('routed-model why accepts only exact facts for that venue, never extra qualit
  expect(compiled.candidates[0].reason).not.toMatch(/not independently|unverified/)
  expect(compiled.candidates[0].catch).not.toContain('unverified')
  for(const why of ['Best Thai food near your office.',facts[0]+' Open until 10pm.',facts[0].replace('thai','italian'),'Rook Kitchen: provider lists thai cuisine.'])expect(applyApiReasons({reasons:[{line:1,why}]},compiled.candidates,[p],r)).toEqual({accepted:0,rejected:1})
- expect(applyApiReasons({reasons:[{line:1,why:facts[0]+' '+facts[1]}]},compiled.candidates,[p],r)).toEqual({accepted:1,rejected:0})
- expect(compiled.candidates[0].reason).toBe(facts[0]+' '+facts[1])
+ expect(applyApiReasons({reasons:[{line:1,why:facts[0]}]},compiled.candidates,[p],r)).toEqual({accepted:1,rejected:0})
+ expect(compiled.candidates[0].reason).toBe(facts[0])
+})
+it('per-venue lookup uses fetched named sentences, never snippets or other-city pages',async()=>{
+ const r=new SourceRecords(),name='Lantern Cafe',rec=r.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',content:name},'2026-01-01T00:00:00Z')[0]
+ const p={line:1,kind:'restaurant' as const,name,address:'42 Quay St',cuisine:'thai',lat:25,lon:-80,id:'fictional',source:rec.id,start:0,end:name.length}
+ const o=compileApiPlaces(null,[p],r);if('error'in o)throw new Error(o.error)
+ const sentence='Lantern Cafe serves wood-fired noodles and seasonal vegetable bowls.'
+ let query=''
+ const search=async(q:string)=>{query=q;return {results:[{url:'https://fictional.test/cafe',content:'Lantern Cafe has a rooftop pool.'}]}},read=async()=>({title:'Lantern Cafe in Harbor',content:'Harbor dining. '+sentence+' Rook Kitchen serves seafood.'})
+ expect(await researchApiReasons(o.candidates,[p],'Harbor',r,{search,read})).toEqual({found:1,missing:0});expect(query).toContain('"Lantern Cafe" Harbor restaurant')
+ expect(o.candidates[0].reason).toBe(sentence);expect(o.candidates[0].reason).not.toContain('pool');expect((p as {webSource?:string}).webSource).toBeTruthy();expect(apiReasonFacts(p,r)).toEqual([sentence])
+ expect(applyApiReasons({reasons:[{line:1,why:'Lantern Cafe: provider lists thai cuisine.'}]},o.candidates,[p],r)).toEqual({accepted:0,rejected:1})
+ expect(venueReasonSentence(p,'Other City','Harbor dining. '+sentence)).toBe('');expect(venueReasonSentence(p,'Harbor','Harbor dining. Rook Kitchen serves seafood.')).toBe('')
+ expect(venueReasonSentence(p,'Harbor','Harbor dining. Lantern Cafe is the best restaurant open until 10pm.')).toBe('')
+})
+it('timeout prevents late source commits and keeps address-free fallback',async()=>{
+ const r=new SourceRecords(),name='Reed Kitchen',rec=r.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',content:name},'2026-01-01T00:00:00Z')[0]
+ const p={line:1,kind:'restaurant' as const,name,address:'42 Quay St',cuisine:'thai',lat:25,lon:-80,id:'fictional',source:rec.id,start:0,end:name.length}
+ const o=compileApiPlaces(null,[p],r);if('error'in o)throw new Error(o.error)
+ const io={search:async()=>({results:[{url:'https://fictional.test/reed'}]}),read:async()=>{await new Promise(resolve=>setTimeout(resolve,35));return {content:'Harbor dining. Reed Kitchen serves wood-fired noodle bowls.'}}}
+ expect(await researchApiReasons(o.candidates,[p],'Harbor',r,io,5)).toEqual({found:0,missing:1});await new Promise(resolve=>setTimeout(resolve,50));expect(r.pageIds()).toHaveLength(1)
+ expect(o.candidates[0].reason).toContain('thai cuisine');expect(o.candidates[0].reason).not.toContain('42 Quay')
 })
