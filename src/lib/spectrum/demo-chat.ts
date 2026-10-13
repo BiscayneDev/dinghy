@@ -44,3 +44,8 @@ export function demoSpace(guid: string, opts: { persist: boolean }): { id: strin
         },
     }
 }
+
+/** A submit token survives HTTP replay; no token means legacy random identity. */
+export function demoSubmissionId(guid:string,requestId:unknown):string|null{
+ return typeof requestId==='string'&&/^[a-f0-9-]{36}$/i.test(requestId)?'demo-'+guid+'-'+requestId:null
+}
