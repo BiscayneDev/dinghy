@@ -137,7 +137,7 @@ export function neutralizeUnpickedVenues(body:string,pickNames:string[],request:
    if((!known&&!inRequest)||(pick&&sectionKind&&pick.kind!==sectionKind)){removed++;continue}
   }
   if(!heading&&skipUnder){if(!line.trim()){keep.push(line)}else removed++;continue}
-  if(heading){skipUnder=false;sectionKind=/\b(?:lunch|dinner|breakfast|brunch|dining|restaurants?|eats)\b/i.test(line)?'restaurant':/\b(?:hotels?|lodging|stays)\b/i.test(line)?'hotel':/\b(?:activities|attractions|things to do)\b/i.test(line)?'activity':undefined}
+  if(heading){skipUnder=false;sectionKind=/(?:\b(?:lunch|dinner|breakfast|brunch|dining|restaurants?|eats)\b|(?:evening|morning|afternoon)[ _-]?(?:dinner|lunch|breakfast)|(?:Dinner|Lunch|Breakfast)(?=[A-Z]|$))/i.test(line)?'restaurant':/\b(?:hotels?|lodging|stays)\b/i.test(line)?'hotel':/\b(?:activities|attractions|things to do)\b/i.test(line)?'activity':undefined}
   if(!heading&&sectionKind&&verified.some(p=>p.kind!==sectionKind&&line.toLowerCase().includes(p.name.toLowerCase()))){removed++;continue}
   if(!line.trim()){keep.push(line);continue}
   if(!heading&&kindRe.length&&/:\s*$/.test(line)&&new RegExp('\\b(?:'+kindRe.join('|')+')\\b','i').test(line)){removed++;skipUnder=true;continue}

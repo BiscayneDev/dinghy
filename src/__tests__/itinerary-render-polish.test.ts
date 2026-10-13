@@ -51,3 +51,8 @@ it('meal orphan wait and reservation claims disappear without a named pick',()=>
  const o=neutralizeUnpickedVenues('## Lunch\nReservations may be hard to get\n## Dinner\nPopular spot, expect a wait\n## Friday\n- Office visit',['Harbor Inn'],'Lunch Dinner Friday office visit',[],[{kind:'hotel',name:'Harbor Inn'}])
  expect(o.body).not.toMatch(/hard to get|expect a wait/);expect(o.body).toContain('Office visit')
 })
+
+it('compound EveningDinner slots are dining, not a place to recommend a hotel',()=>{
+ const o=neutralizeUnpickedVenues('## EveningDinner\nHarbor Inn has a cozy lounge.\nLantern Cafe serves dinner.',['Harbor Inn','Lantern Cafe'],'EveningDinner in Harbor',[],[{kind:'hotel',name:'Harbor Inn'},{kind:'restaurant',name:'Lantern Cafe'}])
+ expect(o.body).not.toContain('Harbor Inn');expect(o.body).toContain('Lantern Cafe')
+})
