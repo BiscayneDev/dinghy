@@ -88,5 +88,5 @@ it('keeps a sourced venue when a model explanation exceeds the length cap',()=>{
 it('binds composed page URLs and preserves the picked name across a provider alias',async()=>{
  const records=new SourceRecords();const page=records.capture('web_fetch',{url:'https://harbor.test/coast',content:'South Harbor Beach has coastal paths and picnic spots.'},'2030-01-01')[0]
  const out=await chooseItineraryVenues({request:'Harbor weekend',records,destination:'Harbor',signal:new AbortController().signal,json:async()=>JSON.stringify({venues:[{name:'South Harbor Beach',kind:'activity',why:'Coastal paths and picnic spots.',sourceUrl:page.url}]}),verify:async()=>[{line:1,kind:'activity',name:'South Harbor Pointe Beach',address:'Harbor',lat:1,lon:1,id:'fixture',source:page.id,start:0,end:18}]})
- expect(out.picks[0].place.name).toBe('South Harbor Beach');expect(out.picks[0].sourceId).toBe(page.id)
+ expect(out.picks[0].place.name).toBe('South Harbor Beach');expect(out.picks[0].sourceId).toBe(page.id);expect(records.pageText(out.picks[0].place.source)?.slice(out.picks[0].place.start,out.picks[0].place.end)).toBe('South Harbor Beach')
 })
