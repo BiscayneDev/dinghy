@@ -1,6 +1,6 @@
 import {it,expect,vi} from 'vitest'
 import {SourceRecords} from '@/lib/files/source-records'
-import {collectVenueEvidence,venueEvidenceSections,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt} from '@/lib/files/itinerary-venue-evidence'
+import {collectVenueEvidence,venueEvidenceSections,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,relevantVenueExcerpts} from '@/lib/files/itinerary-venue-evidence'
 const venue={line:1,name:'Lantern Table',kind:'restaurant' as const,address:'42 Quay St'}
 const destination={query:'Harbor, North Coast',matchTerms:['Harbor']}
 it('keeps first-person and review context within the named venue section, excluding next venue',()=>{
@@ -55,4 +55,18 @@ it('does not force invented fit needs; empty fit with useful supported descripti
  const prompt=venueSynthesisPrompt('Hotels and restaurants after office working sessions',packets)
  expect(prompt).toContain('does NOT request hotel meeting space');expect(prompt).toContain('fit 0-200');expect(prompt).toContain('neutral paraphrases')
  expect(venueReasonJudgePrompt({request:'Office working sessions and lodging',venue,why:'Meeting facilities ideal for your working sessions',claims:[],fit:'',fitBasis:[],evidence:[]})).toContain('Reject those invented needs')
+})
+
+it('ranks useful late details ahead of navigation without rewriting source text',()=>{
+ const chrome=Array.from({length:20},(_,i)=>'Privacy policy and cookie settings for visitor '+i+'.').join('\n')
+ const bland=Array.from({length:12},(_,i)=>'Explore our latest news update number '+i+' and find out more.').join('\n')
+ const detail='Lantern Table serves vegetable bowls with wood-fired noodles in a courtyard dining room.'
+ const text=chrome+'\n'+bland+'\n'+detail
+ const out=relevantVenueExcerpts([text],text,venue)
+ expect(out).toContain(detail);expect(out[0]).toBe(detail);expect(out.some(s=>/privacy|cookies/i.test(s))).toBe(false);expect(out.every(s=>text.includes(s))).toBe(true)
+})
+it('title-matched pages retain relevant content after the old ten-thousand-character cutoff',()=>{
+ const text='Harbor\n'+('Privacy policy and cookie settings.\n'.repeat(350))+'Lantern Table serves seasonal bowls on a garden terrace.'
+ const sections=venueEvidenceSections(venue,destination,'Lantern Table Harbor',text)
+ expect(relevantVenueExcerpts(sections,text,venue)).toContain('Lantern Table serves seasonal bowls on a garden terrace.')
 })

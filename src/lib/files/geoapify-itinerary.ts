@@ -46,7 +46,7 @@ export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],record
   for(const kind of kinds){
    for(const radius of kind==='activity'?[4000,10000]:[4000]){
    await new Promise(resolve=>setTimeout(resolve,210))
-   const category=radius===10000?'tourism.attraction,entertainment.museum,entertainment.culture.gallery,entertainment.zoo,entertainment.aquarium,entertainment.theme_park,leisure.park,beach':categories[kind]
+   const category=radius===10000?'entertainment.museum,entertainment.culture.gallery,entertainment.zoo,entertainment.aquarium,entertainment.theme_park,leisure.park,beach':categories[kind]
    let data:{features?:{properties?:Record<string,unknown>}[]}
    try{data=await get('v2/places',{categories:category,filter:`circle:${anchor.lon},${anchor.lat},${radius}`,bias:`proximity:${anchor.lon},${anchor.lat}`,limit:'20'}) as typeof data}catch(error){if(radius===10000){status=undefined;break}throw error}
    for(const f of data.features||[]){
@@ -223,4 +223,4 @@ export function activityResearchSlate(places:ApiPlace[],selectedSources:Set<stri
  const result:ApiPlace[]=[]
  while(result.length<replacementLimit){let added=false;for(const group of groups.values()){const p=group.shift();if(p){result.push(p);added=true;if(result.length===replacementLimit)break}}if(!added)break}
  return [...selected,...result]
- }
+}
