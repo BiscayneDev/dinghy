@@ -50,7 +50,7 @@ export default function DemoChatPage() {
                         <div key={i} style={{ whiteSpace: 'pre-wrap', textAlign: m.role === 'user' ? 'right' : 'left' }}>{linkify(m.content)}</div>
                     ))}
                 </div>
-                <form onSubmit={(e) => { e.preventDefault(); const t = text.trim(); if (!t) return; setText(''); setHistory((h) => [...h, { role: 'user', content: t }]); void call({ method: 'POST', body: { slug, message: t } }) }} style={{ display: 'flex', gap: 8 }}>
+                <form onSubmit={(e) => { e.preventDefault(); const t = text.trim(); if (!t) return; setText(''); setHistory((h) => [...h, { role: 'user', content: t }]); void call({ method: 'POST', body: { slug, message: t, requestId: crypto.randomUUID() } }) }} style={{ display: 'flex', gap: 8 }}>
                     <input style={{ flex: 1 }} value={text} onChange={(e) => setText(e.target.value)} placeholder="message Dinghy" />
                     <button className="dock-btn-primary" disabled={busy} type="submit">{busy ? '...' : 'Send'}</button>
                 </form>
@@ -58,4 +58,4 @@ export default function DemoChatPage() {
             </div>
         </AdminShell>
     )
-}
+                    }
