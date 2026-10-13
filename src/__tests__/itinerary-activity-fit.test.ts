@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest'
 import {SourceRecords} from '@/lib/files/source-records'
-import {parseActivityJudge,activityFitJudgePrompt,incidentalActivityTags,activityFitPrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
+import {activityFitRepairPrompt,parseActivityJudge,activityFitJudgePrompt,incidentalActivityTags,activityFitPrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
 it('flags marker subtypes without venue-name hardcodes and retains novel experience categories',()=>{
  expect(incidentalActivityTags(['tourism.attraction.marker'],{})).toBe(true);expect(incidentalActivityTags(['tourism.attraction'],{historic:'commemorative'})).toBe(true);expect(incidentalActivityTags(['tourism.attraction'],{tourism:'museum'})).toBe(false)
 })
@@ -41,4 +41,10 @@ it('typed experience verdicts fail closed and carry only finite diagnostic reaso
  expect(parseActivityJudge('{"verdict":"no","reason":"incidental"}')).toEqual({verdict:'no',reason:'incidental'})
  for(const raw of ['YES','{"verdict":"yes","reason":"uncertain"}','{"verdict":"no","reason":"none"}','{"verdict":"no","reason":"private venue text"}'])expect(parseActivityJudge(raw).verdict).toBe('invalid')
  expect(activityFitJudgePrompt({request:'fun weekend',verdict:{line:1,decision:'recommend',experience:'Hands-on workshop',evidenceIds:[],reason:'Weekend outing',unknowns:[]},packet:{venue:{line:1,kind:'activity',name:'Reed Workshop'},status:'missing',evidence:[],notes:[]}})).toContain('honestly listed as unknown')
+})
+
+it('repair targets only unsupported claims, not incidental or missing experiences',()=>{
+ const packets=[1,2,3].map(line=>({venue:{line,name:'Fictional '+line,kind:'activity' as const},status:'ready' as const,evidence:[],notes:[]}))
+ const prompt=activityFitRepairPrompt('fun weekend',packets,[{line:1,code:'judge_no_unsupported_claim'},{line:2,code:'judge_no_no_experience'},{line:3,code:'judge_no_incidental'}])
+ expect(prompt).toContain('Fictional 1');expect(prompt).not.toContain('Fictional 2');expect(prompt).not.toContain('Fictional 3');expect(prompt).toContain('ONE exact substring')
 })
