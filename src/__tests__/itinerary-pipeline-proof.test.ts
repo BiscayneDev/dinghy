@@ -282,7 +282,7 @@ it('standard founder itinerary runs routed search then publishes two hotels thre
  vi.stubEnv('TAVILY_API_KEY','fictional-key');vi.stubEnv('GEOAPIFY_API_KEY','fictional-key')
  const ask='Make an itinerary for fictional founders visiting Harbor, Florida on Friday. They tour fictional Harbor Founders offices in Quay at 10am, followed by working sessions. Recommend hotels and restaurants and fun weekend things to do. Maybe a Harbor basketball game.'
  const rows=[['hotel','Reed Inn','Courtyard rooms and a rooftop pool.'],['hotel','Quay Suites','Suites with desks and a reading lounge.'],['restaurant','Lantern Table','Wood-fired fish and seasonal vegetables.'],['restaurant','Tern Bistro','French bistro dishes and a terrace.'],['restaurant','Rook Kitchen','Rice bowls and grilled vegetables.'],['activity','Shell Museum','Maritime paintings and model ships.'],['activity','Reed Gardens','Tropical plant paths and sculpture gardens.']]
- const pageUrl='https://harbor.test/standard',text=rows.map(([_k,n,w])=>'\n## '+n+'\n'+w).join('\n')
+ const pageUrl='https://harbor.test/standard',text=('Fictional navigation links. '.repeat(55))+'\n'+rows.map(([_k,n,w])=>'\n## '+n+'\n'+w).join('\n')
  const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}},files=fileToolsFor(),stages:string[]=[],loopTools:string[]=[]
  published.mockResolvedValue({url:'https://fictional-standard.here.now/',slug:'fictional-standard',expiresAt:'2030-06-11T00:00:00Z'})
  vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
@@ -292,13 +292,13 @@ it('standard founder itinerary runs routed search then publishes two hotels thre
   if(url==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor visitor guide',url:pageUrl,content:'Harbor hotels dining and activities.'}]}))
   if(url===pageUrl)return new Response('<html><title>Harbor visitor guide</title><body>'+text+'</body></html>')
   const req=JSON.parse(init.body)
-  if(req.max_tokens===1800){const pages=JSON.parse(req.messages[1].content.split('Pages: ')[1].split('\nKnown verified places')[0]),id=pages.find((p:any)=>p.url===pageUrl).sourceId;return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({venues:rows.map(([kind,name,why])=>({kind,name,why,sourceId:id}))})}}]}))}
+  if(req.max_tokens===1800){const fromTools=req.messages.filter((m:any)=>m.role==='tool').flatMap((m:any)=>{try{return JSON.parse(m.content).source_records||[]}catch{return []}}),pages=req.tool_choice==='none'?fromTools:JSON.parse(req.messages[1].content.split('Pages: ')[1].split('\nKnown verified places')[0]),page=pages.find((p:any)=>p.url===pageUrl&&p.origin==='page')||pages.find((p:any)=>p.url===pageUrl),id=page.id||page.sourceId;if(req.tool_choice==='none')expect(page.content).toContain('gardens');return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({venues:rows.map(([kind,name,why])=>({kind,name,why,sourceId:id}))})}}]}))}
   if(req.max_tokens===451)return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({checks:rows.map(([_k,name])=>({name,ok:true}))})}}]}))
-  const name=req.tool_choice?.function?.name||req.tools?.[0]?.function.name||'web_search';if(req.max_tokens===800)loopTools.push(name)
+  const name=req.max_tokens===800&&loopTools.length>0?'web_fetch':req.tool_choice?.function?.name||req.tools?.[0]?.function.name||'web_search';if(req.max_tokens===800)loopTools.push(name)
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'fixture-'+loopTools.length,function:{name,arguments:JSON.stringify(name==='web_fetch'?{url:pageUrl}:{query:'Harbor Florida hotels restaurants weekend guide'})}}]}}]}))
  }))
  const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+90000,onStage:async(_s,d)=>{if(d)stages.push(d)}},gateTools([...toolsFor(ctx),...files.tools],[ask]).active,ctx)
- expect(result.deliverable?.state).toBe('completed');expect(loopTools.filter(n=>n==='web_search')).toHaveLength(5);expect(loopTools.filter(n=>n==='web_fetch')).toHaveLength(0);expect(stages).toContain('itinerary:accepted:h2_r3_a2')
+ expect(result.deliverable?.state).toBe('completed');expect(loopTools.filter(n=>n==='web_search')).toHaveLength(1);expect(loopTools.filter(n=>n==='web_fetch')).toHaveLength(4);expect(stages).toContain('itinerary:accepted:h2_r3_a2')
  const markdown=files.files()[0].markdown,html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
  for(const [_k,name,why]of rows){expect(markdown).toContain(name);expect(html).toContain(why)}expect(markdown).toContain(pageUrl);expect(markdown).toMatch(/10:00|10am/);expect(markdown).toMatch(/working sessions/i)
 })
