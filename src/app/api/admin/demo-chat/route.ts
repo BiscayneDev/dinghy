@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { randomUUID } from 'crypto'
 import { getAdminSession } from '@/lib/auth/admin'
 import { createServerClient } from '@/lib/supabase/server'
@@ -8,7 +8,7 @@ import { createConnectLink, loadHistory } from '@/spectrum/store'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 120
+export const maxDuration = 300
 
 /**
  * Admin demo chat. Drives a synthetic `demo;-;<slug>` identity through the real
@@ -41,11 +41,13 @@ export async function POST(req: Request): Promise<NextResponse> {
     const text = typeof body?.message === 'string' ? body.message.trim() : ''
     if (!text || text.length > 2000) return NextResponse.json({ error: 'message required (max 2000 chars)' }, { status: 400 })
     const space = demoSpace(guid, { persist: false })
-    await handleSpectrumMessage(space, {
+    const inbound = {
         id: demoSubmissionId(guid,body?.requestId)??`demo-${randomUUID()}`,
         content: { type: 'text', text } as never,
         sender: { id: guid },
         timestamp: new Date(),
-    })
-    return NextResponse.json({ sent: space.sent, history: await loadHistory(guid, 60) })
+    }
+    const work = handleSpectrumMessage(space, inbound)
+    after(async()=>{await work})
+    return NextResponse.json({ queued: true, history: await loadHistory(guid, 60) })
 }
