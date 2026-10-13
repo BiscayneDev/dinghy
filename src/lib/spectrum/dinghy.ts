@@ -1,3 +1,4 @@
+import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,GEOAPIFY_ATTRIBUTION,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
 import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
@@ -619,7 +620,8 @@ export async function chatWithTools(
     }
     let pickedSoFar:Record<string,unknown>[]=[]
     let unsupportedKinds:string[]=[]
-    let menuShown=false
+    let menuShown=false,apiAttempted=false
+    let apiPlaces:ApiPlace[]|null=null
     const widenAttempts:Record<string,number>={}
     // Itinerary searches are steered to guides and roundups that list several venues, not single news stories.
     const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;return itineraryResearch&&name==='web_search'&&typeof q==='string'&&!/\b(guide|best|top)\b/i.test(q)?{...(i as Record<string,unknown>),query:q+' best hotels restaurants things to do guide'}:i}
@@ -697,9 +699,18 @@ export async function chatWithTools(
             completionMode = true
             messages.push({ role: 'system', content: RESEARCH_FINISH })
         }
+        if(itineraryResearch&&successfulSearches>0&&!apiAttempted){
+            apiAttempted=true;const destination=destinationTokens(currentRequest).join(' ')
+            if(destination&&!egressRejection('web_search',JSON.stringify({query:destination}),tainted,corpus)){
+                await assertAccountActive(ctx.userId,ctx.chatGuid)
+                apiPlaces=await withinTurn(opts.deadlineAt,signal=>geoapifyPlaces(destination,requiredKinds(currentRequest) as PlaceKind[],sourceRecords,signal))
+                if(apiPlaces){mapResearchRead=true;foundSources.push({title:'Geoapify venue listings',url:'https://www.geoapify.com/places-api/'})}
+                await opts.onStage?.('tool',`itinerary:places_api:${apiPlaces?'ready_'+apiPlaces.length:'fallback'}`)
+            }
+        }
         // A required read is an execution dependency, not a suggestion to the model.
         // Only observed public URLs; the same account, egress and deadline gates apply.
-        if(itineraryResearch&&foundSources.length&&!mapResearchRead&&!itineraryReadAttempted){
+        if(itineraryResearch&&foundSources.length&&(!mapResearchRead||!!apiPlaces)&&!itineraryReadAttempted){
             itineraryReadAttempted=true
             const reader=tools.find(t=>t.name==='web_fetch')!
             // At most six actual search URLs; preserve synthesis headroom on every try.
@@ -723,7 +734,7 @@ export async function chatWithTools(
                     const id=`required_read_${iteration}_${readsOk}`
                     messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
                     // A thin first page (few venue names) gets up to two more observed pages while time allows.
-                    if(readsOk>=3||buildPageView(sourceRecords).venueLines>=40||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
+                    if((apiPlaces&&readsOk>=2)||readsOk>=3||buildPageView(sourceRecords).venueLines>=40||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
                     await opts.onStage?.('tool','research:read_more')
                     continue
                 }
@@ -738,9 +749,9 @@ export async function chatWithTools(
             if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
         }
         if(itineraryResearch&&mapResearchRead&&!selectedCandidates&&!menuShown){
-            menuShown=true;const view=buildPageView(sourceRecords);viewReady=view.lines>0;viewEntries=view.entries
+            menuShown=true;const view=buildPageView(sourceRecords);viewReady=!!apiPlaces?.length||view.lines>0;viewEntries=apiPlaces?apiPlaces.map(p=>({n:p.line,source:p.source,start:p.start,end:p.end,text:p.name,name:p.name,ctx:p.kind})):view.entries
             await opts.onStage?.('tool',`itinerary:page_view:${view.pages}_${view.lines}`)
-            if(viewReady)messages.push({role:'system',content:viewNote(view)})
+            if(viewReady)messages.push({role:'system',content:apiPlaces?apiPlaceMenu(apiPlaces):viewNote(view)})
         }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
@@ -826,7 +837,7 @@ export async function chatWithTools(
 
         // Missing kinds reopen research on the server: kind-specific searches and page reads feed a fresh view, then selection is offered again.
         const widenForMissing=async(missing:string[]):Promise<boolean>=>{
-            if(!missing.length||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<50000))return false
+            if(apiPlaces||!missing.length||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<50000))return false
             const searcher=tools.find(t=>t.name==='web_search'),reader=tools.find(t=>t.name==='web_fetch')
             if(!searcher||!reader)return false
             const destTok=destinationTokens(currentRequest),dest=destTok.join(' ')
@@ -911,7 +922,7 @@ export async function chatWithTools(
                         verdicts.set(vkey,ok);return ok
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
                 }
-                const picked=await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
+                const picked=apiPlaces?compileApiPlaces(parsed,apiPlaces,sourceRecords):await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
                 {const acc={hotel:0,restaurant:0,activity:0};for(const c of ('candidates' in picked?picked.candidates:[]) as {kind:'hotel'|'restaurant'|'activity'}[])acc[c.kind]++
                 const rej:Record<string,number>={};for(const d of picked.dropped)rej[d]=(rej[d]??0)+1
                 await opts.onStage?.('tool',`itinerary:accepted:h${acc.hotel}_r${acc.restaurant}_a${acc.activity}`)
@@ -979,6 +990,7 @@ export async function chatWithTools(
                             // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
                             if(typeof (input as {body?:unknown}).body==='string'){const d=dedupePickBullets((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords));if(d.removed){await opts.onStage?.('tool',`itinerary:pick_bullets_deduped:${d.removed}`);input={...(input as Record<string,unknown>),body:d.body}}}
                             if(typeof (input as {body?:unknown}).body==='string')input={...(input as Record<string,unknown>),body:ensureWeekendGap((input as {body:string}).body,currentRequest,unsupportedKinds)}
+                            if(apiPlaces&&typeof (input as {body?:unknown}).body==='string')input={...(input as Record<string,unknown>),body:(input as {body:string}).body+'\n\n'+GEOAPIFY_ATTRIBUTION}
                             if(typeof (input as {body?:unknown}).body==='string'){const ws=ensureWorkingSessions((input as {body:string}).body,currentRequest);if(ws.added){await opts.onStage?.('tool','itinerary:working_sessions_added');input={...(input as Record<string,unknown>),body:ws.body}}}
                             if(unsupportedKinds.length&&typeof (input as {body?:unknown}).body==='string'&&!/## Not found/i.test((input as {body:string}).body))input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\n## Not found\nI couldn\'t verify a pick for '+unsupportedKinds.map(k=>k==='activity'?'activities':k==='restaurant'?'restaurants':'hotels').join(' or ')+' from the pages I read. None are recommended here; the agenda above is unchanged.'}
                             {const bb=(input as {body?:unknown}).body;if(typeof bb==='string'){const cl=cleanEmptyHeadings(bb.split('\n')).join('\n');if(cl!==bb)input={...(input as Record<string,unknown>),body:cl}}}
@@ -1101,4 +1113,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-            }
+                    }
