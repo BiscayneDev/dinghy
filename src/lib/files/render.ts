@@ -1,4 +1,5 @@
 import {decodeEntities} from './entities'
+import {knownValue} from './kinds'
 import {pageRuntimeHtml,staticPageText} from '@/lib/pages/runtime'
 /**
  * Dinghy file renderer. One document model (title + markdown body) rendered in
@@ -252,7 +253,7 @@ function renderOptions(lines: string[]): string {
     const cards = lines.slice(0, 5).map((l) => {
         const [name, price, why, notes] = cells(l)
         if (!name) return ''
-        return `<div class="opt"><div class="opt-top"><span class="opt-name">${esc(name)}</span>${price ? `<span class="opt-price">${esc(price)}</span>` : ''}</div>${why ? `<p class="opt-why">${esc(why)}</p>` : ''}${notes ? `<p class="opt-catch"><span>Catch</span>${esc(notes)}</p>` : ''}</div>`
+        return `<div class="opt"><div class="opt-top"><span class="opt-name">${esc(name)}</span>${knownValue(price) ? `<span class="opt-price">${esc(price)}</span>` : ''}</div>${why ? `<p class="opt-why">${esc(why)}</p>` : ''}${notes ? `<p class="opt-catch"><span>Catch</span>${esc(notes)}</p>` : ''}</div>`
     })
     return `<div class="opts">${cards.join('')}</div>`
 }
@@ -310,7 +311,7 @@ function renderBlock(name: BlockName, lines: string[], opts: HtmlOptions = {}): 
 
 /** Plain-Markdown form of the blocks, for PDF and DOCX (and anything that does not draw components). */
 export function flattenBlocks(md: string): string {
-    const cells = (line: string) => line.split('|').map(c => c.trim())
+    const cells = (line: string) => line.split('|').map(c => knownValue(c.trim()))
     return splitBlocks(md)
         .map((sg) => {
             if (sg.kind === 'md') return sg.text
@@ -628,22 +629,26 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
             pdf.x = L
             if (t.type === 'heading') {
                 const h = t as Tokens.Heading
+                // Reserve exactly the same conservative row budget used by the list renderer.
+                // Include wrapped heading height and every before/after gap, for all heading depths.
+                const next=bodyTokens.slice(ti+1).find(x=>x.type!=='space')
+                const first=next?.type==='list'?(next as Tokens.List).items[0]:undefined
+                const tr=first?splitTimeRow(first.text):null
+                const row=first?Math.max(24,pdf.font('bodyBold').fontSize(11).heightOfString(plain(tr?tr.rest:first.text),{width:tr?W-88:W-20,lineGap:3})+10):30
+                const para=next?.type==='paragraph'?pdf.font('bodyBold').fontSize(11).heightOfString(plain((next as Tokens.Paragraph).text),{width:W,lineGap:3}):0
+                const after=next?.type==='paragraph'?bodyTokens.slice(bodyTokens.indexOf(next)+1).find(x=>x.type!=='space'):undefined
+                const afterFirst=after?.type==='list'?(after as Tokens.List).items[0]:undefined
+                const afterRow=afterFirst?Math.max(24,pdf.heightOfString(plain(afterFirst.text),{width:W-20,lineGap:3})+10):0
+                const size=h.depth<=2?19:11.5
+                const headingHeight=pdf.font(h.depth<=2?'display':'bodyBold').fontSize(size).heightOfString(plain(h.text),{width:W})
+                ensure(headingHeight+row+para+afterRow+48)
                 if (h.depth <= 2) {
-                    const next=bodyTokens.slice(ti+1).find(x=>x.type!=='space')
-                    const first=next?.type==='list'?(next as Tokens.List).items[0]:undefined
-                    const after=next?.type==='paragraph'?bodyTokens.slice(bodyTokens.indexOf(next)+1).find(x=>x.type!=='space'):undefined
-                    const afterFirst=after?.type==='list'?(after as Tokens.List).items[0]:undefined
-                    const following=first?pdf.font('bodyBold').fontSize(11).heightOfString(plain(first.text),{width:W-20,lineGap:3}):24
-                    const paraHeight=next?.type==='paragraph'?pdf.font('bodyBold').fontSize(11).heightOfString(plain((next as Tokens.Paragraph).text),{width:W,lineGap:3}):0
-                    const afterHeight=afterFirst?pdf.heightOfString(plain(afterFirst.text),{width:W-20,lineGap:3}):0
-                    ensure(52+following+paraHeight+afterHeight)
-                    rule(8, 14)
-                    pdf.font('display').fontSize(19).fillColor(BRAND.ink).text(plain(h.text), L, pdf.y, { width: W })
+                    rule(8,14)
+                    pdf.font('display').fontSize(size).fillColor(BRAND.ink).text(plain(h.text),L,pdf.y,{width:W})
                     pdf.moveDown(0.35)
                 } else {
-                    ensure(40)
                     pdf.moveDown(0.4)
-                    pdf.font('bodyBold').fontSize(11.5).fillColor(BRAND.ink).text(plain(h.text), L, pdf.y, { width: W })
+                    pdf.font('bodyBold').fontSize(size).fillColor(BRAND.ink).text(plain(h.text),L,pdf.y,{width:W})
                     pdf.moveDown(0.2)
                 }
             } else if (t.type === 'paragraph') {
@@ -847,4 +852,4 @@ export async function renderFile(doc: DinghyDoc, format: FileFormat, html: HtmlO
                   ? Buffer.from(renderCsv(doc), 'utf8')
                   : Buffer.from(`# ${doc.title}\n\n${doc.subtitle ? `_${doc.subtitle}_\n\n` : ''}${doc.body.trim()}\n`, 'utf8')
     return { filename: `${base}.${format}`, mimeType: MIME[format], bytes }
-}
+                           }
