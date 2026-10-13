@@ -1,5 +1,5 @@
 import {activityFitPrompt,activityFitJudgePrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
-import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiEvidenceVenues,applyVerifiedApiReasons,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
+import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiEvidenceVenues,applyVerifiedApiReasons,activityResearchSlate,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,type EvidenceJudge,type VerifiedVenueReason} from '@/lib/files/itinerary-venue-evidence'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
@@ -946,7 +946,7 @@ export async function chatWithTools(
                         const io={search:async(query:string,signal:AbortSignal)=>{if(egressRejection('web_search',JSON.stringify({query}),tainted,corpus))return {};toolCallCount++;const r=await searcher.execute({query,maxResults:3},{...ctx,signal});return r.success?r.data:{}},read:async(url:string,signal:AbortSignal)=>{if(egressRejection('web_fetch',JSON.stringify({url}),tainted,corpus))return {};toolCallCount++;const r=await reader.execute({url},{...ctx,signal});return r.success?r.data:{}}}
                         try{
                             const pickedSources=new Set(apiCandidates.map(c=>(c.name as {source:string}).source))
-                            const activityPlaces=[...reasonPlaces.filter(p=>p.kind==='activity'&&pickedSources.has(p.source)),...reasonPlaces.filter(p=>p.kind==='activity'&&!pickedSources.has(p.source)).slice(0,6)]
+                            const activityPlaces=activityResearchSlate(reasonPlaces,pickedSources)
                             const activityPool:Record<string,unknown>[]=activityPlaces.flatMap(p=>{const result=compileApiPlaces({candidates:[{kind:'activity',line:p.line}]},[p],sourceRecords);return 'candidates' in result?result.candidates.map(c=>({...c,evidenceLine:p.line})):[]})
                             const researchPicks=[...apiCandidates,...activityPool.filter(c=>!apiCandidates.some(p=>(p.name as {source:string}).source===(c.name as {source:string}).source))]
                             const venues=apiEvidenceVenues(researchPicks,reasonPlaces)
@@ -1195,4 +1195,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+                    }

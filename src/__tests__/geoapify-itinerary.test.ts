@@ -1,3 +1,4 @@
+import {activityResearchSlate} from '@/lib/files/geoapify-itinerary'
 import {it,expect,vi,afterEach} from 'vitest'
 import {geoapifyPlaces,compileApiPlaces,apiPlaceMenu,GEOAPIFY_ATTRIBUTION,apiReasonFacts,applyApiReasons,apiReasonPrompt,researchApiReasons,venueReasonSentence} from '@/lib/files/geoapify-itinerary'
 import {SourceRecords} from '@/lib/files/source-records'
@@ -126,4 +127,16 @@ it('excludes bare artworks and widens sparse activity coverage to named leisure 
  }))
  const out=(await geoapifyPlaces('Harbor',['activity'],new SourceRecords()))!
  expect(out.map(p=>p.name)).toEqual(['Tide Museum','Reed Park','Harbor Beach']);expect(urls).toHaveLength(3);expect(urls[2].searchParams.get('categories')).toContain('entertainment.museum');expect(urls[2].searchParams.get('filter')).toBe('circle:-80,25,10000')
+})
+
+it('broad activity research is not skipped merely because incidental downtown listings exist',async()=>{
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional');const urls:URL[]=[]
+ vi.stubGlobal('fetch',vi.fn(async u=>{const url=new URL(String(u));urls.push(url);if(url.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80}]}));const wide=url.searchParams.get('filter')!.endsWith(',10000');const names=wide?['Tide Museum']:['Quay Marker','Reed Marker','Grove Marker'];return new Response(JSON.stringify({features:names.map((name,i)=>({properties:{name,categories:[wide?'entertainment.museum':'tourism.attraction'],lat:25,lon:-80,place_id:name,formatted:'Harbor'}}))}))}))
+ const out=(await geoapifyPlaces('Harbor',['activity'],new SourceRecords()))!;expect(out.map(p=>p.name)).toContain('Tide Museum');expect(urls).toHaveLength(3)
+})
+
+it('research slate samples diverse experience subtypes without granting a type recommendation',()=>{
+ const make=(line:number,type:string)=>({line,kind:'activity' as const,name:'Fictional '+line,address:'',lat:0,lon:0,id:String(line),source:'src'+line,start:0,end:1,attractionType:type})
+ const places=[make(1,'marker'),make(2,'marker'),make(3,'marker'),make(4,'museum'),make(5,'garden'),make(6,'unusual_workshop')]
+ expect(activityResearchSlate(places,new Set(['src1']),3).map(p=>p.line)).toEqual([1,2,4,5])
 })
