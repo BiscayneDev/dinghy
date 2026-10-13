@@ -18,7 +18,7 @@ it('markdown and case-normalized names can find a clean own-page sentence',async
 it('renders a real named itinerary cover on web and PDF, with long reasons kept together',async()=>{
  const doc={title:'Harbor City · Friday and weekend',body:'## Friday\n- 10am: Office visit\n- Working sessions: venue and duration to confirm.\n## Weekend\n- Do: Tide Museum\n## Hotels\n:::stay\nHarbor Inn | unknown | unknown | unknown | Hours unverified | | https://fictional.test/inn\n:::\n\nSelection reasons:\n- Harbor Inn has quiet rooms beside the quay.\n\n## Dining\n:::options\nLantern Cafe | unknown | Healthy bowls beside the quay. | Hours unverified https://fictional.test/cafe\n:::'}
  expect(itineraryCover(doc)?.name).toBe('Harbor Inn')
- const html=renderHtml(doc);expect(html).toContain('itinerary-cover');expect(html).toContain('Researched itinerary')
+ const html=renderHtml(doc);expect(html).toContain('itinerary-cover');expect(html).toContain('Itinerary · unverified picks');expect(html).not.toContain('Researched itinerary');expect(renderHtml({...doc,body:doc.body+'\n\n## Recommendation evidence\n- A source-supported strength.'})).toContain('Researched itinerary')
  await mkdir('/tmp/itinerary-polish',{recursive:true});await writeFile('/tmp/itinerary-polish/page.html',html);await writeFile('/tmp/itinerary-polish/file.pdf',await renderPdf(doc))
  const long={...doc,body:doc.body.replace('## Hotels',Array.from({length:13},(_,i)=>'- Agenda note '+i+' preserves the requested work and leaves timing open.').join('\n')+'\n## Hotels')}
  await writeFile('/tmp/itinerary-polish/long.pdf',await renderPdf(long))
