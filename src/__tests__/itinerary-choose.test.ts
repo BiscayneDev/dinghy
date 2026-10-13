@@ -90,3 +90,9 @@ it('sanity can correct a mixed-up feature using venue section prose',async()=>{
  const outcome=await chooseItineraryVenues({request:'Harbor hotel',records,destination:'Harbor',signal:new AbortController().signal,verify:async(_n,r)=>[place(1,'hotel','Reed Hotel',r)],json:async prompt=>prompt.startsWith('Light fact check')?JSON.stringify({checks:[{name:'Reed Hotel',ok:false,why:'Courtyard rooms and a rooftop pool.'}]}):JSON.stringify({venues:[{name:'Reed Hotel',kind:'hotel',why:'Has beach access and nearby personal goods shops.',sourceId:page.id}]})})
  expect(outcome.picks[0].why).toBe('Courtyard rooms and a rooftop pool.')
 })
+
+it('city words never turn different hotel names into a match',()=>{
+ expect(namedLookupMatch('AC Hotel Harbor Quay','W Harbor')).toBe(false)
+ expect(namedLookupMatch('AC Hotel Harbor Quay','AC Hotel Harbor Quay')).toBe(true)
+ expect(namedLookupMatch('W Harbor','W Harbor')).toBe(true)
+})
