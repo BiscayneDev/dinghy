@@ -15,7 +15,6 @@ export default function DemoChatPage() {
     const [slug, setSlug] = useState('dinghydemo861')
     const [text, setText] = useState('')
     const [history, setHistory] = useState<Msg[]>([])
-    const [diagnostic,setDiagnostic]=useState(false)
     const [busy, setBusy] = useState(false)
     const [err, setErr] = useState<string | null>(null)
 
@@ -26,9 +25,8 @@ export default function DemoChatPage() {
                 credentials: 'include', cache: 'no-store',
                 ...(init ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(init.body) } : {}),
             })
-            const json = await res.json() as { error?: string; history?: Msg[]; link?: string; sent?: string[];diagnostic?:unknown }
+            const json = await res.json() as { error?: string; history?: Msg[]; link?: string; sent?: string[] }
             if (!res.ok) { setErr(json.error ?? 'failed'); return }
-            if(json.diagnostic)(window as unknown as {dinghyPrivateDiagnostic?:unknown}).dinghyPrivateDiagnostic=json.diagnostic
             let h = json.history ?? history
             // Link and non-history sends (rich links) are not in history: show them inline.
             const extra = (json.sent ?? []).filter((s) => !h.some((m) => m.content === s))
@@ -42,7 +40,6 @@ export default function DemoChatPage() {
         <AdminShell title="Demo chat" showBack backHref="/admin">
             <div className="dock-card" style={{ display: 'grid', gap: 12 }}>
                 <p className="meta-text">Synthetic Dinghy user with no phone. Same handler and Google connect flow as iMessage. Nothing is texted to anyone.</p>
-                <label><input type="checkbox" checked={diagnostic} onChange={e=>setDiagnostic(e.target.checked)} />Private synthetic diagnostic (browser memory only)</label>
                 <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="demo slug" />
                 <div style={{ display: 'flex', gap: 8 }}>
                     <button className="dock-btn-secondary" disabled={busy} onClick={() => void call()}>Load chat</button>
@@ -53,7 +50,7 @@ export default function DemoChatPage() {
                         <div key={i} style={{ whiteSpace: 'pre-wrap', textAlign: m.role === 'user' ? 'right' : 'left' }}>{linkify(m.content)}</div>
                     ))}
                 </div>
-                <form onSubmit={(e) => { e.preventDefault(); const t = text.trim(); if (!t) return; setText(''); setHistory((h) => [...h, { role: 'user', content: t }]); void call({ method: 'POST', body: { slug, message: t, diagnostic } }) }} style={{ display: 'flex', gap: 8 }}>
+                <form onSubmit={(e) => { e.preventDefault(); const t = text.trim(); if (!t) return; setText(''); setHistory((h) => [...h, { role: 'user', content: t }]); void call({ method: 'POST', body: { slug, message: t } }) }} style={{ display: 'flex', gap: 8 }}>
                     <input style={{ flex: 1 }} value={text} onChange={(e) => setText(e.target.value)} placeholder="message Dinghy" />
                     <button className="dock-btn-primary" disabled={busy} type="submit">{busy ? '...' : 'Send'}</button>
                 </form>
