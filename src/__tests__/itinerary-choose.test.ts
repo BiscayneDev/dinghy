@@ -98,7 +98,7 @@ it('free conversation gives early composition the same schema and enough output 
  expect(source).toContain('max_tokens:1800')
  expect(source).not.toContain('max_tokens:composeNow?1800:800')
  expect(source).toContain("response_format:{type:'json_object'}")
- expect(source).toContain('step<20&&!signal.aborted')
+ expect(source).toContain('step<20&&!researchSignal.aborted')
  expect(source).toContain('Read-page sources available: ')
 })
 
@@ -108,4 +108,14 @@ it('a hotel brand property suffix is not a provider alias and its address is nev
  const records=new SourceRecords(),page=records.capture('web_fetch',{url:'https://harbor.test/quay',content:'Quay Suites Harbor has desks and a reading lounge.'},'fictional')[0]
  const out=await chooseItineraryVenues({request:'Harbor',destination:'Harbor',records,signal:new AbortController().signal,json:async()=>JSON.stringify({venues:[{name:'Quay Suites Harbor',kind:'hotel',why:'Desks and a reading lounge.',sourceId:page.id}]}),verify:async()=>[{line:1,kind:'hotel',name:'Quay Suites Marquis Harbor',address:'Wrong property address',lat:1,lon:2,id:'fixture',source:page.id,start:0,end:18}]})
  expect(out.verified).toBe(0);expect(out.picks[0].place.name).toBe('Quay Suites Harbor');expect(out.picks[0].place.address).toBe('')
+})
+
+it('reserves a separately bounded final composition and never sends a second chooser request',()=>{
+ const s=readFileSync('src/lib/spectrum/dinghy.ts','utf8')
+ expect(s).toContain('chooseDeadline-Date.now()<65000')
+ expect(s).toContain('Math.min(35000,chooseDeadline-Date.now()-10000)')
+ expect(s).toContain('json:async()=>composed')
+ expect(s).not.toContain('routedJson')
+ expect(s).toContain('itinerary:compose_error:')
+ expect(s).toContain('itinerary:compose_http:')
 })
