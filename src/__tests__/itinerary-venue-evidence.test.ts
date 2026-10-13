@@ -35,3 +35,9 @@ it('accepts model judgment only with valid per-claim sources, request fit and a 
  expect(wrongSource.rejected[0].code).toBe('evidence')
  expect(venueSynthesisPrompt(request,packets)).toContain(request);expect(venueReasonJudgePrompt(judge.mock.calls[0][0])).toContain('Reject changed numbers')
 })
+it('synthesis contract spells out validator bounds and permits attributed unclassified descriptions',()=>{
+ const p=venueSynthesisPrompt('visiting founders working sessions',[])
+ for(const term of ['15-300','1-250','1-200','at most120','not src IDs','copied verbatim','unknowns'])expect(p).toContain(term)
+ const j=venueReasonJudgePrompt({request:'visiting founders',venue,why:'The page describes a quiet room for conversation.',claims:[],fit:'For conversation',fitBasis:['visiting founders'],evidence:[]})
+ expect(j).toContain('Unclassified is unknown ownership');expect(j).toContain('Subjective fit');expect(j).not.toContain('reject all first-party')
+})

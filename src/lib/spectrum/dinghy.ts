@@ -962,6 +962,7 @@ export async function chatWithTools(
                                     const v=await validateVenueReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,judge)
                                     acceptedReasons.push(...v.accepted)
                                     await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted.length}_r${v.rejected.length}`)
+                                    for(const code of [...new Set(v.rejected.map(r=>r.code))])await opts.onStage?.('tool',`itinerary:reason_rejected:${code}`)
                                 }
                             }
                         }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:reasons:fallback')}
@@ -1168,4 +1169,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-        }
+                                               }
