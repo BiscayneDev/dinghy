@@ -1,4 +1,4 @@
-import {activityResearchSlate} from '@/lib/files/geoapify-itinerary'
+import {apiEvidenceVenues,activityResearchSlate} from '@/lib/files/geoapify-itinerary'
 import {it,expect,vi,afterEach} from 'vitest'
 import {geoapifyPlaces,compileApiPlaces,apiPlaceMenu,GEOAPIFY_ATTRIBUTION,apiReasonFacts,applyApiReasons,apiReasonPrompt,researchApiReasons,venueReasonSentence} from '@/lib/files/geoapify-itinerary'
 import {SourceRecords} from '@/lib/files/source-records'
@@ -139,4 +139,9 @@ it('research slate samples diverse experience subtypes without granting a type r
  const make=(line:number,type:string)=>({line,kind:'activity' as const,name:'Fictional '+line,address:'',lat:0,lon:0,id:String(line),source:'src'+line,start:0,end:1,attractionType:type})
  const places=[make(1,'marker'),make(2,'marker'),make(3,'marker'),make(4,'museum'),make(5,'garden'),make(6,'unusual_workshop')]
  expect(activityResearchSlate(places,new Set(['src1']),3).map(p=>p.line)).toEqual([1,2,4,5])
+})
+
+it('passes provider website identity metadata to evidence without treating it as a quality reason',()=>{
+ const place={line:1,kind:'restaurant' as const,name:'Reed Table',address:'42 Quay St',lat:0,lon:0,id:'fictional',source:'src1',start:0,end:10,website:'https://fictional.test/reed'}
+ expect(apiEvidenceVenues([{name:{source:'src1'}}],[place])[0].website).toBe(place.website)
 })
