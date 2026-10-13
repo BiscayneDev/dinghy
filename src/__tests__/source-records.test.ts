@@ -8,7 +8,7 @@ describe('immutable turn source records',()=>{
  it('does not upgrade search text into stock or route confirmation',()=>{const s=new SourceRecords();const [r]=s.capture('web_search',{results:[hit]},'test');expect(r).not.toHaveProperty('stockConfirmed');expect(r).not.toHaveProperty('verifiedRoute');expect(r.origin).toBe('search');expect(new SourceRecords().resolve({source:r.id,field:'content'})).toHaveProperty('error')})
 })
 
-import { bindFileSources } from '@/lib/files/source-records'
+import { bindFileSources,compileItinerarySources } from '@/lib/files/source-records'
 describe('server binding before render',()=>{
  function setup() {const s=new SourceRecords();s.capture('web_search',{results:[hit]},'2030-06-04T12:00:00Z');return s}
  it('renders literal price and terminal unchanged when surrounding copy changes',()=>{const s=setup();for(const word of ['Pick','Maybe']){const r=bindFileSources({title:'Comparison',body:word+': {{source:src1.content:0:10}}. {{source:src1.content:40:46}}'},s,true);expect(r).not.toHaveProperty('error');if('input' in r){const b=(r.input as any).body;expect(b).toContain('Terminal 4');expect(b).toContain('$19.00');expect(b).toContain('search snippet');expect(b).toContain('not independent confirmation');}}})
@@ -59,4 +59,17 @@ it('binds exact observed URLs structurally without claiming the surrounding pros
  expect(s.bindObservedLinks({body:'https://invented.test/guide'}).count).toBe(0)
  expect(s.bindObservedLinks({body:hit.url+'/invented'}).count).toBe(0)
  expect(s.bindObservedLinks({body:'{{source:src99.url}} '+hit.url}).count).toBe(0)
+})
+
+it('itinerary footer owns each provenance URL once and terminal caveat is conditional',()=>{
+ const s=new SourceRecords(),url='https://fictional.test/inn'
+ const used=s.capture('web_fetch',{url,title:'Reed Inn',content:'Reed Inn has a courtyard.'},'fictional-check')
+ const bound=bindFileSources({body:'## Friday\n{{source:src1.content:0:8}}'},s,true);if('error'in bound)throw new Error(bound.error)
+ expect((bound.input as any).body).not.toMatch(/terminal|walking route|stock/i)
+ const {input}=bound
+ const compiled=compileItinerarySources(input,[...used,...used],[url]);if('error'in compiled)throw new Error(compiled.error)
+ const body=(compiled.input as any).body
+ expect(body.match(/https:\/\/fictional.test\/inn/g)).toHaveLength(1);expect(body).toContain('Source provenance');expect(body).toContain('Source-reported text, not independent confirmation.')
+ const terminal=bindFileSources({body:'Terminal 4: {{source:src1.url}}'},s,true);if('error'in terminal)throw new Error(terminal.error)
+ expect((terminal.input as any).body).toContain('not a verified walking route')
 })
