@@ -44,6 +44,11 @@ async function tavilySearch(query: string, maxResults: number, recentDays?: numb
   }
 }
 
+export function searchFailureCode(error:unknown):NonNullable<ToolResult['publicSearchFailure']>{
+ if(error instanceof z.ZodError)return 'invalid_input'
+ const status=error instanceof Error?error.message.match(/^Tavily API error: (\d+)/)?.[1]:undefined
+ return status==='432'?'quota':status==='401'||status==='403'?'auth':status==='429'?'rate':status?'http':'network'
+}
 export const webSearch: Tool = {
   name: 'web_search',
   description: 'Search the web for real-time information: news, sports scores, stock prices, facts, documentation. Each result has published_date (null when the source gives none). For anything "this week", "recent" or "latest", set recentDays so results come with dates.',
@@ -58,7 +63,7 @@ export const webSearch: Tool = {
   },
   async execute(input: unknown): Promise<ToolResult> {
     if (!process.env.TAVILY_API_KEY) {
-      return { success: false, error: 'Web search is not configured' }
+      return { success: false, error: 'Web search is not configured', publicSearchFailure:'unconfigured' }
     }
 
     try {
@@ -166,4 +171,4 @@ export const webFetch: Tool = {
       return { success: false, publicReadFailure: err instanceof z.ZodError ? 'invalid_input' : 'network', error: `Fetch failed: ${msg}` }
     }
   },
-}
+  }
