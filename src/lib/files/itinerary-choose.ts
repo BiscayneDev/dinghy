@@ -13,7 +13,7 @@ const unsafe=/\b(?:ignore (?:all |previous )?instructions|system prompt|api key|
 
 /** Public research pages the chooser may pick from: fetched pages only, never the provider record. */
 function chooserPages(records:SourceRecords,maxPages=6,chars=14000){
- return records.pageIds().filter(id=>records.pageUrl(id)!==PROVIDER_URL).slice(0,maxPages).map(id=>({sourceId:id,title:records.pageTitle(id)||'',url:records.pageUrl(id)||'',text:(records.pageText(id)||'').slice(0,chars)})).filter(p=>p.text)
+ return records.pageIds().filter(id=>records.pageUrl(id)!==PROVIDER_URL).slice(0,maxPages).map(id=>({sourceId:id,title:records.pageTitle(id)||'',url:records.pageUrl(id)||'',text:(records.pageText(id)||'').replace(/!\[[^\]]*\]\([^\n]*\)/g,'').replace(/\[([^\]]+)\]\(https?:[^\n)]*\)/g,'$1').replace(/https?:\/\/\S+/g,'').slice(0,chars)})).filter(p=>p.text)
 }
 
 export function chooseVenuesPrompt(request:string,records:SourceRecords):string{
@@ -87,8 +87,8 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  if(!chooserPages(opts.records).length)return empty
  let venues:ChosenVenue[]=[]
  try{
-  const raw=await opts.json(chooseVenuesPrompt(opts.request,opts.records),1400,opts.signal)
-  venues=parseChosenVenues(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),opts.records)
+  const raw=await opts.json(chooseVenuesPrompt(opts.request,opts.records),1800,opts.signal)
+  venues=parseChosenVenues(JSON.parse(raw.slice(raw.indexOf('{'),raw.lastIndexOf('}')+1)),opts.records)
  }catch{await opts.onStage?.('itinerary:choose_unparsed');return empty}
  if(!venues.length)return empty
  const verify=opts.verify??((noms:{name:string;kind:PlaceKind}[],records:SourceRecords,signal:AbortSignal)=>geoapifyPlaces(opts.destination,[...new Set(noms.map(n=>n.kind))],records,signal,undefined,{...opts.hints,namedCandidates:noms}))
@@ -103,7 +103,7 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  let picks=surviving
  if(surviving.length)try{
   const raw=await opts.json(venueSanityPrompt(surviving.map(m=>({name:m.venue.name,kind:m.venue.kind,why:m.venue.why,excerpt:nameWindow(opts.records.pageText(m.venue.sourceId)||'',m.venue.name)}))),700,opts.signal)
-  const checks=parseSanityChecks(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')))
+  const checks=parseSanityChecks(JSON.parse(raw.slice(raw.indexOf('{'),raw.lastIndexOf('}')+1)))
   if(checks)picks=surviving.filter(m=>checks.get(norm(m.venue.name))!==false)
   else await opts.onStage?.('itinerary:sanity_unparsed')
  }catch{await opts.onStage?.('itinerary:sanity_skipped')}
