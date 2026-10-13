@@ -627,6 +627,21 @@ export async function chatWithTools(
     let apiPlaces:ApiPlace[]|null=null
     let destLabel='',destTerms:string[]=[]
     let reasonCitations:{line:number;source:string;url:string;claim:string}[]=[]
+    // Agenda-only fallback is not a recommendation pass and never retries a publication.
+    const publishUnverifiedAgenda=async(iteration:number):Promise<ToolChatResult>=>{
+        const file=tools.find(t=>t.name==='create_file')
+        if(file&&!pageAttempted){
+            await assertAccountActive(ctx.userId,ctx.chatGuid)
+            const input={title:'Unverified itinerary',body:apiItineraryBody(currentRequest,[]).replace(/\n\nVenue names, categories and addresses:[^\n]+/,'')+'\n\n## Recommendations not verified\nResearch did not complete. No hotel, restaurant or activity is recommended. The supplied agenda is preserved; hours, prices, bookings and any game remain unverified.',format:'pdf',kind:'itinerary'}
+            if(!inputSchemaError(input,file.inputSchema)){
+                pageAttempted=true;toolCallCount++
+                await opts.onStage?.('tool','itinerary:agenda_only_fallback')
+                const result=await withinTurn(opts.deadlineAt,signal=>file.execute(input,{...ctx,signal,photosOk:!tainted}))
+                if(result.success){deliverableCompleted=true;return finish({reply:'The supplied agenda is attached. Recommendations remain unverified.',toolCalls:toolCallCount,iterations:iteration,tainted})}
+            }
+        }
+        return finish({reply:'The supplied agenda is preserved, but research and publication did not complete. Recommendations remain unverified.',toolCalls:toolCallCount,iterations:iteration,tainted})
+    }
     const widenAttempts:Record<string,number>={}
     // Itinerary searches are steered to guides and roundups that list several venues, not single news stories.
     const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;return itineraryResearch&&name==='web_search'&&typeof q==='string'&&!/\b(guide|best|top)\b/i.test(q)?{...(i as Record<string,unknown>),query:q+' best hotels restaurants things to do guide'}:i}
@@ -655,13 +670,6 @@ export async function chatWithTools(
     if (contract) await opts.onStage?.('context', `deliverable:${contract.kind}`)
     if (contract) messages.push({ role: 'system', content: contractNote(contract) + '\n' + SOURCE_BINDING_NOTE })
     if (mapArtifact) messages.push({ role: 'system', content: MAP_ARTIFACT_NOTE })
-    if(itineraryResearch){
-        const missing=['web_search','web_fetch'].filter(name=>!tools.some(t=>t.name===name))
-        if(missing.length){
-            await opts.onStage?.('tool',`research:unavailable:${missing.join(',')}`)
-            return finish({reply:'The supplied visits can be kept, but current hotel, dining and activity recommendations were not researched because the public research tools are unavailable. No recommendations were validated or published.',toolCalls:0,iterations:0,tainted:Boolean(opts.startTainted)||history.some(m=>m.googleDerived)})
-        }
-    }
     let placesMismatch: string | null = null
     let independentTool = false
     let toolCallCount = 0
@@ -695,6 +703,13 @@ export async function chatWithTools(
         chatGuid: ctx.chatGuid, source: 'tool_loop', iteration, requestedModel: requestedLabel(opts.model, routingNow()), toolsOffered,
         promptChars: JSON.stringify(messages).length, privateRoute: tainted && privateRouteEnforced(), deadlineAt: opts.deadlineAt,
     })
+    if(itineraryResearch){
+        const missing=['web_search','web_fetch'].filter(name=>!tools.some(t=>t.name===name))
+        if(missing.length){
+            await opts.onStage?.('tool',`research:unavailable:${missing.join(',')}`)
+            return publishUnverifiedAgenda(0)
+        }
+    }
     toolLoop: for (let iteration = 1; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
         await opts.onStage?.('gateway', String(iteration))
         const remaining = opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now()
@@ -757,7 +772,7 @@ export async function chatWithTools(
                     await opts.onStage?.('tool',`research:read_failure:${safe}`)
                 }
             }
-            if(!mapResearchRead)return finish({reply:'Public source pages were not read successfully. The supplied office visit and working sessions are preserved, but hotel, dining and activity recommendations remain unverified. No researched itinerary was published.',toolCalls:toolCallCount,iterations:iteration-1,tainted})
+            if(!mapResearchRead)return publishUnverifiedAgenda(iteration-1)
         }
         if(itineraryResearch&&mapResearchRead&&!selectedCandidates&&!menuShown){
             menuShown=true;const view=buildPageView(sourceRecords);viewReady=!!apiPlaces?.length||view.lines>0;viewEntries=apiPlaces?apiPlaces.map(p=>({n:p.line,source:p.source,start:p.start,end:p.end,text:p.name,name:p.name,ctx:p.kind})):view.entries
@@ -773,7 +788,7 @@ export async function chatWithTools(
         // Bound a post-search generation, not tools or actions. Preserve honest
         // source-only progress when the gateway stalls, with transport headroom.
         const rescueEligible = successfulSearches > 0 && sourceOnly && foundSources.length > 0 && opts.deadlineAt !== undefined
-        const callDeadline = rescueEligible ? Math.min(opts.deadlineAt! - 8_000, Date.now() + 25_000) : opts.deadlineAt
+        const callDeadline = itineraryResearch&&opts.deadlineAt!==undefined ? Math.min(opts.deadlineAt-18000,Date.now()+25000) : rescueEligible ? Math.min(opts.deadlineAt! - 8_000, Date.now() + 25_000) : opts.deadlineAt
         let res: Response
         try {
           res = itineraryResearch&&apiPlaces&&selectedCandidates ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-file',function:{name:'create_file',arguments:JSON.stringify({title:'Itinerary for '+(destLabel||'your visit'),body:apiItineraryBody(currentRequest,[]),format:'pdf',kind:'itinerary'})}}]}}]})) : await withinTurn(callDeadline, (signal) => fetch(`${opts.gatewayUrl}/v1/chat/completions`, {
@@ -788,12 +803,14 @@ export async function chatWithTools(
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
+          if(itineraryResearch&&!pageAttempted&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>5000))return publishUnverifiedAgenda(iteration)
           if (!(err instanceof TurnDeadlineExceeded) || !rescueEligible) throw err
           await opts.onStage?.('reply_ready', 'source_partial_gateway_timeout')
           const links = foundSources.slice(0, 3).map(s => `${s.title || 'Source'}: ${s.url}`).join('\n')
           return finish({ reply: `The search finished, but I didn't finish checking the options. These are source links, not verified recommendations:\n${links}`, toolCalls: toolCallCount, iterations: iteration, tainted })
         }
         if (!res.ok) {
+            if(itineraryResearch&&!pageAttempted)return publishUnverifiedAgenda(iteration)
             await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), 'http_error', t0, res))
             const body = await withinTurn(opts.deadlineAt, () => res.text()).catch(() => '')
             throw new Error(`Gateway ${res.status}: ${body || res.statusText}`)
@@ -953,7 +970,7 @@ export async function chatWithTools(
                             const activityPlaces=activityResearchSlate(reasonPlaces,pickedSources,5)
                             const alternativePlaces=['hotel','restaurant'].flatMap(kind=>reasonPlaces.filter(p=>p.kind===kind&&!pickedSources.has(p.source)).slice(0,3))
                             const researchPlaces=[...reasonPlaces.filter(p=>pickedSources.has(p.source)),...alternativePlaces,...activityPlaces].filter((p,i,a)=>a.findIndex(q=>q.line===p.line)===i)
-                            const pool=researchPlaces.flatMap(p=>{const result=compileApiPlaces({candidates:[{kind:p.kind,line:p.line}]},[p],sourceRecords);return 'candidates' in result?result.candidates.map(c=>({...c,evidenceLine:p.line})):[]})
+                            const pool:(Record<string,unknown>&{evidenceLine:number})[]=researchPlaces.flatMap(p=>{const result=compileApiPlaces({candidates:[{kind:p.kind,line:p.line}]},[p],sourceRecords);return 'candidates' in result?result.candidates.map(c=>({...c,evidenceLine:p.line})):[]})
                             const packets=await collectVenueEvidence(apiEvidenceVenues(pool,reasonPlaces),{query:destLabel||destinationTokens(currentRequest).join(' '),matchTerms:destTerms.length?destTerms:destinationTokens(currentRequest)},sourceRecords,io,{budgetMs:5500,concurrency:6,signal:evidenceController.signal})
                             await opts.onStage?.('tool',`itinerary:venue_evidence:r${packets.filter(p=>p.status==='ready').length}_m${packets.filter(p=>p.status!=='ready').length}`)
                             const routedJson=async(prompt:string,tokens:number,signal:AbortSignal)=>{
@@ -991,7 +1008,7 @@ export async function chatWithTools(
                 if('error' in picked){
                     selectionFailures++;await opts.onStage?.('tool','invalid:selection:'+picked.dropped[0])
                     if(selectionFailures>=3){
-                        if(!pickedSoFar.length)return finish({reply:'I read the public sources but could not tie any hotel, restaurant or activity name to an exact passage, so no researched recommendations were published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
+                        if(!pickedSoFar.length)return publishUnverifiedAgenda(iteration)
                         const miss=await enablePartial()
                         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates!.length,unsupported:miss,next:'Recommendations are attached server-side; no pick could be verified for '+miss.join(' or ')+' from the pages read, which the server notes honestly. Now call create_file with title, body (agenda and day headings only), format and kind itinerary.'})});continue
                     }
@@ -1152,6 +1169,7 @@ export async function chatWithTools(
             await opts.onStage?.('tool','repair:file_exhausted');break toolLoop
         }
     }
+    if(itineraryResearch&&!pageAttempted)return publishUnverifiedAgenda(MAX_TOOL_ITERATIONS)
     // Loop exhausted: ask for a plain-text answer without tools.
     if(fileValidationPending)messages.push({role:'system',content:'The one pre-publication validation correction did not complete. No file was published. Give only supported information and the exact unresolved gap. Do not ask permission to keep trying or offer another retry.'})
     await opts.onStage?.('synthesis')
@@ -1183,4 +1201,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                }
+}
