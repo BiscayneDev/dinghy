@@ -968,7 +968,11 @@ export async function chatWithTools(
                             try{
                             const pickedSources=new Set(apiCandidates.map(c=>(c.name as {source:string}).source))
                             const activityPlaces=activityResearchSlate(reasonPlaces,pickedSources,5)
-                            const alternativePlaces=['hotel','restaurant'].flatMap(kind=>reasonPlaces.filter(p=>p.kind===kind&&!pickedSources.has(p.source)).slice(0,3))
+                            // Prefer evidence-discovered names and usable own sites, not the nearest provider rows.
+                            const pageText=sourceRecords.pageIds().filter(id=>!reasonPlaces.some(p=>p.source===id)).map(id=>sourceRecords.pageText(id)||'').join('\n').toLowerCase()
+                            const queryWords=currentRequest.toLowerCase().match(/\b[a-z]{5,}\b/g)||[]
+                            const discoveryScore=(p:ApiPlace)=>Number(pageText.includes(p.name.toLowerCase()))*8+Number(!!p.website)*3+Number(!!p.neighborhood&&queryWords.some(w=>p.neighborhood!.toLowerCase().includes(w)))*2
+                            const alternativePlaces=['hotel','restaurant'].flatMap(kind=>reasonPlaces.filter(p=>p.kind===kind&&!pickedSources.has(p.source)).sort((a,b)=>discoveryScore(b)-discoveryScore(a)||a.line-b.line).slice(0,kind==='restaurant'?6:3))
                             const researchPlaces=[...reasonPlaces.filter(p=>pickedSources.has(p.source)),...alternativePlaces,...activityPlaces].filter((p,i,a)=>a.findIndex(q=>q.line===p.line)===i)
                             const pool:(Record<string,unknown>&{evidenceLine:number})[]=researchPlaces.flatMap(p=>{const result=compileApiPlaces({candidates:[{kind:p.kind,line:p.line}]},[p],sourceRecords);return 'candidates' in result?result.candidates.map(c=>({...c,evidenceLine:p.line})):[]})
                             const packets=await collectVenueEvidence(apiEvidenceVenues(pool,reasonPlaces),{query:destLabel||destinationTokens(currentRequest).join(' '),matchTerms:destTerms.length?destTerms:destinationTokens(currentRequest)},sourceRecords,io,{budgetMs:5500,concurrency:6,signal:evidenceController.signal})
@@ -978,13 +982,13 @@ export async function chatWithTools(
                                 if(!r.ok)throw new Error('evidence_http')
                                 const j=await r.json() as {choices?:{message?:{content?:string}}[]};return j.choices?.[0]?.message?.content||''
                             }
-                            const outcome=await selectEvidenceFirst(currentRequest,packets,sourceRecords,async(_packet,prompt,signal)=>JSON.parse((await routedJson(prompt,180,signal)).replace(/^```(?:json)?\s*|\s*```$/g,'')),async input=>{try{const v=parseVenueReasonJudge(await routedJson(venueReasonJudgePrompt(input),120,evidenceController.signal));await opts.onStage?.('tool','itinerary:reason_judge:'+v.verdict+(v.reason?'_'+v.reason:''));return v}catch{return {verdict:'timeout'}}},async input=>{try{const v=parseActivityJudge(await routedJson(activityFitJudgePrompt(input),120,evidenceController.signal));await opts.onStage?.('tool','itinerary:activity_judge:'+v.verdict+(v.reason?'_'+v.reason:''));return v}catch{return {verdict:'timeout'}}},evidenceController.signal)
+                            const outcome=await selectEvidenceFirst(currentRequest,packets,sourceRecords,async(_packet,prompt,signal)=>JSON.parse((await routedJson(prompt,180,signal)).replace(/^```(?:json)?\s*|\s*```$/g,'')),async input=>{try{const v=parseVenueReasonJudge(await routedJson(venueReasonJudgePrompt(input),120,evidenceController.signal));await opts.onStage?.('tool','itinerary:reason_judge:'+v.verdict+(v.reason?'_'+v.reason:''));return v}catch{return {verdict:'timeout'}}},async input=>{try{const v=parseActivityJudge(await routedJson(activityFitJudgePrompt(input),120,evidenceController.signal));await opts.onStage?.('tool','itinerary:activity_judge:'+v.verdict+(v.reason?'_'+v.reason:''));return v}catch{return {verdict:'timeout'}}},evidenceController.signal,async(_packet,prompt,signal)=>JSON.parse((await routedJson(prompt,500,signal)).replace(/^```(?:json)?\s*|\s*```$/g,'')))
                             acceptedReasons.push(...outcome.reasons)
                             const chosen:Record<string,unknown>[]=[]
                             for(const kind of ['hotel','restaurant','activity']){
                                 const supported=pool.filter(c=>c.kind===kind&&outcome.reasons.some(r=>r.line===c.evidenceLine)).slice(0,kind==='hotel'?2:3)
                                 if(supported.length)chosen.push(...supported.map(c=>{const {evidenceLine:_,...clean}=c;return clean}))
-                                else if(kind!=='activity')chosen.push(...apiCandidates.filter(c=>c.kind===kind))
+                                // Unsupported provider listings are not recommendations and never enter the agenda.
                             }
                             apiCandidates.splice(0,apiCandidates.length,...chosen);activityChecked=true
                             await opts.onStage?.('tool',`itinerary:evidence_first:a${outcome.reasons.length}_v${packets.length}`)
@@ -995,7 +999,7 @@ export async function chatWithTools(
                         }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:reasons:fallback')}
                     }else if(apiPlaces)await opts.onStage?.('tool','itinerary:venue_evidence:skipped_budget')
                     // Unverified venues keep an honest provider-listing line, never a generic type claim presented as a reason.
-                    if(!activityChecked){const retained=apiCandidates.filter(c=>c.kind!=='activity');apiCandidates.splice(0,apiCandidates.length,...retained)}
+                    if(!activityChecked)apiCandidates.splice(0,apiCandidates.length)
                     const applied=applyVerifiedApiReasons(acceptedReasons,apiCandidates,reasonPlaces)
                     reasonCitations=applied.citations
                     for(const c of applied.citations){const url=c.url;if(url&&!foundSources.some(s=>s.url===url))foundSources.push({title:sourceRecords.pageTitle(c.source)||c.claim.slice(0,80),url})}

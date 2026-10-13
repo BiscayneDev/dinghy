@@ -13,3 +13,10 @@ it('unknown spans and aborted work grant no reason or activity',async()=>{
  expect(result.reasons).toEqual([]);expect(judge).not.toHaveBeenCalled();controller.abort()
  expect((await selectEvidenceFirst('weekend',[packet],records,async()=>({spanIds:['span1_1']}),judge,judge,controller.signal)).reasons).toEqual([])
 })
+it('synthesis claims can use only independently accepted spans and must pass unchanged judge',async()=>{
+ const {records,packet}=fixture(),judge=vi.fn(async()=>true),signal=new AbortController().signal
+ const result=await selectEvidenceFirst('weekend',[packet],records,async()=>({spanIds:['span1_1','span1_2']}),judge,judge,signal,async()=>({why:'Printmaking exhibits and hands-on carving give you two things to explore.',claims:[{text:'Printmaking exhibits and hands-on carving',spanIds:['span1_1','span1_2']}]}))
+ expect(result.reasons[0].why).toContain('two things');expect(result.reasons[0].claims[0].evidenceIds).toEqual(['ev1_1'])
+ const rejected=await selectEvidenceFirst('weekend',[packet],records,async()=>({spanIds:['span1_1']}),judge,judge,signal,async()=>({why:'Free admission every weekend',claims:[{text:'Free admission',spanIds:['invented']}]}))
+ expect(rejected.reasons[0].why).toContain('The source describes');expect(rejected.rejected).toContain('synthesis_span')
+})

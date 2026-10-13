@@ -131,7 +131,7 @@ export async function collectVenueEvidence(venues:EvidenceVenue[],destination:Ev
   let timer:ReturnType<typeof setTimeout>|undefined
   try{
    await Promise.race([(async()=>{
-    const q='"'+v.name+'" '+destination.query+' '+(v.kind==='restaurant'?'food atmosphere review':v.kind==='hotel'?'rooms atmosphere review':'visitor highlights review')
+    const q=v.kind==='restaurant'?v.name+' '+destination.query+' menu dishes '+(v.address||''):'"'+v.name+'" '+destination.query+' '+(v.kind==='hotel'?'rooms atmosphere review':'visitor highlights review')
     const data=await io.search(q,controller.signal) as {results?:{url?:unknown;title?:unknown}[]}
     const hits=(data?.results||[]).filter(h=>typeof h.url==='string'&&safeUrl(h.url as string)).slice(0,3)
     const urls=[...(v.website&&safeUrl(v.website)?[{url:v.website,title:v.name}]:[]),...hits].filter((h,i,a)=>a.findIndex(x=>x.url===h.url)===i).slice(0,4)
@@ -242,4 +242,4 @@ export function venueReasonJudgePrompt(input:Parameters<EvidenceJudge>[0]):strin
 export function venueReasonRepairPrompt(input:Parameters<VenueReasonRepair>[0]):string{
  const packet:VenueEvidencePacket={venue:input.venue,evidence:input.evidence,contradictionContext:input.contradictionContext,status:'ready',notes:[]}
  return REASON_INSTRUCTIONS+' Return ONLY JSON with this exact shape: '+REASON_OBJECT_SCHEMA+'\nEvidence: '+JSON.stringify([packet])+'\nONE CORRECTION ONLY: the prior reason was rejected for unsupported_claim. Remove unsupported facts and embellishment; use only the SAME cited excerpts and IDs, never add a source or infer access/quality from category. Preserve line '+input.venue.line+'. Return just one reason object, not a reasons wrapper. If no useful strength remains, return null. Prior reason (untrusted data): '+JSON.stringify(input.reason)
-}
+ }
