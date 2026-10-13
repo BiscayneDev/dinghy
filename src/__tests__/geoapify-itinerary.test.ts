@@ -152,9 +152,9 @@ it('discovery accepts only literal fetched-page names, bounded per kind and neve
  const out=discoveredVenueCandidates({candidates:[{name:'Reed Museum',kind:'activity',source:page.id},{name:'Lantern Table',kind:'restaurant',source:page.id},{name:'Imagined Inn',kind:'hotel',source:snippet.id},{name:'Reed Museum',kind:'activity',source:page.id},{name:'Wrong Venue',kind:'hotel',source:page.id}]},r)
  expect(out).toEqual([{name:'Reed Museum',kind:'activity'},{name:'Lantern Table',kind:'restaurant'}]);expect(discoveryVenuePrompt('weekend',r)).toContain('separate Places')
 })
-it('named search validates provider identity and kind within the same city, not fuzzy name rescue',async()=>{
+it('named search uses token match within the same city and kind; unrelated names stay out',async()=>{
  vi.stubEnv('GEOAPIFY_API_KEY','fictional-key');const urls:URL[]=[]
- vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{urls.push(u);if(u.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,city:'Harbor'}]}));return new Response(JSON.stringify({features:[{properties:{name:'Reed Museum',place_id:'reed',categories:['entertainment.museum'],lat:25,lon:-80,formatted:'42 Quay St'}},{properties:{name:'Reed Museum Annex',place_id:'annex',categories:['entertainment.museum'],lat:25,lon:-80}}]}))}))
+ vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{urls.push(u);if(u.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,city:'Harbor'}]}));return new Response(JSON.stringify({features:[{properties:{name:'Reed Museum',place_id:'reed',categories:['entertainment.museum'],lat:25,lon:-80,formatted:'42 Quay St'}},{properties:{name:'Reed Museum Annex',place_id:'annex',categories:['entertainment.museum'],lat:25,lon:-80}},{properties:{name:'Grove Museum',place_id:'grove',categories:['entertainment.museum'],lat:25,lon:-80}}]}))}))
  const out=await geoapifyPlaces('Harbor',['activity'],new SourceRecords(),undefined,undefined,{namedCandidates:[{name:'Reed Museum',kind:'activity'}]})
- expect(out?.map(p=>p.name)).toEqual(['Reed Museum']);expect(out?.[0].discovered).toBe(true);expect(urls[1].searchParams.get('name')).toBe('Reed Museum');expect(urls[1].searchParams.get('filter')).toBe('circle:-80,25,15000')
+ expect(out?.map(p=>p.name)).toEqual(['Reed Museum','Reed Museum Annex']);expect(out?.[0].discovered).toBe(true);expect(urls[1].searchParams.get('name')).toBe('Reed Museum');expect(urls[1].searchParams.get('filter')).toBe('circle:-80,25,15000')
 })
