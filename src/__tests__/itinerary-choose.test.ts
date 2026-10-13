@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest'
 import {SourceRecords} from '@/lib/files/source-records'
-import {chooseVenuesPrompt,parseChosenVenues,venueVeto,venueSanityPrompt,parseSanityChecks,chooseItineraryVenues} from '@/lib/files/itinerary-choose'
+import {chooseVenuesPrompt,parseChosenVenues,venueVeto,chooseItineraryVenues} from '@/lib/files/itinerary-choose'
 import {namedLookupMatch,type ApiPlace} from '@/lib/files/geoapify-itinerary'
 
 const PAGE='Harbor Guide\nThe Reed Hotel has courtyard rooms and a rooftop pool.\nLantern Table serves wood-fired fish and seasonal vegetables.\nReed Workshop offers hands-on printmaking sessions for visitors.'
@@ -24,7 +24,7 @@ it('parse keeps literal named picks and drops invented, miscased-kind and over-c
  const {records,page}=fixture()
  const out=parseChosenVenues({venues:[
   {name:'Reed Hotel',kind:'hotel',why:'Courtyard rooms and a rooftop pool.',sourceId:page.id},
-  {name:'Invented Inn',kind:'hotel',why:'Not on the page at all.',sourceId:page.id},
+  {name:'Invented Inn',kind:'hotel',why:'Not on the page at all.',sourceId:'unknown'},
   {name:'Lantern Table',kind:'spa',why:'Wood-fired fish.',sourceId:page.id},
   {name:'Lantern Table',kind:'restaurant',why:'Wood-fired fish and seasonal vegetables.',sourceId:page.id},
   {name:'Lantern Table',kind:'restaurant',why:'Duplicate row with another why text.',sourceId:page.id},
@@ -42,19 +42,13 @@ it('veto fires only on explicit closure text or a contradicting street address',
  expect(venueVeto('Missing Venue','Nothing here about it.','100 Reed Street')).toBeNull()
 })
 
-it('sanity checks parse to a per-name map and fail open on malformed output',()=>{
- expect(parseSanityChecks({checks:[{name:'Reed Hotel',ok:true},{name:'Lantern Table',ok:false}]})!.get('lantern table')).toBe(false)
- expect(parseSanityChecks({nope:1})).toBeNull()
- expect(venueSanityPrompt([{name:'Reed Hotel',kind:'hotel',why:'x',excerpt:'y'}])).toContain('Reed Hotel')
-})
-
 it('token lookup matches branded aliases but not unrelated names',()=>{
  expect(namedLookupMatch('Manna Life Food','Manna')).toBe(true)
  expect(namedLookupMatch('The Reed Hotel','Reed Hotel')).toBe(true)
  expect(namedLookupMatch('Lantern Table','Reed Workshop')).toBe(false)
 })
 
-it('end to end: verified picks carry explanations; sanity drops invented facts',async()=>{
+it('end to end: model picks retain their explanations without a second judge',async()=>{
  const {records,page}=fixture()
  const json=async (prompt:string)=>prompt.startsWith('Light fact check')?JSON.stringify({checks:[{name:'Reed Hotel',ok:true},{name:'Lantern Table',ok:false},{name:'Reed Workshop',ok:true}]}):JSON.stringify({venues:[
   {name:'Reed Hotel',kind:'hotel',why:'Courtyard rooms and a rooftop pool.',sourceId:page.id},
@@ -65,7 +59,7 @@ it('end to end: verified picks carry explanations; sanity drops invented facts',
  const verify=async(noms:{name:string;kind:'hotel'|'restaurant'|'activity'}[],r:SourceRecords)=>noms.filter(n=>n.name!=='Harbor Guide').map((n,i)=>place(i+1,n.kind,n.name,r))
  const outcome=await chooseItineraryVenues({request:'weekend in Harbor',records,destination:'Harbor, FL',json,signal:new AbortController().signal,verify})
  expect(outcome.chosen).toBe(4);expect(outcome.verified).toBe(3)
- expect(outcome.picks.map(p=>p.place.name)).toEqual(['Reed Hotel','Reed Workshop'])
+ expect(outcome.picks.map(p=>p.place.name)).toEqual(['Reed Hotel','Lantern Table','Reed Workshop','Harbor Guide'])
  expect(outcome.picks[0].why).toContain('rooftop pool')
 })
 
@@ -75,20 +69,10 @@ it('a broken chooser response yields no picks and never throws',async()=>{
  expect(outcome.picks).toEqual([]);expect(outcome.chosen).toBe(0)
 })
 
-it('sanity excerpt stays in the exact hotel section, not a neighborhood above it',async()=>{
- const records=new SourceRecords(),page=records.capture('web_fetch',{url:'https://fictional.test/stays',title:'Harbor stays',content:'### Beach neighborhood\nBeach access and personal goods shops.\n#### Reed Hotel\nRooftop pool with city views.\n#### Another Inn\nHas a spa.'},'fictional')[0]
- let excerpt=''
- await chooseItineraryVenues({request:'Harbor hotel',records,destination:'Harbor',signal:new AbortController().signal,verify:async(_n,r)=>[place(1,'hotel','Reed Hotel',r)],json:async prompt=>{
- if(prompt.startsWith('Light fact check')){excerpt=prompt;return JSON.stringify({checks:[{name:'Reed Hotel',ok:false}]})}
- return JSON.stringify({venues:[{name:'Reed Hotel',kind:'hotel',why:'Has beach access and nearby personal goods shops.',sourceId:page.id}]})
- }})
- expect(excerpt).toContain('Rooftop pool');expect(excerpt).not.toContain('Beach neighborhood');expect(excerpt).not.toContain('Has a spa.')
-})
-
-it('sanity can correct a mixed-up feature using venue section prose',async()=>{
- const {records,page}=fixture()
- const outcome=await chooseItineraryVenues({request:'Harbor hotel',records,destination:'Harbor',signal:new AbortController().signal,verify:async(_n,r)=>[place(1,'hotel','Reed Hotel',r)],json:async prompt=>prompt.startsWith('Light fact check')?JSON.stringify({checks:[{name:'Reed Hotel',ok:false,why:'Courtyard rooms and a rooftop pool.'}]}):JSON.stringify({venues:[{name:'Reed Hotel',kind:'hotel',why:'Has beach access and nearby personal goods shops.',sourceId:page.id}]})})
- expect(outcome.picks[0].why).toBe('Courtyard rooms and a rooftop pool.')
+it('does not invoke an explanation judge',async()=>{
+ const {records,page}=fixture();let calls=0
+ await chooseItineraryVenues({request:'Harbor',records,destination:'Harbor',signal:new AbortController().signal,verify:async()=>[],json:async()=>{calls++;return JSON.stringify({venues:[{name:'Reed Hotel',kind:'hotel',why:'Courtyard rooms and a rooftop pool.',sourceId:page.id}]})}})
+ expect(calls).toBe(1)
 })
 
 it('city words never turn different hotel names into a match',()=>{
