@@ -26,7 +26,8 @@ export function parseChosenVenues(input:unknown,records:SourceRecords):ChosenVen
  if(!Array.isArray(rows))return []
  const out:ChosenVenue[]=[],seen=new Set<string>(),counts:Record<PlaceKind,number>={hotel:0,restaurant:0,activity:0},caps:Record<PlaceKind,number>={hotel:2,restaurant:3,activity:3}
  for(const row of rows){
-  const r=row as {name?:unknown;kind?:unknown;why?:unknown;sourceId?:unknown}
+  const r=row as {name?:unknown;kind?:unknown;why?:unknown;sourceId?:unknown;sourceUrl?:unknown}
+  if(r&&typeof r.sourceUrl==='string'){const id=records.pageIds().find(id=>records.pageUrl(id)===r.sourceUrl);if(id)r.sourceId=id}
   if(!r||typeof r.name!=='string'||typeof r.why!=='string'||typeof r.sourceId!=='string'||!['hotel','restaurant','activity'].includes(String(r.kind)))continue
   const name=decode(r.name).replace(/[\n\r<>|]/g,' ').replace(/\s+/g,' ').trim(),why=decode(r.why).replace(/\s+/g,' ').trim().slice(0,300)
   const text=records.pageText(r.sourceId)
@@ -74,7 +75,7 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  const matched:{place:ApiPlace;venue:ChosenVenue}[]=[]
  for(const p of places||[]){
   const v=venues.find(v=>v.kind===p.kind&&namedLookupMatch(v.name,p.name))
-  if(v&&!matched.some(m=>norm(m.place.name)===norm(p.name)&&m.place.kind===p.kind))matched.push({place:p,venue:v})
+  if(v&&!matched.some(m=>norm(m.place.name)===norm(p.name)&&m.place.kind===p.kind))matched.push({place:{...p,name:v.name},venue:v})
  }
  const verified=matched.length
  for(const v of venues)if(!matched.some(m=>m.venue===v)){const text=opts.records.pageText(v.sourceId)||'',start=text.toLowerCase().indexOf(v.name.toLowerCase());matched.push({venue:v,place:{line:matched.length+1,kind:v.kind,name:v.name,address:'',lat:0,lon:0,id:'source-'+v.sourceId+'-'+start,source:v.sourceId,start,end:start+v.name.length,discovered:true}})}
@@ -82,4 +83,4 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  const picks=surviving
 
  return {picks:picks.map(m=>({place:m.place,why:m.venue.why,sourceId:m.venue.sourceId})),chosen:venues.length,verified,dropped:venues.length-picks.length}
-   }
+}
