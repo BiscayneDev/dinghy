@@ -868,7 +868,6 @@ export async function chatWithTools(
         const widenForMissing=async(missing:string[]):Promise<boolean>=>{
             if(apiPlaces||!missing.length||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<50000))return false
             const searcher=tools.find(t=>t.name==='web_search'),reader=tools.find(t=>t.name==='web_fetch')
-                                const researchSignal=AbortSignal.any([signal,AbortSignal.timeout(Math.max(1,chooseDeadline-Date.now()-50000))])
             if(!searcher||!reader)return false
             const destTok=destinationTokens(currentRequest),dest=destTok.join(' ')
             if(!dest)return false
@@ -1220,4 +1219,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                }
+         }
