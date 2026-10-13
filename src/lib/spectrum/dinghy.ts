@@ -1,4 +1,4 @@
-import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiReasonPrompt,applyApiReasons,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
+import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiReasonPrompt,applyApiReasons,researchApiReasons,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
 import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
@@ -926,6 +926,14 @@ export async function chatWithTools(
                 const picked=apiPlaces?compileApiPlaces(parsed,apiPlaces,sourceRecords):await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
                 if(apiPlaces&&'candidates'in picked){
                     const reasonPlaces=apiPlaces
+                    const searcher=tools.find(t=>t.name==='web_search'),reader=tools.find(t=>t.name==='web_fetch')
+                    if(searcher&&reader&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>14000)){
+                        await assertAccountActive(ctx.userId,ctx.chatGuid)
+                        const io={search:async(query:string,signal:AbortSignal)=>{if(egressRejection('web_search',JSON.stringify({query}),tainted,corpus))return {};toolCallCount++;const r=await searcher.execute({query,maxResults:3},{...ctx,signal});return r.success?r.data:{}},read:async(url:string,signal:AbortSignal)=>{if(egressRejection('web_fetch',JSON.stringify({url}),tainted,corpus))return {};toolCallCount++;const r=await reader.execute({url},{...ctx,signal});return r.success?r.data:{}}}
+                        const v=await researchApiReasons(picked.candidates,reasonPlaces,destinationTokens(currentRequest).join(' '),sourceRecords,io)
+                        await opts.onStage?.('tool',`itinerary:venue_reasons:f${v.found}_m${v.missing}`)
+                        for(const p of reasonPlaces)if(p.webSource){const url=sourceRecords.pageUrl(p.webSource);if(url&&!foundSources.some(s=>s.url===url))foundSources.push({title:sourceRecords.pageTitle(p.webSource)||p.name,url})}
+                    }
                     try{
                         const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(8000)]):AbortSignal.timeout(8000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Select exact evidence clauses for venue why lines. Return only JSON.'},{role:'user',content:apiReasonPrompt(picked.candidates,reasonPlaces,sourceRecords)}],stream:false,max_tokens:1600})}))
                         if(r.ok){const j=await r.json() as {choices?:{message?:{content?:string}}[]};const raw=j.choices?.[0]?.message?.content||'';const v=applyApiReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),picked.candidates,reasonPlaces,sourceRecords);await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted}_r${v.rejected}`)}
@@ -1004,7 +1012,11 @@ export async function chatWithTools(
                             const b=(input as {body?:unknown}).body
                             // The server renders stay/options/sources from the stored picks; any model-authored copies are dropped, not errors.
                             if(typeof b==='string'&&/(?:^|\n)\s*:::(?:stay|options|sources)\b/i.test(b)){await opts.onStage?.('tool','itinerary:manual_blocks_stripped');input={...(input as Record<string,unknown>),body:b.replace(/(^|\n)[ \t]*:::(?:stay|options|sources)\b[^\n]*\n[\s\S]*?\n[ \t]*:::[ \t]*(?=\n|$)/gi,'$1')}}
-                            if(apiPlaces){input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))}};
+                            if(apiPlaces){
+                                const citationPicks=selectedCandidates
+                                const citations=apiPlaces.filter(p=>p.webSource&&citationPicks.some(c=>(c.name as {source:string}).source===p.source&&c.reason===p.webReason)).map(p=>'- '+p.name+': {{source:'+p.webSource+'.url}}')
+                                input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))+(citations.length?'\n\n## Recommendation evidence\n'+citations.join('\n'):'')}
+                            };
                         }
                     }
                     const schemaError=inputSchemaError(input,tool.inputSchema)
@@ -1121,4 +1133,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-    }
+}
