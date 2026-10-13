@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { getAdminSession } from '@/lib/auth/admin'
 import { createServerClient } from '@/lib/supabase/server'
-import { demoGuid, demoSpace } from '@/lib/spectrum/demo-chat'
+import { demoGuid, demoSpace, demoSubmissionId } from '@/lib/spectrum/demo-chat'
 import { handleSpectrumMessage } from '@/lib/spectrum/handler'
 import { createConnectLink, loadHistory } from '@/spectrum/store'
 
@@ -31,7 +31,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
 export async function POST(req: Request): Promise<NextResponse> {
     if (!(await getAdminSession())) return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
-    const body = (await req.json().catch(() => null)) as { slug?: unknown; message?: unknown; connect?: unknown } | null
+    const body = (await req.json().catch(() => null)) as { slug?: unknown; message?: unknown; connect?: unknown; requestId?:unknown } | null
     const guid = demoGuid(typeof body?.slug === 'string' ? body.slug : '')
     if (!guid) return NextResponse.json({ error: 'bad slug (a-z, 0-9, - _, 2-40 chars)' }, { status: 400 })
     await ensureAllowed(guid)
@@ -42,7 +42,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     if (!text || text.length > 2000) return NextResponse.json({ error: 'message required (max 2000 chars)' }, { status: 400 })
     const space = demoSpace(guid, { persist: false })
     await handleSpectrumMessage(space, {
-        id: `demo-${randomUUID()}`,
+        id: demoSubmissionId(guid,body?.requestId)??`demo-${randomUUID()}`,
         content: { type: 'text', text } as never,
         sender: { id: guid },
         timestamp: new Date(),
