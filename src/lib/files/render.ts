@@ -604,7 +604,7 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
         const ensure = (h: number) => {
             if (pdf.y + h > pdf.page.height - pdf.page.margins.bottom) pdf.addPage()
         }
-        const inline = (text: string, x: number, width: number, size = 11, color: string = BRAND.body) => {
+        const inline = (text: string, x: number, width: number, size = cover?10:11, color: string = BRAND.body) => {
             const rs = runs(text)
             rs.forEach((r, i) => {
                 pdf.font(r.bold ? 'bodyBold' : 'body').fontSize(size).fillColor(color)
@@ -623,6 +623,7 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
         }
         pdf.moveDown(0.8)
 
+        const itinerary=!!cover
         const bodyTokens=tokens(doc.body)
         let provenance=false
         for (let ti=0;ti<bodyTokens.length;ti++) {
@@ -641,11 +642,11 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
                 const after=next?.type==='paragraph'?bodyTokens.slice(bodyTokens.indexOf(next)+1).find(x=>x.type!=='space'):undefined
                 const afterFirst=after?.type==='list'?(after as Tokens.List).items[0]:undefined
                 const afterRow=afterFirst?Math.max(24,pdf.heightOfString(plain(afterFirst.text),{width:W-20,lineGap:3})+10):0
-                const size=h.depth<=2?19:11.5
+                const size=provenance?11:h.depth<=2?19:11.5
                 const headingHeight=pdf.font(h.depth<=2?'display':'bodyBold').fontSize(size).heightOfString(plain(h.text),{width:W})
                 ensure(headingHeight+row+para+afterRow+48)
                 if (h.depth <= 2) {
-                    rule(8,14)
+                    rule(provenance?4:8,provenance?8:14)
                     pdf.font('display').fontSize(size).fillColor(BRAND.ink).text(plain(h.text),L,pdf.y,{width:W})
                     pdf.moveDown(0.35)
                 } else {
@@ -656,14 +657,14 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
             } else if (t.type === 'paragraph') {
                 const next=bodyTokens.slice(ti+1).find(x=>x.type!=='space')
                 if(/^Selection reasons:$/i.test(plain((t as Tokens.Paragraph).text).trim())&&next?.type==='list'){const first=(next as Tokens.List).items[0];const height=first?pdf.font('body').fontSize(11).heightOfString(plain(first.text),{width:W-20,lineGap:3}):24;ensure(38+height)}else ensure(30)
-                inline((t as Tokens.Paragraph).text, L, W)
+                inline((t as Tokens.Paragraph).text, L, W,provenance?9:itinerary?10:11)
                 pdf.moveDown(0.5)
             } else if (t.type === 'list') {
                 const l = t as Tokens.List
                 l.items.forEach((it, i) => {
                     const tr = splitTimeRow(it.text)
                     // Measure the full item including its URL before drawing. Bold is a conservative width bound.
-                    const size=provenance?9:11
+                    const size=provenance?9:itinerary?10:11
                     const itemHeight=pdf.font('bodyBold').fontSize(size).heightOfString(plain(tr?tr.rest:it.text),{width:tr?W-88:W-20,lineGap:3})
                     ensure(Math.max(24,itemHeight+10))
                     const y = pdf.y
@@ -855,4 +856,4 @@ export async function renderFile(doc: DinghyDoc, format: FileFormat, html: HtmlO
                   ? Buffer.from(renderCsv(doc), 'utf8')
                   : Buffer.from(`# ${doc.title}\n\n${doc.subtitle ? `_${doc.subtitle}_\n\n` : ''}${doc.body.trim()}\n`, 'utf8')
     return { filename: `${base}.${format}`, mimeType: MIME[format], bytes }
-}
+        }
