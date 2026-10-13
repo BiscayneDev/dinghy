@@ -150,3 +150,10 @@ it('a rebound research name never binds the provider address as a research excer
  const out=await chooseItineraryVenues({request:'Harbor',destination:'Harbor',records,signal:new AbortController().signal,json:async()=>JSON.stringify({venues:[{name:'Reed Hotel',kind:'hotel',why:'Courtyard rooms and a rooftop pool.',sourceId:page.id}]}),verify:async()=>[p]})
  expect(out.picks[0].place.source).toBe(page.id);expect(out.picks[0].place.address).toBe('')
 })
+
+it('typographic apostrophe differences bind the exact page spelling, never another venue',()=>{
+ const r=new SourceRecords(),p=r.capture('web_fetch',{url:'https://fixture.test/dining',content:'Captain’s Table serves grilled fish. Reed House serves soup.'},'fixture')[0]
+ const out=parseChosenVenues({venues:[{name:"Captain's Table",kind:'restaurant',why:'Grilled fish is served here.',sourceId:p.id}]},r)
+ expect(out[0].name).toBe('Captain’s Table')
+ expect(parseChosenVenues({venues:[{name:'Invented Table',kind:'restaurant',why:'Grilled fish is served here.',sourceId:p.id}]},r)).toHaveLength(0)
+})
