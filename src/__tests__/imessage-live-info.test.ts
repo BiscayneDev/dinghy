@@ -68,7 +68,7 @@ describe('web_search tool', () => {
   it('is inert without a key', async () => {
     vi.stubEnv('TAVILY_API_KEY', '')
     const r = await webSearch.execute({ query: 'dolphins score' }, ctx)
-    expect(r).toEqual({ success: false, error: 'Web search is not configured' })
+    expect(r).toEqual({ success: false, error: 'Web search is not configured', publicSearchFailure:'unconfigured' })
   })
 
   it('returns the answer and results when configured', async () => {
