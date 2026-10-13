@@ -998,7 +998,13 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         await saveMessage(chatGuid, 'user', text).catch((err) => logErr('message save failed', err))
     }
 
-    const deadlineAt = turnStartedAt + TURN_WORK_MS
+    const itineraryJob = selectDeliverable(full)?.kind === 'itinerary'
+    if(itineraryJob){
+        const acknowledgement = 'I am putting the itinerary together. I will send it here when it is ready.'
+        const delivered = await sendText(space, chatGuid, 'reply', acknowledgement)
+        if(delivered)await saveMessage(chatGuid, 'assistant', acknowledgement).catch((err)=>logErr('itinerary acknowledgement save failed',err))
+    }
+    const deadlineAt = turnStartedAt + (itineraryJob ? 240_000 : TURN_WORK_MS)
     const onStage = runStageRecorder(chatGuid, message.id)
     const tChatStart = Date.now()
     const typingHandle = startTypingReTap(space)
