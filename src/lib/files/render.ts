@@ -355,15 +355,15 @@ export function renderTable(t: Tokens.Table): string {
 }
 
 /** Source-bound hotel names are a useful cover when no verified venue photo was captured. */
-export function itineraryCover(doc:DinghyDoc):{name:string;destination:string}|null{
+export function itineraryCover(doc:DinghyDoc):{name:string;destination:string;researched:boolean}|null{
  if(!/Selection reasons:/i.test(doc.body))return null
  const stay=splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='stay')
  if(!stay||stay.kind!=='block')return null
  const name=decodeEntities(stay.lines.find(l=>l.trim())?.split(' | ')[0]?.trim()??'')
- return name?{name,destination:doc.title}:null
+ return name?{name,destination:doc.title,researched:/^## Recommendation evidence\s*$/m.test(doc.body)}:null
 }
-function coverHtml(cover:{name:string;destination:string}):string{
- return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">Researched itinerary</span><span class="hero-n hero-title">${esc(cover.name)}</span><span class="hero-s">${esc(cover.destination)}</span></div></div>`
+function coverHtml(cover:{name:string;destination:string;researched:boolean}):string{
+ return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">${cover.researched?'Researched itinerary':'Itinerary · unverified picks'}</span><span class="hero-n hero-title">${esc(cover.name)}</span><span class="hero-s">${esc(cover.destination)}</span></div></div>`
 }
 export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const body: string[] = []
@@ -588,7 +588,7 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
         if(cover){
             pdf.save().rect(0,0,pdf.page.width,STRIP).fill(BRAND.ink)
             pdf.lineWidth(0.8).strokeColor(BRAND.accent).circle(530,58,62).stroke().restore()
-            pdf.font('mono').fontSize(8).fillColor(BRAND.accent).text('RESEARCHED ITINERARY',L,26,{width:W})
+            pdf.font('mono').fontSize(8).fillColor(BRAND.accent).text(cover.researched?'RESEARCHED ITINERARY':'ITINERARY · UNVERIFIED PICKS',L,26,{width:W})
             pdf.font('display').fontSize(24).fillColor(BRAND.paper).text(plain(cover.name),L,48,{width:W-70,height:60})
             pdf.font('body').fontSize(9).fillColor(BRAND.paper).text(plain(cover.destination),L,116,{width:W,height:28})
         }else drawSunriseStrip(pdf, pdf.page.width, STRIP)
@@ -624,11 +624,13 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
         pdf.moveDown(0.8)
 
         const bodyTokens=tokens(doc.body)
+        let provenance=false
         for (let ti=0;ti<bodyTokens.length;ti++) {
             const t=bodyTokens[ti]
             pdf.x = L
             if (t.type === 'heading') {
                 const h = t as Tokens.Heading
+                provenance=/^Source provenance$/i.test(plain(h.text))
                 // Reserve exactly the same conservative row budget used by the list renderer.
                 // Include wrapped heading height and every before/after gap, for all heading depths.
                 const next=bodyTokens.slice(ti+1).find(x=>x.type!=='space')
@@ -661,7 +663,8 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
                 l.items.forEach((it, i) => {
                     const tr = splitTimeRow(it.text)
                     // Measure the full item including its URL before drawing. Bold is a conservative width bound.
-                    const itemHeight=pdf.font('bodyBold').fontSize(11).heightOfString(plain(tr?tr.rest:it.text),{width:tr?W-88:W-20,lineGap:3})
+                    const size=provenance?9:11
+                    const itemHeight=pdf.font('bodyBold').fontSize(size).heightOfString(plain(tr?tr.rest:it.text),{width:tr?W-88:W-20,lineGap:3})
                     ensure(Math.max(24,itemHeight+10))
                     const y = pdf.y
                     if (tr) {
@@ -672,9 +675,9 @@ export function renderPdf(doc: DinghyDoc): Promise<Buffer> {
                         const mark = l.ordered ? `${(Number(l.start) || 1) + i}.` : '•'
                         pdf.font(l.ordered ? 'mono' : 'bodyBold').fontSize(l.ordered ? 9.5 : 11).fillColor(BRAND.accent).text(mark, L + 2, y + (l.ordered ? 1.5 : 0), { width: 18 })
                         pdf.y = y
-                        inline(it.text, L + 20, W - 20)
+                        inline(it.text, L + 20, W - 20,size)
                     }
-                    pdf.moveDown(0.35)
+                    pdf.moveDown(provenance?0.15:0.35)
                 })
                 pdf.moveDown(0.3)
             } else if (t.type === 'table') {
@@ -852,4 +855,4 @@ export async function renderFile(doc: DinghyDoc, format: FileFormat, html: HtmlO
                   ? Buffer.from(renderCsv(doc), 'utf8')
                   : Buffer.from(`# ${doc.title}\n\n${doc.subtitle ? `_${doc.subtitle}_\n\n` : ''}${doc.body.trim()}\n`, 'utf8')
     return { filename: `${base}.${format}`, mimeType: MIME[format], bytes }
-                           }
+}
