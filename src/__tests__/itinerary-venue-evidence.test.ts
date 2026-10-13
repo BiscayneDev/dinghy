@@ -1,6 +1,6 @@
 import {it,expect,vi} from 'vitest'
 import {SourceRecords} from '@/lib/files/source-records'
-import {collectVenueEvidence,venueEvidenceSections,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,relevantVenueExcerpts} from '@/lib/files/itinerary-venue-evidence'
+import {collectVenueEvidence,venueEvidenceSections,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,relevantVenueExcerpts,parseVenueReasonJudge,venueReasonRepairPrompt} from '@/lib/files/itinerary-venue-evidence'
 const venue={line:1,name:'Lantern Table',kind:'restaurant' as const,address:'42 Quay St'}
 const destination={query:'Harbor, North Coast',matchTerms:['Harbor']}
 it('keeps first-person and review context within the named venue section, excluding next venue',()=>{
@@ -28,7 +28,7 @@ it('accepts model judgment only with valid per-claim sources, request fit and a 
  const accepted=await validateVenueReasons({reasons:[reason]},request,packets,records,judge)
  expect(accepted.accepted).toHaveLength(1);expect(accepted.accepted[0].citations[0].url).toBe('https://fictional.test/review');expect(judge).toHaveBeenCalledOnce()
  const unsupported=await validateVenueReasons({reasons:[{...reason,why:'A rooftop pool just five minutes from your office.'}]},request,packets,records,async()=>false)
- expect(unsupported.rejected[0].code).toBe('judge_no')
+ expect(unsupported.rejected[0].code).toBe('judge_no_unspecified')
  const invented=await validateVenueReasons({reasons:[{...reason,fitBasis:['vegetarian allergy']}]},request,packets,records,judge)
  expect(invented.accepted[0].fitBasis).toEqual([request]);expect(judge.mock.calls.at(-1)![0].fitBasis).toEqual([request])
  const wrongSource=await validateVenueReasons({reasons:[{...reason,claims:[{text:'Pool',evidenceIds:['ev2_1']}]}]},request,packets,records,judge)
@@ -44,7 +44,7 @@ it('synthesis contract spells out validator bounds and permits attributed unclas
 it('judge operational failures have finite distinct codes, never a fake negative quality verdict',async()=>{
  const records=new SourceRecords(),packets=await collectVenueEvidence([venue],destination,records,{search:async()=>({results:[{url:'https://fictional.test/review'}]}),read:async()=>({title:'Lantern Table Harbor',content:'Lantern Table offers seasonal vegetable bowls in Harbor.'})})
  const reason={line:1,why:'Seasonal bowls offer variety after work.',claims:[{text:'Seasonal vegetable bowls',evidenceIds:[packets[0].evidence[0].id]}],fit:'Variety after work.',unknowns:[]}
- for(const verdict of ['no','timeout','http','error','invalid'] as const){const out=await validateVenueReasons({reasons:[reason]},'Dinner after work',packets,records,async()=>({verdict}));expect(out.rejected[0].code).toBe('judge_'+verdict)}
+ for(const verdict of ['no','timeout','http','error','invalid'] as const){const out=await validateVenueReasons({reasons:[reason]},'Dinner after work',packets,records,async()=>({verdict}));expect(out.rejected[0].code).toBe(verdict==='no'?'judge_no_unspecified':'judge_'+verdict)}
  const out=await validateVenueReasons({reasons:[reason]},'Dinner after work',packets,records,async input=>{expect(input.fitBasis).toEqual(['Dinner after work']);return {verdict:'yes'}})
  expect(out.accepted).toHaveLength(1)
 })
@@ -69,4 +69,37 @@ it('title-matched pages retain relevant content after the old ten-thousand-chara
  const text='Harbor\n'+('Privacy policy and cookie settings.\n'.repeat(350))+'Lantern Table serves seasonal bowls on a garden terrace.'
  const sections=venueEvidenceSections(venue,destination,'Lantern Table Harbor',text)
  expect(relevantVenueExcerpts(sections,text,venue)).toContain('Lantern Table serves seasonal bowls on a garden terrace.')
+})
+
+it('parses only finite judge codes, rejects arbitrary prose and contradictory verdicts',()=>{
+ expect(parseVenueReasonJudge('{"verdict":"yes","reason":"none"}')).toEqual({verdict:'yes'})
+ for(const reason of ['identity','marketing','unsupported_claim','invented_fit','no_strength','uncertain'])expect(parseVenueReasonJudge(JSON.stringify({verdict:'no',reason}))).toEqual({verdict:'no',reason})
+ for(const raw of ['YES','NO','{"verdict":"yes","reason":"unsupported_claim"}','{"verdict":"no","reason":"a long explanation"}','{"verdict":"no","reason":"identity","explanation":"private prose"}'])expect(parseVenueReasonJudge(raw)).toEqual({verdict:'invalid'})
+})
+it('judges only cited excerpts and repairs unsupported claims once through the same gates',async()=>{
+ const records=new SourceRecords(),packets=await collectVenueEvidence([venue],destination,records,{search:async()=>({results:[{url:'https://fictional.test/review'}]}),read:async()=>({title:'Lantern Table Harbor',content:'Lantern Table serves seasonal bowls in Harbor. The dining room has a garden terrace.'})})
+ const id=packets[0].evidence.find(e=>e.excerpt.includes('seasonal bowls'))!.id
+ const reason={line:1,why:'Seasonal bowls with panoramic skyline views.',claims:[{text:'Seasonal bowls with skyline views',evidenceIds:[id]}],fit:'',fitBasis:[],unknowns:[]}
+ const fixed={...reason,why:'The source describes seasonal bowls.',claims:[{text:'Seasonal bowls',evidenceIds:[id]}]}
+ const judge=vi.fn(async(input:Parameters<import('@/lib/files/itinerary-venue-evidence').EvidenceJudge>[0])=>{
+  expect(input.evidence.map(e=>e.id)).toEqual([id])
+  return input.why===fixed.why?{verdict:'yes' as const}:{verdict:'no' as const,reason:'unsupported_claim' as const}
+ })
+ const repair=vi.fn(async(input:Parameters<import('@/lib/files/itinerary-venue-evidence').VenueReasonRepair>[0])=>{expect(input.evidence.map(e=>e.id)).toEqual([id]);expect(venueReasonRepairPrompt(input)).toContain('ONE CORRECTION ONLY');return fixed})
+ const out=await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,judge,undefined,{repair})
+ expect(out.accepted).toHaveLength(1);expect(judge).toHaveBeenCalledTimes(2);expect(repair).toHaveBeenCalledOnce()
+ const prompt=venueReasonJudgePrompt({request:'Dinner',venue,why:reason.why,claims:reason.claims,fit:'',fitBasis:[],evidence:packets[0].evidence})
+ expect(prompt).not.toContain('The dining room has a garden terrace.')
+ const alwaysNo=vi.fn(async()=>({verdict:'no' as const,reason:'unsupported_claim' as const}))
+ const retry=vi.fn(async()=>fixed)
+ expect((await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,alwaysNo,undefined,{repair:retry})).rejected[0].code).toBe('judge_no_unsupported_claim')
+ expect(alwaysNo).toHaveBeenCalledTimes(2);expect(retry).toHaveBeenCalledOnce()
+})
+it('repair cannot change identity, add uncited evidence or retry other rejections',async()=>{
+ const records=new SourceRecords(),packets=await collectVenueEvidence([venue],destination,records,{search:async()=>({results:[{url:'https://fictional.test/review'}]}),read:async()=>({title:'Lantern Table Harbor',content:'Lantern Table serves seasonal bowls in Harbor. The dining room has a garden terrace.'})})
+ const reason={line:1,why:'The source describes seasonal bowls.',claims:[{text:'Seasonal bowls',evidenceIds:[packets[0].evidence[0].id]}],fit:'',fitBasis:[],unknowns:[]}
+ const no=async()=>({verdict:'no' as const,reason:'unsupported_claim' as const})
+ expect((await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,no,undefined,{repair:async()=>({...reason,line:2})})).rejected[0].code).toBe('repair_invalid')
+ expect((await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,no,undefined,{repair:async()=>({...reason,claims:[{text:'Garden terrace',evidenceIds:[packets[0].evidence[1].id]}]})})).rejected[0].code).toBe('evidence')
+ for(const code of ['identity','marketing','invented_fit','no_strength','uncertain'] as const){const repair=vi.fn(async()=>reason);expect((await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,async()=>({verdict:'no',reason:code}),undefined,{repair})).rejected[0].code).toBe('judge_no_'+code);expect(repair).not.toHaveBeenCalled()}
 })
