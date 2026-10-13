@@ -74,7 +74,7 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  const places=await verify(venues.map(v=>({name:v.name,kind:v.kind})),opts.records,opts.signal).catch(():null=>null)
  const matched:{place:ApiPlace;venue:ChosenVenue}[]=[]
  for(const p of places||[]){
-  const v=venues.find(v=>v.kind===p.kind&&namedLookupMatch(v.name,p.name))
+  const v=venues.find(v=>v.kind===p.kind&&(v.kind==='hotel'?norm(v.name).replace(/^the /,'').replace(/\bhotels?\b/g,'').replace(/[^a-z0-9]/g,'')===norm(p.name).replace(/^the /,'').replace(/\bhotels?\b/g,'').replace(/[^a-z0-9]/g,''):namedLookupMatch(v.name,p.name)))
   if(v&&!matched.some(m=>norm(m.place.name)===norm(p.name)&&m.place.kind===p.kind)){const page=opts.records.capture('web_fetch',{url:opts.records.pageUrl(p.source),title:v.name,content:v.name+'\n'+(opts.records.pageText(p.source)||'')},new Date().toISOString())[0];matched.push({place:{...p,name:v.name,source:page.id,start:0,end:v.name.length},venue:v})}
  }
  const verified=matched.length
