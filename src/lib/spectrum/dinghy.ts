@@ -1,6 +1,6 @@
 import {chooseItineraryVenues} from '@/lib/files/itinerary-choose'
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
-import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
+import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence,diverseResearchSources} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
 import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
 import {isHubUrl,sourceScore} from '@/lib/files/itinerary-mentions'
@@ -739,7 +739,7 @@ export async function chatWithTools(
             const reader=tools.find(t=>t.name==='web_fetch')!
             // At most six actual search URLs; preserve synthesis headroom on every try.
             let readsOk=0
-            for(const source of (()=>{const ok=foundSources.filter(x=>!isHubUrl(x.url)).map(x=>({x,sc:sourceScore(x.url,x.title)}));const keep=ok.filter(y=>y.sc>-3);return (keep.length?keep:ok).sort((a,b)=>b.sc-a.sc).map(y=>y.x)})().slice(0,6)){
+            for(const source of diverseResearchSources(foundSources,requiredKinds(currentRequest)).slice(0,6)){
                 const args=JSON.stringify({url:source.url})
                 const blocked=egressRejection('web_fetch',args,tainted,corpus)
                 if(blocked){await opts.onStage?.('tool','research:read_blocked');break}
@@ -757,8 +757,8 @@ export async function chatWithTools(
                     readsOk++
                     const id=`required_read_${iteration}_${readsOk}`
                     messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
-                    // A thin first page (few venue names) gets up to two more observed pages while time allows.
-                    if((apiPlaces&&readsOk>=2)||readsOk>=3||buildPageView(sourceRecords).venueLines>=40||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
+                    // Read across kinds. Provider listings must not trigger the public-page stop rule.
+                    if(readsOk>=3||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<35000))break
                     await opts.onStage?.('tool','research:read_more')
                     continue
                 }
@@ -1183,4 +1183,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-        }
+                                                                                                          }
