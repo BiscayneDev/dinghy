@@ -6,7 +6,7 @@ export type ApiPlace={line:number;kind:PlaceKind;name:string;address:string;lat:
 export const GEOAPIFY_ATTRIBUTION='Venue names, categories and addresses: Geoapify · © OpenStreetMap contributors. Provider listings do not confirm current hours, availability, prices or quality.'
 const categories:Record<PlaceKind,string>={hotel:'accommodation.hotel',restaurant:'catering.restaurant',activity:'tourism.attraction'}
 const num=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x)
-/** Requests are bounded and sequential (four at most), below the provider's 5 requests/second plan limit. Never log URL/errors with the secret. */
+/** Requests are bounded and sequential (five at most), below the provider's 5 requests/second plan limit. Never log URL/errors with the secret. */
 export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],records:SourceRecords,signal?:AbortSignal,onFallback?:(reason:string)=>void):Promise<ApiPlace[]|null>{
  const fail=(reason:string)=>{onFallback?.(reason);return null}
  const key=process.env.GEOAPIFY_API_KEY;if(!key)return fail('missing_key');if(!destination.trim())return fail('geocode_empty')
@@ -27,14 +27,18 @@ export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],record
   phase='places'
   const out:ApiPlace[]=[],seen=new Set<string>(),providerRecords=new SourceRecords()
   for(const kind of kinds){
+   for(const radius of kind==='activity'?[4000,10000]:[4000]){
+   if(radius===10000&&out.filter(p=>p.kind==='activity').length>=3)break
    await new Promise(resolve=>setTimeout(resolve,210))
-   const data=await get('v2/places',{categories:categories[kind],filter:`circle:${anchor.lon},${anchor.lat},4000`,bias:`proximity:${anchor.lon},${anchor.lat}`,limit:'20'}) as {features?:{properties?:Record<string,unknown>}[]}
+   const category=radius===10000?'tourism.attraction,entertainment.museum,entertainment.culture.gallery,entertainment.zoo,entertainment.aquarium,entertainment.theme_park,leisure.park,beach':categories[kind]
+   let data:{features?:{properties?:Record<string,unknown>}[]}
+   try{data=await get('v2/places',{categories:category,filter:`circle:${anchor.lon},${anchor.lat},${radius}`,bias:`proximity:${anchor.lon},${anchor.lat}`,limit:'20'}) as typeof data}catch(error){if(radius===10000){status=undefined;break}throw error}
    for(const f of data.features||[]){
     const p=f.properties||{},name=typeof p.name==='string'?decodeEntities(p.name).trim():'',cats=Array.isArray(p.categories)?p.categories.filter((c):c is string=>typeof c==='string'):[]
-    if(!name||name.length>120||/[\n\r|<>]/.test(name)||!cats.some(c=>c===categories[kind]||c.startsWith(categories[kind]+'.'))||!num(p.lat)||!num(p.lon)||typeof p.place_id!=='string'||/[\n\r|<>]/.test(p.place_id))continue
+    if(!name||name.length>120||/[\n\r|<>]/.test(name)||!cats.some(c=>c===categories[kind]||c.startsWith(categories[kind]+'.')||kind==='activity'&&/^(?:entertainment\.(?:museum|culture\.gallery|zoo|aquarium|theme_park)|leisure\.park|beach)(?:\.|$)/.test(c))||!num(p.lat)||!num(p.lon)||typeof p.place_id!=='string'||/[\n\r|<>]/.test(p.place_id))continue
     const raw=(p.datasource as {raw?:Record<string,unknown>}|undefined)?.raw||{}
-    if(kind==='activity'&&(cats.some(c=>/(?:^|[._])(?:transport|transportation|boarding|dock|pier|ferry|terminal|parking|station|marina|harbour|harbor|boat)(?:[._]|$)/.test(c)||/^(?:commercial|accommodation|catering|service.vehicle)\./.test(c))||raw.highway||raw.place||raw.railway||raw.aeroway||raw.harbour||raw.ferry||raw.dock||raw.waterway||/^(?:pier|breakwater|pipeline|works|water_tower|storage_tank)$/.test(String(raw.man_made))||/\b(?:street|road|avenue|boulevard|port|airport|station|terminal|interchange|parking|bridge|tunnel|pier|marina|boarding|dock|ferry|tour[ -]boat)\b/i.test(name)))continue
-    const attractionType=kind==='activity'?cats.find(c=>c.startsWith('tourism.attraction.'))||(['museum','gallery','artwork','viewpoint','zoo','aquarium','theme_park'].includes(String(raw.tourism))?String(raw.tourism):typeof raw.historic==='string'?raw.historic:undefined):undefined
+    if(kind==='activity'&&(cats.some(c=>/(?:^|[._])(?:artwork|statue|memorial|plaque|mural)(?:[._]|$)/.test(c))||['artwork','statue','memorial','plaque','mural'].includes(String(raw.tourism))||['statue','memorial','plaque'].includes(String(raw.historic))||raw.artwork_type||cats.some(c=>/(?:^|[._])(?:transport|transportation|boarding|dock|pier|ferry|terminal|parking|station|marina|harbour|harbor|boat)(?:[._]|$)/.test(c)||/^(?:commercial|accommodation|catering|service.vehicle)\./.test(c))||raw.highway||raw.place||raw.railway||raw.aeroway||raw.harbour||raw.ferry||raw.dock||raw.waterway||/^(?:pier|breakwater|pipeline|works|water_tower|storage_tank)$/.test(String(raw.man_made))||/\b(?:street|road|avenue|boulevard|port|airport|station|terminal|interchange|parking|bridge|tunnel|pier|marina|boarding|dock|ferry|tour[ -]boat)\b/i.test(name)))continue
+    const attractionType=kind==='activity'?cats.find(c=>c.startsWith('tourism.attraction.')||/^(?:entertainment\.(?:museum|culture\.gallery|zoo|aquarium|theme_park)|leisure\.park|beach)(?:\.|$)/.test(c))||(['museum','gallery','viewpoint','zoo','aquarium','theme_park'].includes(String(raw.tourism))?String(raw.tourism):typeof raw.historic==='string'?raw.historic:undefined):undefined
     const clean=(v:unknown)=>typeof v==='string'?decodeEntities(v).replace(/[\n\r|<>]/g,' ').trim().slice(0,200):undefined
     const cuisine=clean(raw.cuisine)||clean(p.cuisine),hotelType=kind==='hotel'?cats.find(c=>c.startsWith('accommodation.hotel.'))||clean(raw.tourism):undefined,hours=clean(raw.opening_hours)||clean(p.opening_hours),neighborhood=clean(p.suburb)||clean(p.neighbourhood)
     const identity=p.place_id;if(seen.has(identity))continue;seen.add(identity)
@@ -44,6 +48,7 @@ export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],record
     const rec=providerRecords.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',title:'Geoapify venue listing',content},new Date().toISOString())[0]
     out.push({line:out.length+1,kind,name,address,lat:p.lat,lon:p.lon,id:identity,source:rec.id,start:0,end:name.length,distance:Math.hypot((p.lat-(anchor.lat as number)),(p.lon-(anchor.lon as number))*Math.cos((anchor.lat as number)*Math.PI/180)),cuisine,attractionType,hotelType,hours,neighborhood})
    }
+  }
   }
   if(!out.length)return fail('zero_results')
   for(const p of out){const rec=records.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',title:'Geoapify venue listing',content:providerRecords.pageText(p.source)},new Date().toISOString())[0];p.source=rec.id}
