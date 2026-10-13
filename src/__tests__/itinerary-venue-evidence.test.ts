@@ -106,3 +106,45 @@ it('repair cannot change identity, add uncited evidence or retry other rejection
  expect((await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,no,undefined,{repair:async()=>({...reason,claims:[{text:'Garden terrace',evidenceIds:[packets[0].evidence[1].id]}]})})).rejected[0].code).toBe('evidence')
  for(const code of ['identity','marketing','invented_fit','no_strength','uncertain'] as const){const repair=vi.fn(async()=>reason);expect((await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,async()=>({verdict:'no',reason:code}),undefined,{repair})).rejected[0].code).toBe('judge_no_'+code);expect(repair).not.toHaveBeenCalled()}
 })
+it('retains short closure notices outside ranked evidence and preserves them across repair',async()=>{
+ const hotel={line:1,name:'Quay Lodge',kind:'hotel' as const,website:'https://fictional.test',address:'42 Quay Street'}
+ const text='Quay Lodge in Harbor\n'+Array.from({length:12},(_,i)=>'The rooms offer garden views and suites with breakfast service '+i+'.').join('\n')+'\nRooftop:\nTemporarily closed\nAddress: 42 Quay St'
+ const records=new SourceRecords(),packets=await collectVenueEvidence([hotel],destination,records,{search:async()=>({results:[{url:'https://fictional.test/lodge'}]}),read:async()=>({title:'Quay Lodge Harbor',content:text})})
+ expect(packets[0].evidence.some(e=>e.excerpt.includes('Temporarily closed'))).toBe(false)
+ expect(packets[0].contradictionContext?.some(e=>e.excerpt.includes('Rooftop:\nTemporarily closed'))).toBe(true)
+ const reason={line:1,why:'Rooms offer garden views and breakfast.',claims:[{text:'Rooms with garden views',evidenceIds:[packets[0].evidence[0].id]}],unknowns:[]}
+ const judge=vi.fn(async(input:Parameters<import('@/lib/files/itinerary-venue-evidence').EvidenceJudge>[0])=>{
+  expect(input.contradictionContext?.some(e=>e.excerpt.includes('Temporarily closed'))).toBe(true)
+  const prompt=venueReasonJudgePrompt(input);expect(prompt).toContain('negative/identity context ONLY');expect(prompt).toContain('Temporarily closed')
+  return {verdict:'no' as const,reason:'unsupported_claim' as const}
+ })
+ const repair=vi.fn(async(input:Parameters<import('@/lib/files/itinerary-venue-evidence').VenueReasonRepair>[0])=>{expect(venueReasonRepairPrompt(input)).toContain('Temporarily closed');return reason})
+ const out=await validateVenueReasons({reasons:[reason]},'Lodging',packets,records,judge,undefined,{repair})
+ expect(out.accepted).toHaveLength(0);expect(judge).toHaveBeenCalledTimes(2);expect(repair).toHaveBeenCalledOnce()
+ expect(packets[0].contradictionContext!.every(e=>records.pageText(e.source)!.includes(e.excerpt))).toBe(true)
+})
+it('fails identity on conflicting first-party street number even with a permissive judge',async()=>{
+ const records=new SourceRecords(),v={...venue,website:'https://fictional.test'}
+ const packets=await collectVenueEvidence([v],destination,records,{search:async()=>({results:[{url:'https://fictional.test/dining'}]}),read:async()=>({title:'Lantern Table Harbor',content:'Lantern Table serves seasonal bowls in Harbor.\nAddress: 96 Quay Street, Harbor'})})
+ const reason={line:1,why:'The source describes seasonal bowls.',claims:[{text:'Seasonal bowls',evidenceIds:[packets[0].evidence[0].id]}],unknowns:[]}
+ const judge=vi.fn(async()=>true),repair=vi.fn(async()=>reason)
+ const out=await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,judge,undefined,{repair})
+ expect(out.rejected[0].code).toBe('judge_no_identity');expect(judge).not.toHaveBeenCalled();expect(repair).not.toHaveBeenCalled()
+ const matched=await validateVenueReasons({reasons:[reason]},'Dinner',[{...packets[0],venue:{...v,address:'96 Quay St'}}],records,judge)
+ expect(matched.accepted).toHaveLength(1)
+})
+it('does not upgrade recipe/sourcing facts into freshness or authenticity and excludes neighbor closure',async()=>{
+ const text='Harbor dining\n## Lantern Table\nLantern Table uses locally sourced vegetables and traditional recipes.\nAddress: 42 Quay St\n## Reed Kitchen\nPermanently closed at 96 Quay St.'
+ const records=new SourceRecords(),packets=await collectVenueEvidence([venue],destination,records,{search:async()=>({results:[{url:'https://fictional.test/dining'}]}),read:async()=>({title:'Harbor dining',content:text})})
+ expect(JSON.stringify(packets[0].contradictionContext)).not.toContain('Permanently closed')
+ const reason={line:1,why:'Fresh and culturally authentic cuisine.',claims:[{text:'Locally sourced vegetables and traditional recipes',evidenceIds:[packets[0].evidence[0].id]}],unknowns:[]}
+ const out=await validateVenueReasons({reasons:[reason]},'Dinner',packets,records,async input=>{const prompt=venueReasonJudgePrompt(input);expect(prompt).toContain('Never infer freshness from local sourcing');expect(prompt).toContain('cultural authenticity from traditional recipes');return {verdict:'no',reason:'marketing'}})
+ expect(out.rejected[0].code).toBe('judge_no_marketing')
+ expect(venueSynthesisPrompt('Dinner',packets)).toContain('Locally sourced ingredients do not prove freshness')
+})
+
+it('includes same-venue subsection closure but stops before a sibling venue',()=>{
+ const text='Harbor hotels\n## Lantern Table\nSeasonal bowls are served in a garden dining room.\n### Terrace status\nTemporarily closed\n## Reed Kitchen\nReed Kitchen offers a rooftop pool.'
+ const sections=venueEvidenceSections(venue,destination,'Harbor guide',text)
+ expect(sections.join(' ')).toContain('Temporarily closed');expect(sections.join(' ')).not.toContain('rooftop pool')
+})
