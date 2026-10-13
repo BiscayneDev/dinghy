@@ -101,3 +101,11 @@ it('free conversation gives early composition the same schema and enough output 
  expect(source).toContain('step<20&&!signal.aborted')
  expect(source).toContain('Read-page sources available: ')
 })
+
+it('extract failure reaches the normal reader and repeated pages do not duplicate full text in the research conversation',()=>{const s=readFileSync('src/lib/spectrum/dinghy.ts','utf8');expect(s).toContain('A timeout or network failure must still reach the ordinary reader.');expect(s).toContain('This page was read again below. Use the latest read of this URL.');})
+
+it('a hotel brand property suffix is not a provider alias and its address is never borrowed',async()=>{
+ const records=new SourceRecords(),page=records.capture('web_fetch',{url:'https://harbor.test/quay',content:'Quay Suites Harbor has desks and a reading lounge.'},'fictional')[0]
+ const out=await chooseItineraryVenues({request:'Harbor',destination:'Harbor',records,signal:new AbortController().signal,json:async()=>JSON.stringify({venues:[{name:'Quay Suites Harbor',kind:'hotel',why:'Desks and a reading lounge.',sourceId:page.id}]}),verify:async()=>[{line:1,kind:'hotel',name:'Quay Suites Marquis Harbor',address:'Wrong property address',lat:1,lon:2,id:'fixture',source:page.id,start:0,end:18}]})
+ expect(out.verified).toBe(0);expect(out.picks[0].place.name).toBe('Quay Suites Harbor');expect(out.picks[0].place.address).toBe('')
+})
