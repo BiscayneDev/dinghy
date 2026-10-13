@@ -44,10 +44,20 @@ async function tavilySearch(query: string, maxResults: number, recentDays?: numb
   }
 }
 
+async function exaSearch(query:string,maxResults:number,recentDays?:number):Promise<{answer:null;results:SearchHit[]}>{
+ const response=await fetch('https://api.exa.ai/search',{
+  method:'POST',headers:{'Content-Type':'application/json','x-api-key':process.env.EXA_API_KEY!},
+  body:JSON.stringify({query,type:'fast',numResults:Math.min(10,Math.max(1,maxResults)),contents:{highlights:true},...(recentDays?{category:'news',startPublishedDate:new Date(Date.now()-recentDays*86400000).toISOString()}: {})}),
+  signal:AbortSignal.timeout(12000),
+ })
+ if(!response.ok)throw new Error(`Exa API error: ${response.status}`)
+ const data=await response.json() as {results?:Array<{title?:string;url?:string;publishedDate?:string;highlights?:string[]}>}
+ return {answer:null,results:(data.results??[]).map(r=>({title:r.title??'',url:r.url??'',content:(r.highlights??[]).join(' ').slice(0,800),published_date:r.publishedDate??null}))}
+}
 export function searchFailureCode(error:unknown):NonNullable<ToolResult['publicSearchFailure']>{
  if(error instanceof z.ZodError)return 'invalid_input'
- const status=error instanceof Error?error.message.match(/^Tavily API error: (\d+)/)?.[1]:undefined
- return status==='432'?'quota':status==='401'||status==='403'?'auth':status==='429'?'rate':status?'http':'network'
+ const status=error instanceof Error?error.message.match(/^(?:Tavily|Exa) API error: (\d+)/)?.[1]:undefined
+ return status==='432'||status==='402'?'quota':status==='401'||status==='403'?'auth':status==='429'?'rate':status?'http':'network'
 }
 export const webSearch: Tool = {
   name: 'web_search',
@@ -62,13 +72,13 @@ export const webSearch: Tool = {
     required: ['query'],
   },
   async execute(input: unknown): Promise<ToolResult> {
-    if (!process.env.TAVILY_API_KEY) {
+    if (!process.env.EXA_API_KEY && !process.env.TAVILY_API_KEY) {
       return { success: false, error: 'Web search is not configured', publicSearchFailure:'unconfigured' }
     }
 
     try {
       const parsed = SearchInput.parse(input)
-      const { answer, results } = await tavilySearch(parsed.query, parsed.maxResults, parsed.recentDays)
+      const { answer, results } = await (process.env.EXA_API_KEY?exaSearch:tavilySearch)(parsed.query, parsed.maxResults, parsed.recentDays)
 
       return {
         success: true,
@@ -171,4 +181,4 @@ export const webFetch: Tool = {
       return { success: false, publicReadFailure: err instanceof z.ZodError ? 'invalid_input' : 'network', error: `Fetch failed: ${msg}` }
     }
   },
-        }
+  }

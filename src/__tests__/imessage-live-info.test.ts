@@ -119,3 +119,16 @@ describe('agency', () => {
     expect(mod.AGENCY_LINE).toMatch(/Never invent a tool/)
   })
 })
+
+describe('Exa search adapter',()=>{
+ it('offers Exa without Tavily and preserves dated linked highlights',async()=>{
+  vi.stubEnv('TAVILY_API_KEY','');vi.stubEnv('EXA_API_KEY','fictional-key')
+  const fake=vi.fn(async()=>jsonResponse({results:[{title:'Fictional guide',url:'https://fixture.test/guide',publishedDate:'2026-10-01',highlights:['Fixture excerpt']}] }))
+  vi.stubGlobal('fetch',fake)
+  const result=await webSearch.execute({query:'fictional harbor places',recentDays:7},ctx)
+  expect(result.success).toBe(true)
+  expect((fake.mock.calls as unknown as unknown[][])[0][0]).toBe('https://api.exa.ai/search')
+  expect(result.data).toEqual({answer:null,results:[{title:'Fictional guide',url:'https://fixture.test/guide',content:'Fixture excerpt',published_date:'2026-10-01'}]})
+  expect((await import('@/lib/spectrum/imessage-tools')).liveInfoTools().some(t=>t.name==='web_search')).toBe(true)
+ })
+})

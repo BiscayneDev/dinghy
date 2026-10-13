@@ -16,7 +16,7 @@ export function safeProofStage(stage:RunStage,detail?:string):ProofStage {
  return {stage,...(detail&&/^[a-zA-Z0-9_:,.-]{1,80}$/.test(detail)?{detail}:{})}
 }
 export async function runItineraryProof(onStage:(stage:RunStage,detail?:string)=>Promise<void>) {
- if(!SHIPYARD_API_KEY||!process.env.TAVILY_API_KEY||!process.env.HERENOW_API_KEY)return {synthetic:true,noSend:true,verdict:'unavailable',code:'missing_configuration',blindSpots:PROOF_BLIND_SPOTS}
+ if(!SHIPYARD_API_KEY||!(process.env.EXA_API_KEY||process.env.TAVILY_API_KEY)||!process.env.HERENOW_API_KEY)return {synthetic:true,noSend:true,verdict:'unavailable',code:'missing_configuration',blindSpots:PROOF_BLIND_SPOTS}
  const files=fileToolsFor(),stages:ProofStage[]=[]
  const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'America/New_York',tokens:{}}
  const record=async(stage:RunStage,detail?:string)=>{const s=safeProofStage(stage,detail);stages.push(s);await onStage(s.stage,s.detail)}
