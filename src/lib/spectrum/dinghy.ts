@@ -730,6 +730,9 @@ export async function chatWithTools(
                 if(resolvedOut.label)destLabel=resolvedOut.label
                 if(apiPlaces){mapResearchRead=true;foundSources.push({title:'Geoapify venue listings',url:'https://www.geoapify.com/places-api/'})}
                 await opts.onStage?.('tool',`itinerary:places_api:${apiPlaces?'ready_'+apiPlaces.length:'fallback_'+fallbackReason}`)
+                // A failed broad lookup does not send research back through the old quote parser.
+                // The chooser can still verify named picks directly with Places.
+                if(!apiPlaces&&process.env.GEOAPIFY_API_KEY)apiPlaces=[]
             }
         }
         // A required read is an execution dependency, not a suggestion to the model.
@@ -773,9 +776,9 @@ export async function chatWithTools(
             if(!mapResearchRead)return publishUnverifiedAgenda(iteration-1)
         }
         if(itineraryResearch&&mapResearchRead&&!selectedCandidates&&!menuShown){
-            menuShown=true;const view=buildPageView(sourceRecords);viewReady=!!apiPlaces?.length||view.lines>0;viewEntries=apiPlaces?apiPlaces.map(p=>({n:p.line,source:p.source,start:p.start,end:p.end,text:p.name,name:p.name,ctx:p.kind})):view.entries
+            menuShown=true;const view=buildPageView(sourceRecords);viewReady=!!apiPlaces?.length||view.lines>0;viewEntries=apiPlaces?.length?apiPlaces.map(p=>({n:p.line,source:p.source,start:p.start,end:p.end,text:p.name,name:p.name,ctx:p.kind})):view.entries
             await opts.onStage?.('tool',`itinerary:page_view:${view.pages}_${view.lines}`)
-            if(viewReady)messages.push({role:'system',content:apiPlaces?apiPlaceMenu(apiPlaces):viewNote(view)})
+            if(viewReady)messages.push({role:'system',content:apiPlaces?.length?apiPlaceMenu(apiPlaces):viewNote(view)})
         }
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
@@ -948,7 +951,7 @@ export async function chatWithTools(
                         verdicts.set(vkey,ok);return ok
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
                 }
-                const picked=apiPlaces?compileApiPlaces(parsed,apiPlaces,sourceRecords):await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
+                const picked=apiPlaces?(apiPlaces.length?compileApiPlaces(parsed,apiPlaces,sourceRecords):{candidates:[] as Record<string,unknown>[],dropped:[] as string[],previews:[] as string[]}):await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
                 if(apiPlaces&&'candidates'in picked){
                     const apiCandidates=picked.candidates
                     // Search-first product path: a routed chooser picks real venues from the fetched
@@ -1183,4 +1186,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                        }
+                                           }

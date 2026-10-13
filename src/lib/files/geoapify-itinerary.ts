@@ -48,7 +48,7 @@ export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],record
    await new Promise(resolve=>setTimeout(resolve,210))
    const category=kind==='activity'&&(radius===10000||searchedName)?(searchedName?'tourism.attraction,':'')+'entertainment.museum,entertainment.culture.gallery,entertainment.zoo,entertainment.aquarium,entertainment.theme_park,leisure.park,beach':categories[kind]
    let data:{features?:{properties?:Record<string,unknown>}[]}
-   try{data=await get('v2/places',{categories:category,filter:`circle:${anchor.lon},${anchor.lat},${radius}`,bias:`proximity:${anchor.lon},${anchor.lat}`,limit:searchedName?'5':'20',...(searchedName?{name:searchedName}:{})}) as typeof data}catch(error){if(searchedName){status=undefined;continue}if(radius===10000){status=undefined;break}throw error}
+   try{data=await get('v2/places',{categories:category,filter:`circle:${anchor.lon},${anchor.lat},${radius}`,bias:`proximity:${anchor.lon},${anchor.lat}`,limit:searchedName?'5':'20',...(searchedName?{name:searchedName}:{})}) as typeof data}catch{status=undefined;continue}
    for(const f of data.features||[]){
     const p=f.properties||{},name=typeof p.name==='string'?decodeEntities(p.name).trim():'',cats=Array.isArray(p.categories)?p.categories.filter((c):c is string=>typeof c==='string'):[]
     if(!name||name.length>120||/[\n\r|<>]/.test(name)||!cats.some(c=>c===categories[kind]||c.startsWith(categories[kind]+'.')||kind==='activity'&&/^(?:entertainment\.(?:museum|culture\.gallery|zoo|aquarium|theme_park)|leisure\.park|beach)(?:\.|$)/.test(c))||!num(p.lat)||!num(p.lon)||typeof p.place_id!=='string'||/[\n\r|<>]/.test(p.place_id))continue

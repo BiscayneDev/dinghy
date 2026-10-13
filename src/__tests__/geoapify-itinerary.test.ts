@@ -158,3 +158,14 @@ it('named search uses token match within the same city and kind; unrelated names
  const out=await geoapifyPlaces('Harbor',['activity'],new SourceRecords(),undefined,undefined,{namedCandidates:[{name:'Reed Museum',kind:'activity'}]})
  expect(out?.map(p=>p.name)).toEqual(['Reed Museum','Reed Museum Annex']);expect(out?.[0].discovered).toBe(true);expect(urls[1].searchParams.get('name')).toBe('Reed Museum');expect(urls[1].searchParams.get('filter')).toBe('circle:-80,25,15000')
 })
+
+it('one failing category does not discard verified venues from other categories',async()=>{
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-secret')
+ vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{
+  if(u.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,rank:{confidence:1}}]}))
+  if(u.searchParams.get('categories')!.startsWith('accommodation'))return new Response('',{status:503})
+  return new Response(JSON.stringify({features:[{properties:{name:'Lantern Table',categories:['catering.restaurant'],lat:25,lon:-80,place_id:'lantern',formatted:'42 Quay St, Harbor'}}]}))
+ }))
+ const places=await geoapifyPlaces('Harbor',['hotel','restaurant'],new SourceRecords())
+ expect(places?.map(p=>p.name)).toEqual(['Lantern Table'])
+})
