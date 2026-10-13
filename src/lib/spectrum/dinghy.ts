@@ -1,4 +1,4 @@
-import {activityFitPrompt,activityFitJudgePrompt,activityFitRepairPrompt,parseActivityJudge,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
+import {activityFitPrompt,activityFitJudgePrompt,activityFitRepairPrompt,repairableActivityRejection,parseActivityJudge,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiEvidenceVenues,applyVerifiedApiReasons,activityResearchSlate,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,parseVenueReasonJudge,venueReasonRepairPrompt,type EvidenceJudge,type VerifiedVenueReason} from '@/lib/files/itinerary-venue-evidence'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
@@ -985,9 +985,9 @@ export async function chatWithTools(
                                     const av=await validateActivityFit(JSON.parse((aj.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,input=>activityVerdict(activityFitJudgePrompt(input)))
                                     fits=av.accepted
                                     for(const code of [...new Set(av.rejected.map(r=>r.code))])await opts.onStage?.('tool','itinerary:activity_rejected:'+code)
-                                    if(av.rejected.some(r=>r.code==='judge_no_unsupported_claim')&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>18000)){
+                                    if(av.rejected.some(r=>repairableActivityRejection(r.code))&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>18000)){
                                         const retry=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(9000)]):AbortSignal.timeout(9000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Repair unsupported visitor experiences using exact source text. Return only JSON.'},{role:'user',content:activityFitRepairPrompt(currentRequest,packets,av.rejected)}],stream:false,max_tokens:1400})}))
-                                        if(retry.ok){const body=await retry.json() as {choices?:{message?:{content?:string}}[]};const rv=await validateActivityFit(JSON.parse((body.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets.filter(p=>av.rejected.some(r=>r.line===p.venue.line&&r.code==='judge_no_unsupported_claim')),sourceRecords,input=>activityVerdict(activityFitJudgePrompt(input)));fits.push(...rv.accepted);await opts.onStage?.('tool','itinerary:activity_repair:a'+rv.accepted.filter(f=>f.decision==='recommend').length+'_r'+rv.rejected.length)}
+                                        if(retry.ok){const body=await retry.json() as {choices?:{message?:{content?:string}}[]};const rv=await validateActivityFit(JSON.parse((body.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets.filter(p=>av.rejected.some(r=>r.line===p.venue.line&&repairableActivityRejection(r.code))),sourceRecords,input=>activityVerdict(activityFitJudgePrompt(input)));fits.push(...rv.accepted);await opts.onStage?.('tool','itinerary:activity_repair:a'+rv.accepted.filter(f=>f.decision==='recommend').length+'_r'+rv.rejected.length)}
                                     }
                                 }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:activity_fit:error')}}
                                 const activitySelection=applyActivityFit(apiCandidates,activityPool,fits)
@@ -1009,15 +1009,22 @@ export async function chatWithTools(
                                 const rj=await rr.json() as {choices?:{message?:{content?:string}}[]};await opts.onStage?.('tool','itinerary:reason_repair:attempted');return JSON.parse((rj.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,''))
                             }
                             if(ready){
-                                const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Write evidence-grounded venue reasons. Return only JSON.'},{role:'user',content:venueSynthesisPrompt(currentRequest,packets.filter(pk=>apiCandidates.some(c=>(c.name as {source:string}).source===reasonPlaces.find(p=>p.line===pk.venue.line)?.source)))}],stream:false,max_tokens:3000})}))
-                                if(r.ok){
-                                    const j=await r.json() as {choices?:{message?:{content?:string}}[]};const raw=j.choices?.[0]?.message?.content||''
-
-                                    const v=await validateVenueReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,judge,undefined,{repair})
-                                    acceptedReasons.push(...v.accepted)
-                                    await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted.length}_r${v.rejected.length}`)
-                                    for(const code of [...new Set(v.rejected.map(r=>r.code))])await opts.onStage?.('tool',`itinerary:reason_rejected:${code}`)
-                                }
+                                const retainedPackets=packets.filter(pk=>pk.status==='ready'&&apiCandidates.some(c=>(c.name as {source:string}).source===reasonPlaces.find(p=>p.line===pk.venue.line)?.source))
+                                // One bounded proposal request for each retained venue; a batch model may silently omit rows.
+                                const proposals=await Promise.all(retainedPackets.map(async packet=>{
+                                    try{
+                                        const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Write evidence-grounded venue reasons. Return only JSON.'},{role:'user',content:venueSynthesisPrompt(currentRequest,[packet])}],stream:false,max_tokens:900})}))
+                                        if(!r.ok)return []
+                                        const j=await r.json() as {choices?:{message?:{content?:string}}[]},raw=j.choices?.[0]?.message?.content||''
+                                        const parsed=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')) as {reasons?:{line?:number}[]}
+                                        return Array.isArray(parsed.reasons)?parsed.reasons.filter(reason=>reason.line===packet.venue.line):[]
+                                    }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return []}
+                                }))
+                                await opts.onStage?.('tool',`itinerary:reason_coverage:p${proposals.filter(p=>p.length).length}_v${retainedPackets.length}`)
+                                const v=await validateVenueReasons({reasons:proposals.flat()},currentRequest,packets,sourceRecords,judge,undefined,{repair})
+                                acceptedReasons.push(...v.accepted)
+                                await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted.length}_r${v.rejected.length}`)
+                                for(const code of [...new Set(v.rejected.map(r=>r.code))])await opts.onStage?.('tool',`itinerary:reason_rejected:${code}`)
                             }
                         }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:reasons:fallback')}
                     }else if(apiPlaces)await opts.onStage?.('tool','itinerary:venue_evidence:skipped_budget')
@@ -1227,4 +1234,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                }
+                        }
