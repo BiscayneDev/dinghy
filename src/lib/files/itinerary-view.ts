@@ -41,6 +41,9 @@ const NEWS_LINE=/\b(?:breaks?\s+ground|announces?|announced|unveils?|set to open
 export function extractLineName(text:string):string|null{
  if(NEWS_LINE.test(text))return null
  if(MARKETING_NAME.test(text.replace(/^[\s#>*•\-\d.)]*/,'')))return null
+ // A comma inside a capitalized venue heading is part of its name, not a boundary.
+ const commaHead=text.split(/\s[-–—]\s|[–—:|(·.!?]/)[0].trim()
+ if(/^[\p{Lu}][\p{L}'’ -]+,\s+[\p{Lu}][\p{L}'’ &-]+$/u.test(commaHead)){const n=extractFromHead(commaHead,text);if(n)return n}
  for(const seg of text.split(/\s[-–—]\s|[–—:,(|·.!?]/).slice(0,3)){const n=extractFromHead(seg.trim(),text);if(n)return n}
  return null
 }
@@ -181,7 +184,7 @@ export function verificationContext(line:ViewLine,records:SourceRecords,entries:
   if(sectionKind(flat))category=flat
   else if(/^\s*#{1,2}\s/.test(raw))category=''
  }
- const nextHeading=/\n\s*#{1,3}\s/.exec(text.slice(line.end))
+ const nextHeading=/\n\s*#{1,6}\s/.exec(text.slice(line.end))
  const nextVenue=entries.find(e=>e.source===line.source&&e.start>=line.end&&e.name!==line.name)
  const end=Math.min(line.end+700,nextHeading?line.end+nextHeading.index:Infinity,nextVenue?nextVenue.start:Infinity)
  return [records.pageTitle(line.source)?'Page title: '+records.pageTitle(line.source):'',category?'Page section: '+category:'','Pick section: '+norm(text.slice(line.start,end))].filter(Boolean).join('\n')
@@ -216,7 +219,7 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   if(line.ctx&&line.ctx!==kind){reject('kind_mismatch',name);continue}
   // Verify against the source section, not a cleaned reason or an invented listing fallback.
   // Include prose following a heading so a neighborhood cannot become an attraction by losing its context.
-  const nextHeading=/\n\s*#{1,3}\s/.exec(text.slice(line.end))
+  const nextHeading=/\n\s*#{1,6}\s/.exec(text.slice(line.end))
   const sectionEnd=Math.min(line.end+700,nextHeading?line.end+nextHeading.index:Infinity)
   const evidence=verificationContext(line,records,entries)
   const others=[...entries.filter(e=>e.source===line.source).map(e=>e.name),...mentions.filter(m=>m.source===line.source).map(m=>m.text)]
@@ -225,7 +228,8 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
   const unsafeReason=(t:string)=>mentionsOther(t)||CHIP.test(t)||/[$€£¥]|\b(?:USD|EUR|GBP)\s*\d|\b\d+(?:[.,]\d+)?\s*(?:dollars?|euros?|pounds?)\b|\b(?:I|we|our|ours|us|my|mine)\b/i.test(t)
   const sentences=(t:string)=>t.split(/(?<=[.!?])\s+|\n+/).map(x=>stripUi(norm(x.replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/[*_`]/g,''))))
   const own=new RegExp('(?:'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'|^(?:It|Its|This|They|The (?:hotel|restaurant|property|museum|park|venue|bar|cafe))\\b)','i')
-  const usable=(x:string)=>x.split(' ').length>=5&&x.length<=260&&!NEWS_LINE.test(x)&&own.test(x)&&!unsafeReason(x)
+  const rankingLabel=/^(?:most \w+|best (?:for|value|overall)|top pick|recommended)\s*:/i
+  const usable=(x:string)=>x.split(' ').length>=5&&x.length<=260&&!NEWS_LINE.test(x)&&!rankingLabel.test(x)&&own.test(x)&&!unsafeReason(x)
   // Drop whole unsafe sentences. Cutting them before another venue leaves misleading fragments.
   let quote=sentences(text.slice(line.start,line.end)).filter(usable).join(' ')
   if(!quote){
@@ -233,7 +237,8 @@ export async function compileQuoteSelection(input:unknown,records:SourceRecords,
    const limit=Math.min(sectionEnd,nextVenue?nextVenue.start:Infinity)
    quote=sentences(text.slice(line.end,limit)).find(usable)||''
   }
-  if(!quote)quote=sentences(text).find(x=>x.toLowerCase().includes(name.toLowerCase())&&usable(x))||''
+  // Only this heading's section can supply a description. A name elsewhere on the page is not attribution.
+  if(!quote)quote=sentences(text.slice(line.start,sectionEnd)).find(x=>x.toLowerCase().includes(name.toLowerCase())&&usable(x))||''
   if(!quote){
    const title=stripUi(norm(records.pageTitle(line.source)||'')).slice(0,100),label=kind==='hotel'?'a place to stay':kind==='restaurant'?'a place to eat or drink':'something to do'
    // The page title is optional display text, never evidence or a way to reintroduce unsafe content.
