@@ -298,7 +298,7 @@ it('standard founder itinerary runs routed search then publishes two hotels thre
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'fixture-'+loopTools.length,function:{name,arguments:JSON.stringify(name==='web_fetch'?{url:pageUrl}:{query:'Harbor Florida hotels restaurants weekend guide'})}}]}}]}))
  }))
  const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+90000,onStage:async(_s,d)=>{if(d)stages.push(d)}},gateTools([...toolsFor(ctx),...files.tools],[ask]).active,ctx)
- expect(result.deliverable?.state).toBe('completed');expect(loopTools.filter(n=>n==='web_search')).toHaveLength(3);expect(loopTools.filter(n=>n==='web_fetch')).toHaveLength(0);expect(stages).toContain('itinerary:accepted:h2_r3_a2')
+ expect(result.deliverable?.state).toBe('completed');expect(loopTools.filter(n=>n==='web_search')).toHaveLength(2);expect(loopTools.filter(n=>n==='web_fetch')).toHaveLength(0);expect(stages).toContain('itinerary:accepted:h2_r3_a2')
  const markdown=files.files()[0].markdown,html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
  for(const [_k,name,why]of rows){expect(markdown).toContain(name);expect(html).toContain(why)}expect(markdown).toContain(pageUrl);expect(markdown).toMatch(/10:00|10am/);expect(markdown).toMatch(/working sessions/i)
 })
