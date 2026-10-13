@@ -288,6 +288,7 @@ it('standard founder itinerary runs routed search then publishes two hotels thre
  vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
   const url=String(u)
   if(url.startsWith('https://api.geoapify.com/')){const q=new URL(url);return new Response(JSON.stringify(q.pathname.includes('geocode')?{results:[{lat:25,lon:-80,rank:{confidence:1}}]}:{features:q.searchParams.get('categories')?.startsWith('accommodation')?[{properties:{name:'Reed Inn',categories:['accommodation.hotel'],lat:25,lon:-80,place_id:'reed',formatted:'42 Quay St, Harbor'}}]:[]}))}
+  if(url==='https://api.tavily.com/extract')return new Response(JSON.stringify({results:[{url:pageUrl,raw_content:text}]}))
   if(url==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor visitor guide',url:pageUrl,content:'Harbor hotels dining and activities.'}]}))
   if(url===pageUrl)return new Response('<html><title>Harbor visitor guide</title><body>'+text+'</body></html>')
   const req=JSON.parse(init.body)
