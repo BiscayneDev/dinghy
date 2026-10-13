@@ -35,7 +35,7 @@ export function parseChosenVenues(input:unknown,records:SourceRecords):ChosenVen
   if(!text.includes(name)&&!norm(text).includes(norm(name))){const page=records.capture('web_fetch',{url:records.pageUrl(r.sourceId),title:name,content:name+'\n'+text},new Date().toISOString())[0];if(page)r.sourceId=page.id}
   const kind=r.kind as PlaceKind,key=norm(name).replace(/[^a-z0-9]/g,'')
   if(seen.has(key)||counts[kind]>=caps[kind])continue
-  seen.add(key);counts[kind]++;out.push({name,kind,why,sourceId:r.sourceId})
+  seen.add(key);counts[kind]++;out.push({name,kind,why,sourceId:String(r.sourceId)})
  }
  return out
 }
@@ -82,4 +82,4 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  const picks=surviving
 
  return {picks:picks.map(m=>({place:m.place,why:m.venue.why,sourceId:m.venue.sourceId})),chosen:venues.length,verified,dropped:venues.length-picks.length}
-}
+   }
