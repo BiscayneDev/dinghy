@@ -169,6 +169,17 @@ export function destinationTokens(request:string):string[]{
  * the geocoder results, not query text. */
 export type ResolvedDestination={query:string;states:string[];countries:string[];terms:string[]}
 export function resolveDestination(request:string):ResolvedDestination|null{
+ const marker='\n\nLatest user correction (supersedes conflicting details above): '
+ const ix=request.lastIndexOf(marker)
+ if(ix>=0){
+  const prior=resolveDestination(request.slice(0,ix)),corrected=resolveDestination(request.slice(ix+marker.length))
+  if(corrected)return corrected
+  const hints=destinationTokens(request.slice(ix+marker.length))
+  const states=hints.filter(t=>GEO_US_STATES.has(t)),countries=hints.filter(t=>GEO_COUNTRIES.has(t))
+  if(prior&&(states.length||countries.length))return {...prior,states,countries,terms:[prior.query,...states,...countries]}
+  return prior
+ }
+
  const tokens=destinationTokens(request);if(!tokens.length)return null
  const states=tokens.filter(t=>GEO_US_STATES.has(t)),countries=tokens.filter(t=>GEO_COUNTRIES.has(t))
  const cities=tokens.filter(t=>GEO_CITIES.has(t))
@@ -289,4 +300,4 @@ export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):
  const what=kind==='hotel'?'a hotel or lodging property':kind==='restaurant'?'a restaurant, cafe or bar':'an attraction, museum, tour, venue or activity provider'
  const wrong=kind==='hotel'?'a restaurant, attraction or other non-lodging place':kind==='restaurant'?'a hotel, attraction or other non-food place':'a hotel or a restaurant'
  return `Name: "${name}"\nSource context (including surrounding prose): "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the source context identifies the complete name as a ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} rather than an area or category. A named entry in an explicit restaurant/hotel/attraction list is type evidence even without a descriptive sentence. This checks venue identity and kind, not proof of live hours, availability or prices. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, a chopped or incomplete heading fragment, or if you are unsure. The name must be the full proper-name run in its source line, not a suffix or substring of a longer venue name. A bare heading with no venue category or descriptive context is not evidence; use its page title, category and surrounding prose. Never use another entry to supply evidence about this name. Answer with exactly one word: yes or no.`
-}
+ }
