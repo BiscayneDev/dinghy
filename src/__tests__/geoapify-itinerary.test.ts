@@ -18,7 +18,7 @@ it('per-kind calls preserve exact names and addresses, drop nameless and street 
   return new Response(JSON.stringify({features:[{properties:p},{properties:p},{properties:{...p,name:'',place_id:'blank'}},{properties:{...p,name:'Quay Road',place_id:'street',datasource:{raw:{highway:'pedestrian'}}}}]}))
  }))
  const r=new SourceRecords(),places=(await geoapifyPlaces('Harbor',['hotel','restaurant','activity'],r))!
- expect(urls).toHaveLength(4);expect(places.filter(p=>p.kind==='activity')).toHaveLength(1);expect(places.map(p=>p.name)).toContain('Noriya')
+ expect(urls).toHaveLength(5);expect(places.filter(p=>p.kind==='activity')).toHaveLength(1);expect(places.map(p=>p.name)).toContain('Noriya')
  expect(apiPlaceMenu(places)).toContain('42 Quay St');expect(r.pageIds().every(id=>!r.pageUrl(id)!.includes('fictional-secret'))).toBe(true)
  const result=compileApiPlaces({candidates:places.filter(p=>p.id!=='street').map(p=>({kind:p.kind,line:p.line}))},places,r)
  if('error'in result)throw new Error(result.error)
@@ -115,4 +115,15 @@ it('timeout prevents late source commits and keeps address-free fallback',async(
  const io={search:async()=>({results:[{url:'https://fictional.test/reed'}]}),read:async()=>{await new Promise(resolve=>setTimeout(resolve,35));return {content:'Harbor dining. Reed Kitchen serves wood-fired noodle bowls.'}}}
  expect(await researchApiReasons(o.candidates,[p],'Harbor',r,io,5)).toEqual({found:0,missing:1});await new Promise(resolve=>setTimeout(resolve,50));expect(r.pageIds()).toHaveLength(1)
  expect(o.candidates[0].reason).toContain('thai cuisine');expect(o.candidates[0].reason).not.toContain('42 Quay')
+})
+it('excludes bare artworks and widens sparse activity coverage to named leisure venues',async()=>{
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-key');const urls:URL[]=[]
+ vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{
+  urls.push(u);if(u.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80}]}))
+  const widened=u.searchParams.get('filter')!.endsWith(',10000')
+  const p=(name:string,id:string,categories:string[],raw:Record<string,string>={})=>({properties:{name,place_id:id,categories,datasource:{raw},lat:25,lon:-80}})
+  return new Response(JSON.stringify({features:widened?[p('Tide Museum','museum',['entertainment.museum']),p('Reed Park','park',['leisure.park']),p('Harbor Beach','beach',['beach']),p('Quay Plaque','plaque',['tourism.attraction'],{historic:'memorial'})]:[p('Quay Artwork','art',['tourism.attraction.artwork']),p('Quay Statue','statue',['tourism.attraction'],{tourism:'artwork'}),p('Quay Mural','mural',['tourism.attraction'],{artwork_type:'mural'})]}))
+ }))
+ const out=(await geoapifyPlaces('Harbor',['activity'],new SourceRecords()))!
+ expect(out.map(p=>p.name)).toEqual(['Tide Museum','Reed Park','Harbor Beach']);expect(urls).toHaveLength(3);expect(urls[2].searchParams.get('categories')).toContain('entertainment.museum');expect(urls[2].searchParams.get('filter')).toBe('circle:-80,25,10000')
 })
