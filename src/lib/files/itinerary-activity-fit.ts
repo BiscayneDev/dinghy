@@ -18,6 +18,9 @@ export async function validateActivityFit(input:unknown,request:string,packets:V
   if(!p||seen.has(r.line)||!['recommend','incidental','omit'].includes(r.decision)||typeof r.experience!=='string'||r.experience.length>250||typeof r.reason!=='string'||r.reason.length>250||!Array.isArray(r.requestBasis)||!r.requestBasis.length||r.requestBasis.some(x=>typeof x!=='string'||x.length<3||!request.toLowerCase().includes(x.toLowerCase()))||!Array.isArray(r.evidenceIds)||!Array.isArray(r.unknowns)||r.unknowns.some(x=>typeof x!=='string'||x.length>120)){fail('shape');continue}
   if(r.decision==='recommend'&&(p.status!=='ready'||!r.evidenceIds.length||r.experience.length<15)){fail('no_experience');continue}
   if(r.evidenceIds.some(id=>{const e=p.evidence.find(e=>e.id===id);return !e||e.origin!=='fetched_page'||records.pageUrl(e.source)!==e.url||!records.pageText(e.source)?.includes(e.excerpt)})){fail('evidence');continue}
+  // Omission never grants a recommendation. Only meaningful recommendations need a verdict.
+  if(r.decision!=='recommend'){seen.add(r.line);accepted.push(r);continue}
+  if(accepted.filter(f=>f.decision==='recommend').length>=3){fail('recommendation_limit');continue}
   let verdict='error';try{const result=await judge({request,verdict:r,packet:p});verdict=typeof result==='boolean'?(result?'yes':'no'):result.verdict}catch{verdict='error'}
   if(verdict!=='yes'){fail('judge_'+verdict);continue}
   seen.add(r.line);accepted.push(r)
