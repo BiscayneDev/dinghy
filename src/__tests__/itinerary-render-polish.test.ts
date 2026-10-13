@@ -58,15 +58,15 @@ it('compound EveningDinner slots are dining, not a place to recommend a hotel',(
 })
 
 it('all PDF heading depths keep their first long option row on the same page',async()=>{
- const {execFileSync}=await import('node:child_process')
+ const {extractText}=await import('unpdf')
  await mkdir('/tmp/reasons-proof',{recursive:true})
  // Exercise different starting positions around a page boundary, including H3 and wrapped headings.
  for(const depth of [2,3])for(const count of [12,17,22]){
   const body='## Friday\n'+Array.from({length:count},(_,i)=>'- Supplied agenda item '+i+' with timing to confirm.').join('\n')+'\n\n'+'#'.repeat(depth)+' Activities\n:::options\nTide Museum | unknown | Tide Museum: provider type is museum. | Address: 42 Quay St, Harbor https://fictional.test/'+ 'museum-source-page-'.repeat(6)+'\n:::'
   const path='/tmp/reasons-proof/heading-'+depth+'-'+count+'.pdf'
   await writeFile(path,await renderPdf({title:'Harbor Friday and weekend',body}))
-  const text=execFileSync('pdftotext',[path,'-'],{encoding:'utf8'})
-  const page=text.split('\f').find(p=>p.includes('Activities'))!
+  const {text}=await extractText(new Uint8Array(await renderPdf({title:'Harbor Friday and weekend',body})),{mergePages:false})
+  const page=text.find(p=>p.includes('Activities'))!
   expect(page).toContain('Tide Museum')
  }
 })
