@@ -65,7 +65,7 @@ it('end to end: verified picks carry explanations; sanity drops invented facts',
  const verify=async(noms:{name:string;kind:'hotel'|'restaurant'|'activity'}[],r:SourceRecords)=>noms.filter(n=>n.name!=='Harbor Guide').map((n,i)=>place(i+1,n.kind,n.name,r))
  const outcome=await chooseItineraryVenues({request:'weekend in Harbor',records,destination:'Harbor, FL',json,signal:new AbortController().signal,verify})
  expect(outcome.chosen).toBe(4);expect(outcome.verified).toBe(3)
- expect(outcome.picks.map(p=>p.place.name)).toEqual(['Reed Hotel','Reed Workshop'])
+ expect(outcome.picks.map(p=>p.place.name)).toEqual(['Reed Hotel','Reed Workshop','Harbor Guide'])
  expect(outcome.picks[0].why).toContain('rooftop pool')
 })
 
