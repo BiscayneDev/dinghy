@@ -24,3 +24,21 @@ describe('typed deliverable contract',()=>{
  it('reports an unfulfilled contract after a failed tool, even if the model claims it made the page',async()=>{const f=file(false);gateway([create(comparison),stop('I created the document.')]);const r=await chatWithTools([{role:'user',content:'Compare Harbor Inn and Park Lodge'}],{gatewayUrl:'https://gateway.test',apiKey:'test',model:'test'},[f],ctx);expect(r.deliverable?.state).toBe('unfulfilled');expect(r.reply).toContain('There is no new file to send.')})
  it('does not imply completion when no artifact tool is offered',async()=>{gateway([stop('A jacket and charger.')]);const r=await chatWithTools([{role:'user',content:'Make a packing list'}],{gatewayUrl:'https://gateway.test',apiKey:'test',model:'test'},[],ctx);expect(r.reply).toContain('no new file was created');expect(r.deliverable?.state).toBe('unfulfilled')})
 })
+
+it('a direct itinerary correction carries the original agenda and requires a new file in this turn',async()=>{
+ const original='Make an itinerary for visiting founders in Harbor on Friday. Office tour at 10am, working sessions, hotels, restaurants and weekend activities.'
+ const correction='No, Harbor North Coast, not the inland city.'
+ const history=[{role:'user',content:original},{role:'assistant',content:'An itinerary was made for the inland city.'},{role:'user',content:correction}]
+ const contract=selectDeliverable(history)
+ expect(contract?.kind).toBe('itinerary');expect(contract?.request).toContain('Office tour at 10am');expect(contract?.request).toContain(correction)
+ const search={name:'web_search',description:'test',inputSchema:{},execute:vi.fn(async()=>({success:false,error:'Research blocked'}))}
+ const reader={name:'web_fetch',description:'test',inputSchema:{},execute:vi.fn(async()=>({success:false,error:'Research blocked'}))}
+ const f=file();gateway([stop('I will create the corrected itinerary now.')])
+ const r=await chatWithTools(history,{gatewayUrl:'https://gateway.test',apiKey:'test',model:'test'},[search,reader,f],ctx)
+ expect(r.deliverable?.state).toBe('unfulfilled');expect(r.reply).toContain('no new file');expect(r.reply).not.toBe('I will create the corrected itinerary now.')
+})
+it('correction cannot restart an unrelated older artifact or override cancellation',()=>{
+ expect(selectDeliverable([{role:'user',content:'Make a packing list'},{role:'user',content:'What time is it?'},{role:'user',content:'No, Harbor North Coast'}])).toBeNull()
+ expect(selectDeliverable([{role:'user',content:'Make an itinerary'},{role:'user',content:'No, never mind'}])).toBeNull()
+ expect(selectDeliverable([{role:'assistant',content:'Make an itinerary'},{role:'user',content:'No, Harbor North Coast'}])).toBeNull()
+})
