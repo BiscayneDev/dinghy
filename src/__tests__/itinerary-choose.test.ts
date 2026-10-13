@@ -119,3 +119,10 @@ it('reserves a separately bounded final composition and never sends a second cho
  expect(s).toContain('itinerary:compose_error:')
  expect(s).toContain('itinerary:compose_http:')
 })
+
+it('a wrong but valid source ID is repaired only to the actual read URL containing the named venue',()=>{
+ const r=new SourceRecords();const a=r.capture('web_fetch',{url:'https://harbor.test/dining',content:'Lantern Table serves fish.'},'fictional')[0],b=r.capture('web_fetch',{url:'https://harbor.test/inn',content:'Reed Inn has courtyard rooms.'},'fictional')[0]
+ const out=parseChosenVenues({venues:[{name:'Reed Inn',kind:'hotel',why:'Courtyard rooms are available.',sourceId:a.id,sourceUrl:b.url}]},r)
+ expect(out[0].sourceId).toBe(b.id)
+ expect(parseChosenVenues({venues:[{name:'Invented Inn',kind:'hotel',why:'Courtyard rooms are available.',sourceId:a.id,sourceUrl:b.url}]},r)).toHaveLength(0)
+})
