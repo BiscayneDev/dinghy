@@ -1,4 +1,4 @@
-import {activityFitPrompt,activityFitJudgePrompt,parseActivityJudge,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
+import {activityFitPrompt,activityFitJudgePrompt,activityFitRepairPrompt,parseActivityJudge,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiEvidenceVenues,applyVerifiedApiReasons,activityResearchSlate,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,type EvidenceJudge,type VerifiedVenueReason} from '@/lib/files/itinerary-venue-evidence'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
@@ -980,7 +980,16 @@ export async function chatWithTools(
                             if(packets.some(p=>p.venue.kind==='activity')){
                                 const ar=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Assess evidence-backed visitor experiences. Return only JSON.'},{role:'user',content:activityFitPrompt(currentRequest,packets)}],stream:false,max_tokens:2200})}))
                                 let fits:import('@/lib/files/itinerary-activity-fit').ActivityFit[]=[]
-                                if(ar.ok){try{const aj=await ar.json() as {choices?:{message?:{content?:string}}[]};const av=await validateActivityFit(JSON.parse((aj.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,input=>activityVerdict(activityFitJudgePrompt(input)));fits=av.accepted;for(const code of [...new Set(av.rejected.map(r=>r.code))])await opts.onStage?.('tool','itinerary:activity_rejected:'+code)}catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:activity_fit:error')}}
+                                if(ar.ok){try{
+                                    const aj=await ar.json() as {choices?:{message?:{content?:string}}[]}
+                                    const av=await validateActivityFit(JSON.parse((aj.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,input=>activityVerdict(activityFitJudgePrompt(input)))
+                                    fits=av.accepted
+                                    for(const code of [...new Set(av.rejected.map(r=>r.code))])await opts.onStage?.('tool','itinerary:activity_rejected:'+code)
+                                    if(av.rejected.some(r=>r.code==='judge_no_unsupported_claim')&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>18000)){
+                                        const retry=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(9000)]):AbortSignal.timeout(9000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Repair unsupported visitor experiences using exact source text. Return only JSON.'},{role:'user',content:activityFitRepairPrompt(currentRequest,packets,av.rejected)}],stream:false,max_tokens:1400})}))
+                                        if(retry.ok){const body=await retry.json() as {choices?:{message?:{content?:string}}[]};const rv=await validateActivityFit(JSON.parse((body.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets.filter(p=>av.rejected.some(r=>r.line===p.venue.line&&r.code==='judge_no_unsupported_claim')),sourceRecords,input=>activityVerdict(activityFitJudgePrompt(input)));fits.push(...rv.accepted);await opts.onStage?.('tool','itinerary:activity_repair:a'+rv.accepted.filter(f=>f.decision==='recommend').length+'_r'+rv.rejected.length)}
+                                    }
+                                }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:activity_fit:error')}}
                                 const activitySelection=applyActivityFit(apiCandidates,activityPool,fits)
                                 apiCandidates.splice(0,apiCandidates.length,...activitySelection.candidates);activityChecked=true
                                 await opts.onStage?.('tool',`itinerary:activity_fit:o${activitySelection.omitted}_r${activitySelection.reselected}`)
@@ -1205,4 +1214,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                                                                 }
+                    }
