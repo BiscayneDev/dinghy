@@ -132,7 +132,7 @@ it('excludes bare artworks and widens sparse activity coverage to named leisure 
 it('broad activity research is not skipped merely because incidental downtown listings exist',async()=>{
  vi.stubEnv('GEOAPIFY_API_KEY','fictional');const urls:URL[]=[]
  vi.stubGlobal('fetch',vi.fn(async u=>{const url=new URL(String(u));urls.push(url);if(url.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80}]}));const wide=url.searchParams.get('filter')!.endsWith(',10000');const names=wide?['Tide Museum']:['Quay Marker','Reed Marker','Grove Marker'];return new Response(JSON.stringify({features:names.map((name,i)=>({properties:{name,categories:[wide?'entertainment.museum':'tourism.attraction'],lat:25,lon:-80,place_id:name,formatted:'Harbor'}}))}))}))
- const out=(await geoapifyPlaces('Harbor',['activity'],new SourceRecords()))!;expect(out.map(p=>p.name)).toContain('Tide Museum');expect(urls).toHaveLength(3)
+ const out=(await geoapifyPlaces('Harbor',['activity'],new SourceRecords()))!;expect(out.map(p=>p.name)).toContain('Tide Museum');expect(urls).toHaveLength(3);expect(urls[2].searchParams.get('categories')).not.toContain('tourism.attraction');expect(urls[1].searchParams.get('categories')).toBe('tourism.attraction')
 })
 
 it('research slate samples diverse experience subtypes without granting a type recommendation',()=>{
