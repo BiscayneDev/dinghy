@@ -1,6 +1,6 @@
 import type {SourceRecords} from './source-records'
 import {compileItineraryCandidates,itineraryCandidateErrorCode} from './itinerary-candidates'
-import {isHubUrl,isNonVenueName,isCategoryPhrase,placeWordsFrom,GEO_NAMES,extractMentions} from './itinerary-mentions'
+import {isHubUrl,isNonVenueName,isCategoryPhrase,placeWordsFrom,GEO_NAMES,GEO_CITIES,GEO_US_STATES,GEO_COUNTRIES,extractMentions} from './itinerary-mentions'
 import {SELECT_CANDIDATES_TOOL} from './itinerary-selection'
 type Kind='hotel'|'restaurant'|'activity'
 const GROUP_LIMITS={hotel:6,restaurant:5,activity:5}
@@ -163,6 +163,19 @@ export function destinationTokens(request:string):string[]{
  for(const g of GEO_NAMES)if(low.includes(' '+g+' '))add(g.replace(/\b\p{L}/gu,c=>c.toUpperCase()))
  return [...out]
 }
+/** Resolved destination for the typed venue path. The geocode query anchors on a known city (or the
+ * first non-state place phrase); a neighborhood, venue or team name near it never enters the query, so
+ * a same-named small city elsewhere cannot win. Mentioned states/countries are disambiguation hints for
+ * the geocoder results, not query text. */
+export type ResolvedDestination={query:string;states:string[];countries:string[];terms:string[]}
+export function resolveDestination(request:string):ResolvedDestination|null{
+ const tokens=destinationTokens(request);if(!tokens.length)return null
+ const states=tokens.filter(t=>GEO_US_STATES.has(t)),countries=tokens.filter(t=>GEO_COUNTRIES.has(t))
+ const cities=tokens.filter(t=>GEO_CITIES.has(t))
+ const query=cities[0]||tokens.find(t=>!states.includes(t)&&!countries.includes(t))
+ if(!query)return null
+ return {query,states,countries,terms:tokens}
+}
 const normKey=(t:string)=>t.toLowerCase().replace(/^the\s+/,'').replace(/[^\p{L}\p{N}]+/gu,'')
 export type Verify=(name:string,kind:Kind,quote:string)=>Promise<boolean>
 /** Mechanical checks (literal quote, name inside the quote, not a brand/place/category) then one bounded yes/no verification per pick. */
@@ -276,4 +289,4 @@ export function verifyPrompt(name:string,kind:Kind,quote:string,destination=''):
  const what=kind==='hotel'?'a hotel or lodging property':kind==='restaurant'?'a restaurant, cafe or bar':'an attraction, museum, tour, venue or activity provider'
  const wrong=kind==='hotel'?'a restaurant, attraction or other non-lodging place':kind==='restaurant'?'a hotel, attraction or other non-food place':'a hotel or a restaurant'
  return `Name: "${name}"\nSource context (including surrounding prose): "${quote}"\n\nIs "${name}" a named business or place that is ${what}${destination?' in or near '+destination:''}? Answer yes only if the source context identifies the complete name as a ${kind==='hotel'?'lodging property':kind==='restaurant'?'place to eat or drink':'attraction or activity provider'} rather than an area or category. A named entry in an explicit restaurant/hotel/attraction list is type evidence even without a descriptive sentence. This checks venue identity and kind, not proof of live hours, availability or prices. Answer no if it is ${wrong}, a city, neighborhood, street, district, area, website, meal, event or category, outside ${destination||'the destination'}, news of a closure, demolition or future opening, a chopped or incomplete heading fragment, or if you are unsure. The name must be the full proper-name run in its source line, not a suffix or substring of a longer venue name. A bare heading with no venue category or descriptive context is not evidence; use its page title, category and surrounding prose. Never use another entry to supply evidence about this name. Answer with exactly one word: yes or no.`
- }
+}
