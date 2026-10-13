@@ -7,7 +7,10 @@ export const GEOAPIFY_ATTRIBUTION='Venue names, categories and addresses: Geoapi
 const categories:Record<PlaceKind,string>={hotel:'accommodation.hotel',restaurant:'catering.restaurant',activity:'tourism.attraction'}
 const num=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x)
 /** Requests are bounded and sequential (five at most), below the provider's 5 requests/second plan limit. Never log URL/errors with the secret. */
-export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],records:SourceRecords,signal?:AbortSignal,onFallback?:(reason:string)=>void):Promise<ApiPlace[]|null>{
+
+/** Two-letter codes let a state hint match the geocoder's state_code when the full state name differs. */
+const US_STATE_CODES:Record<string,string>={alabama:'al',alaska:'ak',arizona:'az',arkansas:'ar',california:'ca',colorado:'co',connecticut:'ct',delaware:'de',florida:'fl',georgia:'ga',hawaii:'hi',idaho:'id',illinois:'il',indiana:'in',iowa:'ia',kansas:'ks',kentucky:'ky',louisiana:'la',maine:'me',maryland:'md',massachusetts:'ma',michigan:'mi',minnesota:'mn',mississippi:'ms',missouri:'mo',montana:'mt',nebraska:'ne',nevada:'nv','new hampshire':'nh','new jersey':'nj','new mexico':'nm','new york':'ny','north carolina':'nc','north dakota':'nd',ohio:'oh',oklahoma:'ok',oregon:'or',pennsylvania:'pa','rhode island':'ri','south carolina':'sc','south dakota':'sd',tennessee:'tn',texas:'tx',utah:'ut',vermont:'vt',virginia:'va',washington:'wa','west virginia':'wv',wisconsin:'wi',wyoming:'wy'}
+export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],records:SourceRecords,signal?:AbortSignal,onFallback?:(reason:string)=>void,hints?:{states?:string[];countries?:string[];resolved?:{label?:string}}):Promise<ApiPlace[]|null>{
  const fail=(reason:string)=>{onFallback?.(reason);return null}
  const key=process.env.GEOAPIFY_API_KEY;if(!key)return fail('missing_key');if(!destination.trim())return fail('geocode_empty')
  let phase='geocode'
@@ -17,13 +20,27 @@ export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],record
   const ac=AbortSignal.timeout(6000),r=await fetch(u,{signal:signal?AbortSignal.any([signal,ac]):ac});if(!r.ok){status=r.status;throw new Error('Provider request failed')};return r.json()
  }
  try{
-  const geo=await get('v1/geocode/search',{text:destination,type:'city',limit:'5',format:'json'}) as {results?:{lat?:unknown;lon?:unknown;result_type?:string;rank?:{importance?:number;confidence?:number;confidence_city_level?:number}}[]}
-  const hits=(geo.results||[]).filter(h=>num(h.lat)&&num(h.lon))
-  const score=(h:typeof hits[number])=>(h.result_type==='city'?10:0)+(h.rank?.importance??0)+(h.rank?.confidence_city_level??h.rank?.confidence??0)
+  const geo=await get('v1/geocode/search',{text:destination,type:'city',limit:'5',format:'json'}) as {results?:{lat?:unknown;lon?:unknown;result_type?:string;city?:string;state?:string;state_code?:string;country?:string;country_code?:string;formatted?:string;rank?:{importance?:number;confidence?:number;confidence_city_level?:number}}[]}
+  let hits=(geo.results||[]).filter(h=>num(h.lat)&&num(h.lon))
+  // A request that names a state or country never anchors outside it; fail closed, never a same-named small city elsewhere.
+  if(hints?.states?.length){
+   const wanted=hints.states.map(s=>s.toLowerCase()),codes=wanted.map(s=>US_STATE_CODES[s]||'')
+   const matching=hits.filter(h=>{const st=(h.state||'').toLowerCase(),code=(h.state_code||'').toLowerCase();return wanted.includes(st)||codes.includes(code)&&!!code})
+   if(!matching.length)return fail('geocode_place_mismatch')
+   hits=matching
+  }else if(hints?.countries?.length){
+   const wanted=hints.countries.map(c=>c.toLowerCase())
+   const matching=hits.filter(h=>wanted.includes((h.country||'').toLowerCase()))
+   if(!matching.length)return fail('geocode_place_mismatch')
+   hits=matching
+  }
+  // Prominence (importance) dominates; result type and confidence only break ties, so a same-named small city cannot outrank the major one.
+  const score=(h:typeof hits[number])=>(h.rank?.importance??0)*10+(h.result_type==='city'?1:0)+(h.rank?.confidence_city_level??h.rank?.confidence??0)
   const anchor=[...hits].sort((a,b)=>score(b)-score(a))[0]
   if(!anchor)return fail('geocode_empty')
   const confidence=anchor.rank?.confidence_city_level??anchor.rank?.confidence
   if(confidence!==undefined&&confidence<0.3)return fail('geocode_low_confidence')
+  if(hints?.resolved)hints.resolved.label=[anchor.city,anchor.state_code||anchor.state,anchor.country_code||anchor.country].filter((x):x is string=>typeof x==='string'&&!!x).join(', ')
   phase='places'
   const out:ApiPlace[]=[],seen=new Set<string>(),providerRecords=new SourceRecords()
   for(const kind of kinds){
@@ -176,4 +193,24 @@ export async function researchApiReasons(picks:Record<string,unknown>[],places:A
   }catch{missing++}finally{if(timer)clearTimeout(timer);controller.abort()}
  }))
  return {found,missing}
+}
+
+
+// Evidence/synthesis API for the routed orchestration. The old literal-clause helpers
+// remain compatibility-only until the caller migrates; they are not synthesis validation.
+export {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt} from './itinerary-venue-evidence'
+export type {VenueEvidencePacket,VerifiedVenueReason,EvidenceJudge,EvidenceDestination,EvidenceIO} from './itinerary-venue-evidence'
+export function apiEvidenceVenues(picks:Record<string,unknown>[],places:ApiPlace[]){
+ return picks.flatMap(c=>{const p=places.find(p=>p.source===(c.name as {source?:string}|undefined)?.source);return p?[{line:p.line,name:p.name,kind:p.kind,address:p.address}]:[]})
+}
+/** Apply only independently evidence-checked synthesized reasons. Return missing lines so
+ * orchestration can omit/downrank them or label the factual listing as unresearched. */
+export function applyVerifiedApiReasons(reasons:import('./itinerary-venue-evidence').VerifiedVenueReason[],picks:Record<string,unknown>[],places:ApiPlace[]):{accepted:number;missing:number[];citations:{line:number;source:string;url:string;claim:string}[]}{
+ let accepted=0;const citations:{line:number;source:string;url:string;claim:string}[]=[]
+ const missing:number[]=[]
+ for(const c of picks){const p=places.find(p=>p.source===(c.name as {source?:string}|undefined)?.source);if(!p)continue;const reason=reasons.find(r=>r.line===p.line)
+  if(!reason){missing.push(p.line);c.reason='Provider listing only; search evidence did not support a recommendation.';continue}
+  c.reason=reason.why;accepted++;for(const ref of reason.citations)citations.push({line:p.line,source:ref.source,url:ref.url,claim:ref.claim})
+ }
+ return {accepted,missing,citations}
 }

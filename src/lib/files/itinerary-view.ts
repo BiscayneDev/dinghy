@@ -1,6 +1,6 @@
 import type {SourceRecords} from './source-records'
 import {compileItineraryCandidates,itineraryCandidateErrorCode} from './itinerary-candidates'
-import {isHubUrl,isNonVenueName,isCategoryPhrase,placeWordsFrom,GEO_NAMES,extractMentions} from './itinerary-mentions'
+import {isHubUrl,isNonVenueName,isCategoryPhrase,placeWordsFrom,GEO_NAMES,GEO_CITIES,GEO_US_STATES,GEO_COUNTRIES,extractMentions} from './itinerary-mentions'
 import {SELECT_CANDIDATES_TOOL} from './itinerary-selection'
 type Kind='hotel'|'restaurant'|'activity'
 const GROUP_LIMITS={hotel:6,restaurant:5,activity:5}
@@ -162,6 +162,30 @@ export function destinationTokens(request:string):string[]{
  const low=' '+request.toLowerCase().replace(/[^\p{L}\s]+/gu,' ').replace(/\s+/g,' ')+' '
  for(const g of GEO_NAMES)if(low.includes(' '+g+' '))add(g.replace(/\b\p{L}/gu,c=>c.toUpperCase()))
  return [...out]
+}
+/** Resolved destination for the typed venue path. The geocode query anchors on a known city (or the
+ * first non-state place phrase); a neighborhood, venue or team name near it never enters the query, so
+ * a same-named small city elsewhere cannot win. Mentioned states/countries are disambiguation hints for
+ * the geocoder results, not query text. */
+export type ResolvedDestination={query:string;states:string[];countries:string[];terms:string[]}
+export function resolveDestination(request:string):ResolvedDestination|null{
+ const marker='\n\nLatest user correction (supersedes conflicting details above): '
+ const ix=request.lastIndexOf(marker)
+ if(ix>=0){
+  const prior=resolveDestination(request.slice(0,ix)),corrected=resolveDestination(request.slice(ix+marker.length))
+  if(corrected)return corrected
+  const hints=destinationTokens(request.slice(ix+marker.length))
+  const states=hints.filter(t=>GEO_US_STATES.has(t)),countries=hints.filter(t=>GEO_COUNTRIES.has(t))
+  if(prior&&(states.length||countries.length))return {...prior,states,countries,terms:[prior.query,...states,...countries]}
+  return prior
+ }
+
+ const tokens=destinationTokens(request);if(!tokens.length)return null
+ const states=tokens.filter(t=>GEO_US_STATES.has(t)),countries=tokens.filter(t=>GEO_COUNTRIES.has(t))
+ const cities=tokens.filter(t=>GEO_CITIES.has(t))
+ const query=cities[0]||tokens.find(t=>!states.includes(t)&&!countries.includes(t))
+ if(!query)return null
+ return {query,states,countries,terms:tokens}
 }
 const normKey=(t:string)=>t.toLowerCase().replace(/^the\s+/,'').replace(/[^\p{L}\p{N}]+/gu,'')
 export type Verify=(name:string,kind:Kind,quote:string)=>Promise<boolean>

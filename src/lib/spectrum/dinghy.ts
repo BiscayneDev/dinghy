@@ -1,9 +1,10 @@
-import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiReasonPrompt,applyApiReasons,researchApiReasons,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
+import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiEvidenceVenues,applyVerifiedApiReasons,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
+import {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,type EvidenceJudge,type VerifiedVenueReason} from '@/lib/files/itinerary-venue-evidence'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
 import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
 import {isHubUrl,sourceScore} from '@/lib/files/itinerary-mentions'
-import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt,destinationTokens} from '@/lib/files/itinerary-view'
+import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt,destinationTokens,resolveDestination} from '@/lib/files/itinerary-view'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
@@ -622,6 +623,8 @@ export async function chatWithTools(
     let unsupportedKinds:string[]=[]
     let menuShown=false,apiAttempted=false
     let apiPlaces:ApiPlace[]|null=null
+    let destLabel='',destTerms:string[]=[]
+    let reasonCitations:{line:number;source:string;url:string;claim:string}[]=[]
     const widenAttempts:Record<string,number>={}
     // Itinerary searches are steered to guides and roundups that list several venues, not single news stories.
     const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;return itineraryResearch&&name==='web_search'&&typeof q==='string'&&!/\b(guide|best|top)\b/i.test(q)?{...(i as Record<string,unknown>),query:q+' best hotels restaurants things to do guide'}:i}
@@ -663,7 +666,7 @@ export async function chatWithTools(
     let successfulSearches = 0
     let sourceOnly = true
     const foundSources: { title: string; url: string }[] = []
-    const currentRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
+    const currentRequest = contract?.request ?? [...history].reverse().find(m => m.role === 'user')?.content ?? ''
     let recoveryUsed=false
     let recoveryTool:string|undefined
     let validationFailures=0
@@ -700,11 +703,16 @@ export async function chatWithTools(
             messages.push({ role: 'system', content: RESEARCH_FINISH })
         }
         if(itineraryResearch&&successfulSearches>0&&!apiAttempted){
-            apiAttempted=true;const destination=destinationTokens(currentRequest).join(' ')
+            apiAttempted=true
+            const resolvedDest=resolveDestination(currentRequest)
+            const destination=resolvedDest?.query||''
+            if(resolvedDest)destTerms=resolvedDest.terms
             if(destination&&!egressRejection('web_search',JSON.stringify({query:destination}),tainted,corpus)){
                 await assertAccountActive(ctx.userId,ctx.chatGuid)
                 let fallbackReason='unknown'
-                apiPlaces=await withinTurn(opts.deadlineAt,signal=>geoapifyPlaces(destination,requiredKinds(currentRequest) as PlaceKind[],sourceRecords,signal,reason=>{fallbackReason=reason}))
+                const resolvedOut:{label?:string}={}
+                apiPlaces=await withinTurn(opts.deadlineAt,signal=>geoapifyPlaces(destination,requiredKinds(currentRequest) as PlaceKind[],sourceRecords,signal,reason=>{fallbackReason=reason},{states:resolvedDest?.states,countries:resolvedDest?.countries,resolved:resolvedOut}))
+                if(resolvedOut.label)destLabel=resolvedOut.label
                 if(apiPlaces){mapResearchRead=true;foundSources.push({title:'Geoapify venue listings',url:'https://www.geoapify.com/places-api/'})}
                 await opts.onStage?.('tool',`itinerary:places_api:${apiPlaces?'ready_'+apiPlaces.length:'fallback_'+fallbackReason}`)
             }
@@ -914,7 +922,7 @@ export async function chatWithTools(
                     verifyCalls++
                     try{
                         const ac=new AbortController();const timer=setTimeout(()=>ac.abort(),8000)
-                        const r=await withinTurn(opts.deadlineAt,(signal)=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,ac.signal]):ac.signal,method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You verify venue names against page text. Reply with exactly one word.'},{role:'user',content:verifyPrompt(name,kind,quote,destinationTokens(currentRequest).join(' '))}],stream:false,max_tokens:8})}))
+                        const r=await withinTurn(opts.deadlineAt,(signal)=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,ac.signal]):ac.signal,method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You verify venue names against page text. Reply with exactly one word.'},{role:'user',content:verifyPrompt(name,kind,quote,destLabel||destinationTokens(currentRequest).join(' '))}],stream:false,max_tokens:8})}))
                         if(!r.ok){clearTimeout(timer);return false}
                         const j=await r.json() as {choices?:{message?:{content?:unknown}}[]}
                         const c=j.choices?.[0]?.message?.content
@@ -926,18 +934,42 @@ export async function chatWithTools(
                 const picked=apiPlaces?compileApiPlaces(parsed,apiPlaces,sourceRecords):await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
                 if(apiPlaces&&'candidates'in picked){
                     const reasonPlaces=apiPlaces
+                    const acceptedReasons:VerifiedVenueReason[]=[]
                     const searcher=tools.find(t=>t.name==='web_search'),reader=tools.find(t=>t.name==='web_fetch')
-                    if(searcher&&reader&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>14000)){
+                    // Evidence collection is overall-capped inside withinTurn; per-venue budgets plus a required routed
+                    // judge per reason keep latency bounded against the turn deadline. No judge, no recommendation why.
+                    if(searcher&&reader&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>45000)){
                         await assertAccountActive(ctx.userId,ctx.chatGuid)
                         const io={search:async(query:string,signal:AbortSignal)=>{if(egressRejection('web_search',JSON.stringify({query}),tainted,corpus))return {};toolCallCount++;const r=await searcher.execute({query,maxResults:3},{...ctx,signal});return r.success?r.data:{}},read:async(url:string,signal:AbortSignal)=>{if(egressRejection('web_fetch',JSON.stringify({url}),tainted,corpus))return {};toolCallCount++;const r=await reader.execute({url},{...ctx,signal});return r.success?r.data:{}}}
-                        const v=await researchApiReasons(picked.candidates,reasonPlaces,destinationTokens(currentRequest).join(' '),sourceRecords,io)
-                        await opts.onStage?.('tool',`itinerary:venue_reasons:f${v.found}_m${v.missing}`)
-                        for(const p of reasonPlaces)if(p.webSource){const url=sourceRecords.pageUrl(p.webSource);if(url&&!foundSources.some(s=>s.url===url))foundSources.push({title:sourceRecords.pageTitle(p.webSource)||p.name,url})}
-                    }
-                    try{
-                        const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(8000)]):AbortSignal.timeout(8000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Select exact evidence clauses for venue why lines. Return only JSON.'},{role:'user',content:apiReasonPrompt(picked.candidates,reasonPlaces,sourceRecords)}],stream:false,max_tokens:1600})}))
-                        if(r.ok){const j=await r.json() as {choices?:{message?:{content?:string}}[]};const raw=j.choices?.[0]?.message?.content||'';const v=applyApiReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),picked.candidates,reasonPlaces,sourceRecords);await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted}_r${v.rejected}`)}
-                    }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:reasons:fallback')}
+                        try{
+                            const venues=apiEvidenceVenues(picked.candidates,reasonPlaces)
+                            const packets=await withinTurn(opts.deadlineAt,signal=>collectVenueEvidence(venues,{query:destLabel||destinationTokens(currentRequest).join(' '),matchTerms:destTerms.length?destTerms:destinationTokens(currentRequest)},sourceRecords,io,{budgetMs:6000,concurrency:3,signal}))
+                            const ready=packets.filter(pk=>pk.status==='ready').length
+                            await opts.onStage?.('tool',`itinerary:venue_evidence:r${ready}_m${packets.length-ready}`)
+                            if(ready){
+                                const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Write evidence-grounded venue reasons. Return only JSON.'},{role:'user',content:venueSynthesisPrompt(currentRequest,packets)}],stream:false,max_tokens:3000})}))
+                                if(r.ok){
+                                    const j=await r.json() as {choices?:{message?:{content?:string}}[]};const raw=j.choices?.[0]?.message?.content||''
+                                    const judge:EvidenceJudge=async(input,jsignal)=>{
+                                        // Bounded separate routed verdict; anything but a clear YES rejects the reason.
+                                        try{
+                                            const jr=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:AbortSignal.any([...(signal?[signal]:[]),...(jsignal?[jsignal]:[]),AbortSignal.timeout(6000)]),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You are an evidence judge. Reply with exactly one word.'},{role:'user',content:venueReasonJudgePrompt(input)}],stream:false,max_tokens:8})}))
+                                            if(!jr.ok)return false
+                                            const jj=await jr.json() as {choices?:{message?:{content?:unknown}}[]}
+                                            return /^\W*yes\W*$/i.test(String(jj.choices?.[0]?.message?.content||''))
+                                        }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return false}
+                                    }
+                                    const v=await validateVenueReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,judge)
+                                    acceptedReasons.push(...v.accepted)
+                                    await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted.length}_r${v.rejected.length}`)
+                                }
+                            }
+                        }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:reasons:fallback')}
+                    }else if(apiPlaces)await opts.onStage?.('tool','itinerary:venue_evidence:skipped_budget')
+                    // Unverified venues keep an honest provider-listing line, never a generic type claim presented as a reason.
+                    const applied=applyVerifiedApiReasons(acceptedReasons,picked.candidates,reasonPlaces)
+                    reasonCitations=applied.citations
+                    for(const c of applied.citations){const url=c.url;if(url&&!foundSources.some(s=>s.url===url))foundSources.push({title:sourceRecords.pageTitle(c.source)||c.claim.slice(0,80),url})}
                 }
                 {const acc={hotel:0,restaurant:0,activity:0};for(const c of ('candidates' in picked?picked.candidates:[]) as {kind:'hotel'|'restaurant'|'activity'}[])acc[c.kind]++
                 const rej:Record<string,number>={};for(const d of picked.dropped)rej[d]=(rej[d]??0)+1
@@ -1013,9 +1045,12 @@ export async function chatWithTools(
                             // The server renders stay/options/sources from the stored picks; any model-authored copies are dropped, not errors.
                             if(typeof b==='string'&&/(?:^|\n)\s*:::(?:stay|options|sources)\b/i.test(b)){await opts.onStage?.('tool','itinerary:manual_blocks_stripped');input={...(input as Record<string,unknown>),body:b.replace(/(^|\n)[ \t]*:::(?:stay|options|sources)\b[^\n]*\n[\s\S]*?\n[ \t]*:::[ \t]*(?=\n|$)/gi,'$1')}}
                             if(apiPlaces){
+                                // Evidence-checked citations only: venue name plus its fetched source link, one per venue.
                                 const citationPicks=selectedCandidates
-                                const citations=apiPlaces.filter(p=>p.webSource&&citationPicks.some(c=>(c.name as {source:string}).source===p.source&&c.reason===p.webReason)).map(p=>'- '+p.name+': {{source:'+p.webSource+'.url}}')
-                                input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))+(citations.length?'\n\n## Recommendation evidence\n'+citations.join('\n'):'')}
+                                const citations=reasonCitations.filter(c=>{const p=apiPlaces!.find(p=>p.line===c.line);return p&&citationPicks.some(pk=>(pk.name as {source:string}).source===p.source)})
+                                const seenCit=new Set<string>(),citLines:string[]=[]
+                                for(const c of citations){const p=apiPlaces!.find(p=>p.line===c.line)!,key=p.line+'|'+c.source;if(seenCit.has(key))continue;seenCit.add(key);citLines.push('- '+p.name+': {{source:'+c.source+'.url}}')}
+                                input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))+(citLines.length?'\n\n## Recommendation evidence\n'+citLines.join('\n'):'')}
                             };
                         }
                     }
@@ -1133,4 +1168,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+        }

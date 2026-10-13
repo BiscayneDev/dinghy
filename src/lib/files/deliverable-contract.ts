@@ -23,7 +23,13 @@ export function selectDeliverable(history: Line[]): DeliverableContract | null {
     if (mapArtifactTurn(history)) return { kind: 'map', request: current }
     const own = classify(current)
     if (own) return own
-    return /\b(?:make|create|send|do|try)\b[^.!?\n]{0,50}\b(?:one|it|again)\b/i.test(current) ? classify(users.at(-2)?.content ?? '') : null
+    const previous=classify(users.at(-2)?.content??'')
+    // A direct correction inherits only the immediately previous authored request.
+    // Preserve the user's correction verbatim; location resolution owns supersession.
+    if(previous&&/^\s*(?:no[,!: ]|actually\b|i meant\b|not\b|instead\b|correction\b)/i.test(current)&&current.trim().length>=8){
+        return {...previous,request:previous.request+'\n\nLatest user correction (supersedes conflicting details above): '+current}
+    }
+    return /\b(?:make|create|send|do|try)\b[^.!?\n]{0,50}\b(?:one|it|again)\b/i.test(current) ? previous : null
 }
 export function contractNote(c: DeliverableContract): string {
     const shape = {

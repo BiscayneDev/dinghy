@@ -205,7 +205,12 @@ it('typed provider listings feed model selection and publish attribution without
   if(String(u)==='https://harbor.test/venue')return new Response('<html><title>Harbor venues</title><body>Harbor city. Harbor &amp; Reed Inn has a courtyard garden and a reading lounge. Harbor Cafe serves seasonal vegetable bowls and wood-fired noodles. Harbor Museum houses maritime paintings and model ships.</body></html>')
   if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel, dining and museum public listings.'}]}))
   if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
-  const reasonReq=JSON.parse(init.body);if(reasonReq.max_tokens===1600){const payload=JSON.parse(reasonReq.messages[1].content.split('\n').slice(1).join('\n'));return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({reasons:payload.map((p:any)=>({line:p.line,why:p.clauses[0]}))})}}]}))}
+  const reasonReq=JSON.parse(init.body);if(reasonReq.max_tokens===3000){
+   const whys=['A courtyard garden and reading lounge make it a calm base for the fictional founders visit.','Seasonal vegetable bowls and wood-fired noodles suit a team dinner.','Its maritime paintings and model ships make a fitting weekend stop.']
+   const claims=['A courtyard garden and reading lounge','Seasonal vegetable bowls and wood-fired noodles','Maritime paintings and model ships']
+   const reasons=[1,2,3].map(line=>({line,why:whys[line-1],claims:[{text:claims[line-1],evidenceIds:['ev'+line+'_1']}],fit:'Fits the fictional founders visit.',fitBasis:['founders'],unknowns:['Hours and availability not checked']}))
+   return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({reasons})}}]}))
+  }
   requests.push(reasonReq)
   if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
   const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
@@ -215,7 +220,7 @@ it('typed provider listings feed model selection and publish attribution without
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
  const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
- expect(result.deliverable?.state).toBe('completed');expect(published).toHaveBeenCalledTimes(1);expect(stages).toContain('itinerary:places_api:ready_3');expect(stages).toContain('itinerary:accepted:h1_r1_a1');expect(stages).toContain('itinerary:reasons:a3_r0');expect(stages).toContain('itinerary:venue_reasons:f3_m0')
+ expect(result.deliverable?.state).toBe('completed');expect(published).toHaveBeenCalledTimes(1);expect(stages).toContain('itinerary:places_api:ready_3');expect(stages).toContain('itinerary:accepted:h1_r1_a1');expect(stages).toContain('itinerary:venue_evidence:r3_m0');expect(stages).toContain('itinerary:reasons:a3_r0')
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString(),markdown=files.files()[0].markdown;
  if(typeof markdown!=='string')throw new Error('Expected itinerary markdown')
  expect(html).toContain('Recommendation evidence');expect(markdown).toContain('https://harbor.test/venue');expect(html).not.toContain('{{source:');expect(html).toContain('courtyard garden');expect(html).toContain('wood-fired noodles');expect(html).toContain('maritime paintings');expect(html).toContain('Geoapify');expect(html).toContain('OpenStreetMap contributors');expect(html).not.toContain('apiKey=');expect(html).toContain('Harbor &amp; Reed Inn');for(const forbidden of ['amp;amp','Address&amp;#58','learn-more','Exotic seafood','Liberty Tower','Invented Cafe'])expect(html).not.toContain(forbidden);expect((markdown.match(/Office visit/gi)||[])).toHaveLength(1);expect((markdown.match(/© OpenStreetMap contributors/g)||[])).toHaveLength(1);expect((markdown.match(/## Source provenance/g)||[])).toHaveLength(1);await mkdir('/tmp/venue-proof',{recursive:true});await writeFile('/tmp/venue-proof/page.html',html);await writeFile('/tmp/venue-proof/file.pdf',files.files()[0].bytes)
