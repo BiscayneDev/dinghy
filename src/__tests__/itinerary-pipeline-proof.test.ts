@@ -189,3 +189,30 @@ it('two create_file calls in one gateway response publish and queue only the fir
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString();expect(html).toContain('hero-title');expect(html).toContain('Harbor Inn')
  expect(made.title).toBe('Synthetic Harbor founders itinerary');files.close()
 })
+
+it('typed provider listings feed model selection and publish attribution without page-name parsing',async()=>{
+ vi.stubEnv('TAVILY_API_KEY','fictional-key')
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-key')
+ const url='https://harbor.test/visitors'
+ const ask='Make an itinerary for fictional founders visiting Harbor on Friday. Office visit10am then working sessions, hotel and restaurant recommendations and weekend activities.'
+ const body='## Friday\n- 10:00 User supplied office visit.\n- Working sessions: venue and duration to confirm.\n## Weekend\nPlans to confirm.'
+ const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
+ const files=fileToolsFor(),stages:string[]=[],requests:any[]=[]
+ published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
+ vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
+  if(String(u).startsWith('https://api.geoapify.com/')){const url=new URL(String(u));if(url.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,rank:{confidence:1}}]}));const category=url.searchParams.get('categories')!,name=category.startsWith('accommodation')?'Harbor Inn':category.startsWith('catering')?'Harbor Cafe':'Harbor Museum';return new Response(JSON.stringify({features:[{properties:{name,categories:[category],lat:25,lon:-80,place_id:name,formatted:'42 Quay St, Harbor'}}]}))}
+  if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel, dining and museum public listings.'}]}))
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
+  requests.push(JSON.parse(init.body))
+  if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
+  const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
+  const name=n===1?'web_search':n===2?'select_itinerary_candidates':'create_file'
+  const args=name==='web_search'?{query:'Harbor visitor guide'}:name==='select_itinerary_candidates'?{candidates:[{kind:'hotel',line:1},{kind:'restaurant',line:2},{kind:'activity',line:3}]}:{title:'Synthetic Harbor itinerary',body,format:'pdf',kind:'itinerary'}
+  return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
+ }))
+ const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
+ const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ expect(result.deliverable?.state).toBe('completed');expect(published).toHaveBeenCalledTimes(1);expect(stages).toContain('itinerary:places_api:ready_3');expect(stages).toContain('itinerary:accepted:h1_r1_a1')
+ const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString();expect(html).toContain('Geoapify');expect(html).toContain('OpenStreetMap contributors');expect(html).not.toContain('apiKey=')
+
+})
