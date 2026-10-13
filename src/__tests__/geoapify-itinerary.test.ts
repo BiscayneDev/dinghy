@@ -1,5 +1,5 @@
 import {it,expect,vi,afterEach} from 'vitest'
-import {geoapifyPlaces,compileApiPlaces,apiPlaceMenu,GEOAPIFY_ATTRIBUTION} from '@/lib/files/geoapify-itinerary'
+import {geoapifyPlaces,compileApiPlaces,apiPlaceMenu,GEOAPIFY_ATTRIBUTION,apiReasonFacts,applyApiReasons,apiReasonPrompt} from '@/lib/files/geoapify-itinerary'
 import {SourceRecords} from '@/lib/files/source-records'
 import {compileItineraryCandidates} from '@/lib/files/itinerary-candidates'
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals()})
@@ -77,8 +77,21 @@ it('decodes provider identities before offsets and excludes ports and infrastruc
  vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{
   if(u.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80}]}))
   const props=(name:string,id:string,raw:Record<string,string>={},cats=['tourism.attraction'])=>({name,place_id:id,categories:cats,lat:25,lon:-80,formatted:'42 Quay St &amp;amp; Harbor',datasource:{raw}})
-  return new Response(JSON.stringify({features:[props('Port of Harbor','port'),props('Quay Station','station'),props('Quay Landmark','transport',{},['tourism.attraction','transport.bus']),props('Quay Waterworks','works',{man_made:'works'}),props('Tide &amp;amp; Reed Museum','museum',{tourism:'museum'})].map(properties=>({properties}))}))
+  return new Response(JSON.stringify({features:[props('Tour Boat Boarding','boarding'),props('Quay Dock','dock'),props('Harbor Ferry','ferry'),props('Quay Tour-Boat','boat'),props('Quay Landmark','tagged',{},['tourism.attraction','tourism.attraction.boat_boarding']),props('Port of Harbor','port'),props('Quay Station','station'),props('Quay Landmark','transport',{},['tourism.attraction','transport.bus']),props('Quay Waterworks','works',{man_made:'works'}),props('Tide &amp;amp; Reed Museum','museum',{tourism:'museum'})].map(properties=>({properties}))}))
  }))
  const r=new SourceRecords(),places=(await geoapifyPlaces('Harbor',['activity'],r))!
  expect(places).toHaveLength(1);expect(places[0].name).toBe('Tide & Reed Museum');expect(places[0].address).toBe('42 Quay St & Harbor');expect(places[0].attractionType).toBe('museum');expect(r.resolve({source:places[0].source,field:'content',start:0,end:places[0].end})).toMatchObject({value:'Tide & Reed Museum'})
+})
+
+it('routed-model why accepts only exact facts for that venue, never extra quality, hours or distance claims',()=>{
+ const r=new SourceRecords(),name='Lantern Cafe',rec=r.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',content:name},'2026-01-01T00:00:00Z')[0]
+ const p={line:1,kind:'restaurant' as const,name,address:'42 Quay St',cuisine:'thai',lat:25,lon:-80,id:'fictional',source:rec.id,start:0,end:name.length}
+ const compiled=compileApiPlaces(null,[p],r);if('error'in compiled)throw new Error(compiled.error)
+ const facts=apiReasonFacts(p,r)
+ expect(apiReasonPrompt(compiled.candidates,[p],r)).toContain('thai cuisine')
+ expect(compiled.candidates[0].reason).not.toMatch(/not independently|unverified/)
+ expect(compiled.candidates[0].catch).not.toContain('unverified')
+ for(const why of ['Best Thai food near your office.',facts[0]+' Open until 10pm.',facts[0].replace('thai','italian'),'Rook Kitchen: provider lists thai cuisine.'])expect(applyApiReasons({reasons:[{line:1,why}]},compiled.candidates,[p],r)).toEqual({accepted:0,rejected:1})
+ expect(applyApiReasons({reasons:[{line:1,why:facts[0]+' '+facts[1]}]},compiled.candidates,[p],r)).toEqual({accepted:1,rejected:0})
+ expect(compiled.candidates[0].reason).toBe(facts[0]+' '+facts[1])
 })
