@@ -38,3 +38,12 @@ it('a state hint filters to the matching state and mismatches fail closed',async
  await geoapifyPlaces('miami',['hotel'],new SourceRecords(),undefined,r=>{reason=r},{states:['nevada']})
  expect(reason).toBe('geocode_place_mismatch')
 })
+it('latest correction supersedes a prior city and state without losing the contract',()=>{
+ const marker='\n\nLatest user correction (supersedes conflicting details above): '
+ const r=resolveDestination('Make an itinerary in Miami Oklahoma.'+marker+'No, Miami Florida…')
+ expect(r?.query).toBe('miami');expect(r?.states).toEqual(['florida']);expect(r?.states).not.toContain('oklahoma')
+ const changed=resolveDestination('Make an itinerary in Boston Massachusetts.'+marker+'Actually Miami Florida.')
+ expect(changed?.query).toBe('miami');expect(changed?.states).toEqual(['florida'])
+ const stateOnly=resolveDestination('Make an itinerary in Miami Oklahoma.'+marker+'No, Florida instead.')
+ expect(stateOnly?.query).toBe('miami');expect(stateOnly?.states).toEqual(['florida'])
+})
