@@ -43,7 +43,7 @@ it('veto fires only on explicit closure text or a contradicting street address',
 })
 
 it('sanity checks parse to a per-name map and fail open on malformed output',()=>{
- expect(parseSanityChecks({checks:[{name:'Reed Hotel',ok:true},{name:'Lantern Table',ok:false}]}).get('lantern table')).toBe(false)
+ expect(parseSanityChecks({checks:[{name:'Reed Hotel',ok:true},{name:'Lantern Table',ok:false}]})!.get('lantern table')).toBe(false)
  expect(parseSanityChecks({nope:1})).toBeNull()
  expect(venueSanityPrompt([{name:'Reed Hotel',kind:'hotel',why:'x',excerpt:'y'}])).toContain('Reed Hotel')
 })
