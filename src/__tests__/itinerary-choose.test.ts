@@ -74,3 +74,13 @@ it('a broken chooser response yields no picks and never throws',async()=>{
  const outcome=await chooseItineraryVenues({request:'weekend',records,destination:'Harbor',json:async()=>'not json',signal:new AbortController().signal,verify:async()=>[]})
  expect(outcome.picks).toEqual([]);expect(outcome.chosen).toBe(0)
 })
+
+it('sanity excerpt stays in the exact hotel section, not a neighborhood above it',async()=>{
+ const records=new SourceRecords(),page=records.capture('web_fetch',{url:'https://fictional.test/stays',title:'Harbor stays',content:'### Beach neighborhood\nBeach access and personal goods shops.\n#### Reed Hotel\nRooftop pool with city views.\n#### Another Inn\nHas a spa.'},'fictional')[0]
+ let excerpt=''
+ await chooseItineraryVenues({request:'Harbor hotel',records,destination:'Harbor',signal:new AbortController().signal,verify:async(_n,r)=>[place(1,'hotel','Reed Hotel',r)],json:async prompt=>{
+ if(prompt.startsWith('Light fact check')){excerpt=prompt;return JSON.stringify({checks:[{name:'Reed Hotel',ok:false}]})}
+ return JSON.stringify({venues:[{name:'Reed Hotel',kind:'hotel',why:'Has beach access and nearby personal goods shops.',sourceId:page.id}]})
+ }})
+ expect(excerpt).toContain('Rooftop pool');expect(excerpt).not.toContain('Beach neighborhood');expect(excerpt).not.toContain('Has a spa.')
+})
