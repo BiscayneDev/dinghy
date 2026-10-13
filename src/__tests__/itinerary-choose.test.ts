@@ -128,3 +128,11 @@ it('a wrong but valid source ID is repaired only to the actual read URL containi
 })
 
 it('final composition replaces duplicated research payloads with metadata while keeping latest page text together',()=>{const s=readFileSync('src/lib/spectrum/dinghy.ts','utf8');expect(s).toContain('Full latest read pages are collected below for composition.');expect(s).toContain('itinerary:compose_rows:');})
+
+import {searchFailureCode} from '@/lib/tools/web'
+it('search failures expose only sanitized provider failure categories',()=>{
+ expect(searchFailureCode(new Error('Tavily API error: 432'))).toBe('quota')
+ expect(searchFailureCode(new Error('Tavily API error: 401'))).toBe('auth')
+ expect(searchFailureCode(new Error('Tavily API error: 429'))).toBe('rate')
+ expect(searchFailureCode(new Error('private arbitrary text'))).toBe('network')
+})
