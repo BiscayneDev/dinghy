@@ -52,3 +52,9 @@ it('a ranking label never borrows a neighboring hotels description',async()=>{
  if('error' in o)throw new Error(o.error)
  expect(String(o.candidates[0].reason)).not.toMatch(/Most romantic|rooftop garden/)
 })
+
+it('sentence-start adjective fragments never become names; single-name category headings can',()=>{
+ for(const text of ['This Kosher restaurant serves dinner.','Our Lovely restaurant serves dinner.','The Kosher restaurant serves dinner.','A Beautiful hotel has rooms.'])expect(extractLineName(text)).toBeNull()
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://fictional.test/food',title:'Harbor dining',content:'## Restaurants\n### Noriya\nThis Kosher restaurant serves dinner beside the harbor.'},'2026-01-01T00:00:00Z')
+ const names=buildPageView(r).entries.map(e=>e.name);expect(names).toContain('Noriya');expect(names).not.toContain('This Kosher')
+})
