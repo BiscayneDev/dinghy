@@ -925,9 +925,10 @@ export async function chatWithTools(
                 }
                 const picked=apiPlaces?compileApiPlaces(parsed,apiPlaces,sourceRecords):await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
                 if(apiPlaces&&'candidates'in picked){
+                    const reasonPlaces=apiPlaces
                     try{
-                        const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(8000)]):AbortSignal.timeout(8000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Select exact evidence clauses for venue why lines. Return only JSON.'},{role:'user',content:apiReasonPrompt(picked.candidates,apiPlaces,sourceRecords)}],stream:false,max_tokens:1600})}))
-                        if(r.ok){const j=await r.json() as {choices?:{message?:{content?:string}}[]};const raw=j.choices?.[0]?.message?.content||'';const v=applyApiReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),picked.candidates,apiPlaces,sourceRecords);await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted}_r${v.rejected}`)}
+                        const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(8000)]):AbortSignal.timeout(8000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Select exact evidence clauses for venue why lines. Return only JSON.'},{role:'user',content:apiReasonPrompt(picked.candidates,reasonPlaces,sourceRecords)}],stream:false,max_tokens:1600})}))
+                        if(r.ok){const j=await r.json() as {choices?:{message?:{content?:string}}[]};const raw=j.choices?.[0]?.message?.content||'';const v=applyApiReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),picked.candidates,reasonPlaces,sourceRecords);await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted}_r${v.rejected}`)}
                     }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:reasons:fallback')}
                 }
                 {const acc={hotel:0,restaurant:0,activity:0};for(const c of ('candidates' in picked?picked.candidates:[]) as {kind:'hotel'|'restaurant'|'activity'}[])acc[c.kind]++
@@ -1120,4 +1121,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                            }
+    }
