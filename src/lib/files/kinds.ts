@@ -1,3 +1,4 @@
+import {decodeEntities} from './entities'
 /**
  * Designed blocks for the page kinds people ask for most: weather, sports,
  * movies/books/games, trips and stays, and the news briefing. Same contract as
@@ -12,7 +13,7 @@ export const KIND_BLOCKS = ['weather', 'scores', 'media', 'stay', 'route', 'brie
 export type KindBlock = (typeof KIND_BLOCKS)[number]
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-export const cells = (line: string): string[] => line.split('|').map((c) => c.trim())
+export const cells = (line: string): string[] => line.split('|').map((c) => decodeEntities(c.trim()))
 const httpUrl = (u?: string) => (u && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(u) ? u : '')
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return '' } }
 

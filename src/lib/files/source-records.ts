@@ -130,8 +130,12 @@ export function bindFileSources(input: unknown, records: SourceRecords, required
     if (error) return { error }
     if (required && !count) return { error: 'This researched deliverable needs source bindings for its source facts. Use source_records IDs, not retyped names/prices/hours or invented values.' }
     if (typeof next.body === 'string' && used.size) {
-        const rows = [...used.values()].map(r => `- ${literal(r.title ?? 'Source')} (${r.origin === 'search' ? 'search snippet' : 'page text'}), checked ${literal(r.checked_at)}${r.published_date ? `, source date ${literal(r.published_date)}` : ', source date unknown'}: ${r.url}`)
-        next.body += '\n\n## Source provenance\nSource-reported text, not independent confirmation of current stock, access or a walking route. A listed terminal is not a verified route.\n\n'+rows.join('\n')
+        const rows = [...used.values()].filter(r=>r.url!=='https://www.geoapify.com/places-api/').map(r => `- ${literal(r.title ?? 'Source')} (${r.origin === 'search' ? 'search snippet' : 'page text'}), checked ${literal(r.checked_at)}${r.published_date ? `, source date ${literal(r.published_date)}` : ', source date unknown'}: ${r.url}`)
+        if(rows.length)next.body += '\n\n## Source provenance\nSource-reported text, not independent confirmation of current stock, access or a walking route. A listed terminal is not a verified route.\n\n'+rows.join('\n')
+        else if([...used.values()].some(r=>r.url==='https://www.geoapify.com/places-api/')) {
+            const attribution='Venue names, categories and addresses: Geoapify · © OpenStreetMap contributors. Provider listings do not confirm current hours, availability, prices or quality.'
+            next.body=next.body.replace(attribution,'').trimEnd()+'\n\n## Source provenance\n- '+attribution+' https://www.geoapify.com/places-api/'
+        }
     }
     if (typeof next.body === 'string' && next.body.length > 60_000) return {error:'Bound body is too long (max 60000 characters). Reduce source excerpts.'}
     return { input: next, count, usedSources:[...used.values()] }

@@ -59,3 +59,26 @@ Rook Kitchen serves seafood.`},'2026-01-01T00:00:00Z')
  if('error'in o)throw new Error(o.error)
  expect(o.candidates[0].reason).toContain('healthy bowls');expect(o.candidates[0].reason).not.toContain('seafood')
 })
+
+it('malformed picks cannot leave any available provider kind empty; fallback prefers cuisine/type then distance',()=>{
+ const r=new SourceRecords()
+ const specs=[['hotel','Harbor Inn',0.1,'',''],['restaurant','Quay Cafe',0.1,'',''],['restaurant','Lantern Cafe',0.2,'vegetarian',''],['restaurant','Reed Kitchen',0.3,'thai',''],['restaurant','Grove Table',0.4,'italian',''],['activity','Quay Landmark',0.1,'',''],['activity','Tide Museum',0.2,'','museum']]
+ const places=specs.map(([kind,name,distance,cuisine,attractionType],i)=>{const rec=r.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',content:String(name)},'2026-01-01T00:00:00Z')[0];return {line:i+1,kind:kind as 'hotel'|'restaurant'|'activity',name:String(name),distance:Number(distance),cuisine:String(cuisine),attractionType:String(attractionType),address:'',lat:25,lon:-80,id:String(i),source:rec.id,start:0,end:String(name).length}})
+ for(const input of [null,{}, {candidates:[null,{kind:'restaurant',line:1},{kind:'restaurant',line:9999}]}]){
+  const o=compileApiPlaces(input,places,r);if('error'in o)throw new Error(o.error)
+  expect(o.candidates.filter(c=>c.kind==='restaurant')).toHaveLength(3)
+  expect(o.candidates.filter(c=>c.kind==='hotel')).toHaveLength(1)
+  const names=o.candidates.map(c=>r.resolve(c.name)).map(v=>'value'in v?v.value:'')
+  expect(names).not.toContain('Quay Cafe');expect(names.indexOf('Tide Museum')).toBeLessThan(names.indexOf('Quay Landmark'))
+ }
+})
+it('decodes provider identities before offsets and excludes ports and infrastructure attractions',async()=>{
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-key')
+ vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{
+  if(u.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80}]}))
+  const props=(name:string,id:string,raw:Record<string,string>={},cats=['tourism.attraction'])=>({name,place_id:id,categories:cats,lat:25,lon:-80,formatted:'42 Quay St &amp;amp; Harbor',datasource:{raw}})
+  return new Response(JSON.stringify({features:[props('Port of Harbor','port'),props('Quay Station','station'),props('Quay Landmark','transport',{},['tourism.attraction','transport.bus']),props('Quay Waterworks','works',{man_made:'works'}),props('Tide &amp;amp; Reed Museum','museum',{tourism:'museum'})].map(properties=>({properties}))}))
+ }))
+ const r=new SourceRecords(),places=(await geoapifyPlaces('Harbor',['activity'],r))!
+ expect(places).toHaveLength(1);expect(places[0].name).toBe('Tide & Reed Museum');expect(places[0].address).toBe('42 Quay St & Harbor');expect(places[0].attractionType).toBe('museum');expect(r.resolve({source:places[0].source,field:'content',start:0,end:places[0].end})).toMatchObject({value:'Tide & Reed Museum'})
+})

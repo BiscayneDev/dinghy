@@ -1,4 +1,4 @@
-import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,GEOAPIFY_ATTRIBUTION,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
+import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
 import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
@@ -981,7 +981,7 @@ export async function chatWithTools(
                     if(call.function.name==='create_file'&&itineraryResearch){
                         const own=input&&typeof input==='object'?(input as {itinerary_candidates?:unknown}).itinerary_candidates:undefined
                         // If the gateway ignored the offered set and the call carries its own candidates, the compiler still validates them in full below.
-                        if(Array.isArray(own)){await opts.onStage?.('tool','itinerary:inline_candidates');bypassCandidates=own as Record<string,unknown>[]}
+                        if(Array.isArray(own)&&!apiPlaces){await opts.onStage?.('tool','itinerary:inline_candidates');bypassCandidates=own as Record<string,unknown>[]}
                         else if(!selectedCandidates||!input||typeof input!=='object'){validationFailures++;fileValidationPending=true;await opts.onStage?.('tool','invalid:itinerary_candidates_required');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({error:'Recommendations are not selected yet. No file was created.'})});continue}
                         else{
                             input=injectCandidates(input,selectedCandidates)
@@ -991,13 +991,13 @@ export async function chatWithTools(
                             // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
                             if(typeof (input as {body?:unknown}).body==='string'){const d=dedupePickBullets((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords));if(d.removed){await opts.onStage?.('tool',`itinerary:pick_bullets_deduped:${d.removed}`);input={...(input as Record<string,unknown>),body:d.body}}}
                             if(typeof (input as {body?:unknown}).body==='string')input={...(input as Record<string,unknown>),body:ensureWeekendGap((input as {body:string}).body,currentRequest,unsupportedKinds)}
-                            if(apiPlaces&&typeof (input as {body?:unknown}).body==='string')input={...(input as Record<string,unknown>),body:(input as {body:string}).body+'\n\n'+GEOAPIFY_ATTRIBUTION}
                             if(typeof (input as {body?:unknown}).body==='string'){const ws=ensureWorkingSessions((input as {body:string}).body,currentRequest);if(ws.added){await opts.onStage?.('tool','itinerary:working_sessions_added');input={...(input as Record<string,unknown>),body:ws.body}}}
                             if(unsupportedKinds.length&&typeof (input as {body?:unknown}).body==='string'&&!/## Not found/i.test((input as {body:string}).body))input={...(input as Record<string,unknown>),body:(input as {body:string}).body.trimEnd()+'\n\n## Not found\nI couldn\'t verify a pick for '+unsupportedKinds.map(k=>k==='activity'?'activities':k==='restaurant'?'restaurants':'hotels').join(' or ')+' from the pages I read. None are recommended here; the agenda above is unchanged.'}
                             {const bb=(input as {body?:unknown}).body;if(typeof bb==='string'){const cl=cleanEmptyHeadings(bb.split('\n')).join('\n');if(cl!==bb)input={...(input as Record<string,unknown>),body:cl}}}
                             const b=(input as {body?:unknown}).body
                             // The server renders stay/options/sources from the stored picks; any model-authored copies are dropped, not errors.
                             if(typeof b==='string'&&/(?:^|\n)\s*:::(?:stay|options|sources)\b/i.test(b)){await opts.onStage?.('tool','itinerary:manual_blocks_stripped');input={...(input as Record<string,unknown>),body:b.replace(/(^|\n)[ \t]*:::(?:stay|options|sources)\b[^\n]*\n[\s\S]*?\n[ \t]*:::[ \t]*(?=\n|$)/gi,'$1')}}
+                            if(apiPlaces){input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))}};
                         }
                     }
                     const schemaError=inputSchemaError(input,tool.inputSchema)
@@ -1114,4 +1114,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-}
+                                                                                                           }

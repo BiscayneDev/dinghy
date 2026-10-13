@@ -200,19 +200,21 @@ it('typed provider listings feed model selection and publish attribution without
  const files=fileToolsFor(),stages:string[]=[],requests:any[]=[]
  published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
  vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
-  if(String(u).startsWith('https://api.geoapify.com/')){const url=new URL(String(u));if(url.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,rank:{confidence:1}}]}));const category=url.searchParams.get('categories')!,name=category.startsWith('accommodation')?'Harbor Inn':category.startsWith('catering')?'Harbor Cafe':'Harbor Museum';return new Response(JSON.stringify({features:[{properties:{name,categories:[category],lat:25,lon:-80,place_id:name,formatted:'42 Quay St, Harbor'}}]}))}
+  if(String(u).startsWith('https://api.geoapify.com/')){const url=new URL(String(u));if(url.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,rank:{confidence:1}}]}));const category=url.searchParams.get('categories')!,name=category.startsWith('accommodation')?'Harbor &amp;amp; Reed Inn':category.startsWith('catering')?'Harbor Cafe':'Harbor Museum';return new Response(JSON.stringify({features:[{properties:{name,categories:[category],lat:25,lon:-80,place_id:name,formatted:'42 Quay St, Harbor'}}]}))}
   if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel, dining and museum public listings.'}]}))
   if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
   requests.push(JSON.parse(init.body))
   if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
   const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
   const name=n===1?'web_search':n===2?'select_itinerary_candidates':'create_file'
-  const args=name==='web_search'?{query:'Harbor visitor guide'}:name==='select_itinerary_candidates'?{candidates:[{kind:'hotel',line:1},{kind:'restaurant',line:2},{kind:'activity',line:3}]}:{title:'Synthetic Harbor itinerary',body,format:'pdf',kind:'itinerary'}
+  const args=name==='web_search'?{query:'Harbor visitor guide'}:name==='select_itinerary_candidates'?{candidates:[{kind:'hotel',line:1},{kind:'restaurant',line:9999},{kind:'restaurant',line:1},{kind:'activity',line:3}]}:{title:'Synthetic Harbor itinerary',body:body+'\n- Hotel Recommendations unknown / learn-more\n- Restaurant Recommendations unknown / learn-more\n- Exotic seafood dishes for dinner\n- Liberty Tower\n- 10am office visit\n',itinerary_candidates:[{kind:'restaurant',name:'Invented Cafe'}],format:'pdf',kind:'itinerary'}
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
  const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
  expect(result.deliverable?.state).toBe('completed');expect(published).toHaveBeenCalledTimes(1);expect(stages).toContain('itinerary:places_api:ready_3');expect(stages).toContain('itinerary:accepted:h1_r1_a1')
- const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString();expect(html).toContain('Geoapify');expect(html).toContain('OpenStreetMap contributors');expect(html).not.toContain('apiKey=')
+ const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString(),markdown=files.files()[0].markdown;
+ if(typeof markdown!=='string')throw new Error('Expected itinerary markdown')
+ expect(html).toContain('Geoapify');expect(html).toContain('OpenStreetMap contributors');expect(html).not.toContain('apiKey=');expect(html).toContain('Harbor &amp; Reed Inn');for(const forbidden of ['amp;amp','Address&amp;#58','learn-more','Exotic seafood','Liberty Tower','Invented Cafe'])expect(html).not.toContain(forbidden);expect((markdown.match(/Office visit/gi)||[])).toHaveLength(1);expect((markdown.match(/© OpenStreetMap contributors/g)||[])).toHaveLength(1);expect((markdown.match(/## Source provenance/g)||[])).toHaveLength(1)
 
 })
