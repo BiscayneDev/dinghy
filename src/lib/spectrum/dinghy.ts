@@ -1,5 +1,5 @@
 import {chooseItineraryVenues} from '@/lib/files/itinerary-choose'
-import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
+import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,namedLookupMatch,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence,diverseResearchSources} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
 import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
@@ -965,7 +965,7 @@ export async function chatWithTools(
                                 const j=await r.json() as {choices?:{message?:{content?:string}}[]};return j.choices?.[0]?.message?.content||''
                             }
                             const chooseDest=resolveDestination(currentRequest)
-                            const outcome=await chooseItineraryVenues({request:currentRequest,records:sourceRecords,destination:chooseDest?.query||destLabel,hints:{states:chooseDest?.states,countries:chooseDest?.countries},json:routedJson,signal:chooseController.signal,onStage:async stage=>{await opts.onStage?.('tool',stage)}})
+                            const outcome=await chooseItineraryVenues({request:currentRequest,records:sourceRecords,destination:chooseDest?.query||destLabel,hints:{states:chooseDest?.states,countries:chooseDest?.countries},verify:async(noms,records,signal)=>{const cached=apiPlaces!.filter(p=>noms.some(n=>n.kind===p.kind&&namedLookupMatch(n.name,p.name)));const missing=noms.filter(n=>!cached.some(p=>n.kind===p.kind&&namedLookupMatch(n.name,p.name)));if(!missing.length)return cached;const extra=await geoapifyPlaces(chooseDest?.query||destLabel,[...new Set(missing.map(n=>n.kind))],records,signal,undefined,{states:chooseDest?.states,countries:chooseDest?.countries,namedCandidates:missing});return [...cached,...(extra||[])]},json:routedJson,signal:chooseController.signal,onStage:async stage=>{await opts.onStage?.('tool',stage)}})
                             await opts.onStage?.('tool',`itinerary:choose:c${outcome.chosen}_v${outcome.verified}_k${outcome.picks.length}`)
                             if(outcome.picks.length){
                                 const verifiedPlaces=outcome.picks.map(p=>p.place)
@@ -1183,4 +1183,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                                                                                                          }
+                        }
