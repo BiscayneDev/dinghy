@@ -90,3 +90,14 @@ it('binds composed page URLs and preserves the picked name across a provider ali
  const out=await chooseItineraryVenues({request:'Harbor weekend',records,destination:'Harbor',signal:new AbortController().signal,json:async()=>JSON.stringify({venues:[{name:'South Harbor Beach',kind:'activity',why:'Coastal paths and picnic spots.',sourceUrl:page.url}]}),verify:async()=>[{line:1,kind:'activity',name:'South Harbor Pointe Beach',address:'Harbor',lat:1,lon:1,id:'fixture',source:page.id,start:0,end:18}]})
  expect(out.picks[0].place.name).toBe('South Harbor Beach');expect(out.picks[0].sourceId).toBe(page.id);expect(records.pageText(out.picks[0].place.source)?.slice(out.picks[0].place.start,out.picks[0].place.end)).toBe('South Harbor Beach')
 })
+
+import {readFileSync} from 'node:fs'
+it('free conversation gives early composition the same schema and enough output room as the final turn',()=>{
+ const source=readFileSync('src/lib/spectrum/dinghy.ts','utf8')
+ expect(source).toContain('The exact response shape is')
+ expect(source).toContain('max_tokens:1800')
+ expect(source).not.toContain('max_tokens:composeNow?1800:800')
+ expect(source).toContain("response_format:{type:'json_object'}")
+ expect(source).toContain('step<20&&!signal.aborted')
+ expect(source).toContain('Read-page sources available: ')
+})
