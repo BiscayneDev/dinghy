@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest'
 import {SourceRecords} from '@/lib/files/source-records'
-import {activityFitRepairPrompt,parseActivityJudge,activityFitJudgePrompt,incidentalActivityTags,activityFitPrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
+import {activityEvidenceSpans,repairableActivityRejection,activityFitRepairPrompt,parseActivityJudge,activityFitJudgePrompt,incidentalActivityTags,activityFitPrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
 it('flags marker subtypes without venue-name hardcodes and retains novel experience categories',()=>{
  expect(incidentalActivityTags(['tourism.attraction.marker'],{})).toBe(true);expect(incidentalActivityTags(['tourism.attraction'],{historic:'commemorative'})).toBe(true);expect(incidentalActivityTags(['tourism.attraction'],{tourism:'museum'})).toBe(false)
 })
@@ -46,7 +46,7 @@ it('typed experience verdicts fail closed and carry only finite diagnostic reaso
 it('repair targets only unsupported claims, not incidental or missing experiences',()=>{
  const packets=[1,2,3].map(line=>({venue:{line,name:'Fictional '+line,kind:'activity' as const},status:'ready' as const,evidence:[],notes:[]}))
  const prompt=activityFitRepairPrompt('fun weekend',packets,[{line:1,code:'judge_no_unsupported_claim'},{line:2,code:'judge_no_no_experience'},{line:3,code:'judge_no_incidental'}])
- expect(prompt).toContain('Fictional 1');expect(prompt).not.toContain('Fictional 2');expect(prompt).not.toContain('Fictional 3');expect(prompt).toContain('ONE exact substring')
+ expect(prompt).toContain('Fictional 1');expect(prompt).not.toContain('Fictional 2');expect(prompt).not.toContain('Fictional 3');expect(prompt).toContain('ONE exact numbered spanId')
 })
 
 it('optional unknowns do not create authority; malformed caveats remain rejected with finite codes',async()=>{
@@ -65,4 +65,23 @@ it('enforces literal experience and keeps contradictory uncited context availabl
  expect((await validateActivityFit({activities:[{...row,experience:'Amazing creative fun'}]},'weekend',[packet],records,async()=>true)).rejected[0].code).toBe('experience_not_literal')
  const result=await validateActivityFit({activities:[row]},'weekend',[packet],records,async input=>{expect(input.packet.evidence).toHaveLength(2);expect(input.verdict.reason).not.toContain('Relaxing');return {verdict:'no',reason:'availability'}})
  expect(result.accepted).toHaveLength(0)
+})
+
+
+it('repairs a nonliteral quote once without retrying substantive vetoes',()=>{
+ for(const code of ['judge_no_unsupported_claim','experience_not_literal'])expect(repairableActivityRejection(code)).toBe(true)
+ for(const code of ['judge_no_no_experience','judge_no_incidental','judge_no_identity','judge_no_availability','evidence','no_experience'])expect(repairableActivityRejection(code)).toBe(false)
+ const packets=[1,2].map(line=>({venue:{line,name:'Fictional '+line,kind:'activity' as const},status:'ready' as const,evidence:[],notes:[]}))
+ const prompt=activityFitRepairPrompt('fun weekend',packets,[{line:1,code:'experience_not_literal'},{line:2,code:'judge_no_no_experience'}])
+ expect(prompt).toContain('Fictional 1');expect(prompt).not.toContain('Fictional 2');expect(prompt).toContain('ONE exact numbered spanId')
+})
+
+
+it('server span selection supplies exact quote and its evidence, never model prose',async()=>{
+ const records=new SourceRecords(),r=records.capture('web_fetch',{url:'https://fictional.test/workshop',content:'Reed Workshop offers hands-on printmaking sessions.'},'fictional')[0]
+ const packet={venue:{line:1,name:'Reed Workshop',kind:'activity' as const},status:'ready' as const,notes:[],evidence:[{id:'ev1_1',source:r.id,url:r.url,title:'Reed Workshop',excerpt:r.content!,origin:'fetched_page' as const,sourceRole:'unclassified' as const}]}
+ const span=activityEvidenceSpans(packet)[0]
+ const out=await validateActivityFit({activities:[{line:1,decision:'recommend',spanId:span.id,experience:'Invented luxury',evidenceIds:['evil']}]},'weekend',[packet],records,async input=>{expect(input.verdict.experience).toBe(span.text);expect(input.verdict.evidenceIds).toEqual(['ev1_1']);return true})
+ expect(out.accepted).toHaveLength(1)
+ expect((await validateActivityFit({activities:[{line:1,decision:'recommend',spanId:'span999_1'}]},'weekend',[packet],records,async()=>true)).accepted).toHaveLength(0)
 })
