@@ -5,16 +5,24 @@ export const GEOAPIFY_ATTRIBUTION='Venue names, categories and addresses: Geoapi
 const categories:Record<PlaceKind,string>={hotel:'accommodation.hotel',restaurant:'catering.restaurant',activity:'tourism.attraction'}
 const num=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x)
 /** Requests are bounded and sequential (four at most), below the provider's 5 requests/second plan limit. Never log URL/errors with the secret. */
-export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],records:SourceRecords,signal?:AbortSignal):Promise<ApiPlace[]|null>{
- const key=process.env.GEOAPIFY_API_KEY;if(!key||!destination.trim())return null
+export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],records:SourceRecords,signal?:AbortSignal,onFallback?:(reason:string)=>void):Promise<ApiPlace[]|null>{
+ const fail=(reason:string)=>{onFallback?.(reason);return null}
+ const key=process.env.GEOAPIFY_API_KEY;if(!key)return fail('missing_key');if(!destination.trim())return fail('geocode_empty')
+ let phase='geocode'
+ let status:number|undefined
  const get=async(path:string,params:Record<string,string>)=>{
   const u=new URL('https://api.geoapify.com/'+path);for(const [k,v] of Object.entries({...params,apiKey:key}))u.searchParams.set(k,v)
-  const ac=AbortSignal.timeout(6000),r=await fetch(u,{signal:signal?AbortSignal.any([signal,ac]):ac});if(!r.ok)throw new Error('Provider request failed');return r.json()
+  const ac=AbortSignal.timeout(6000),r=await fetch(u,{signal:signal?AbortSignal.any([signal,ac]):ac});if(!r.ok){status=r.status;throw new Error('Provider request failed')};return r.json()
  }
  try{
-  const geo=await get('v1/geocode/search',{text:destination,type:'city',limit:'2',format:'json'}) as {results?:{lat?:unknown;lon?:unknown;result_type?:string;rank?:{confidence?:number}}[]}
-  const hits=geo.results||[],anchor=hits[0]
-  if(!anchor||!num(anchor.lat)||!num(anchor.lon)||hits.length>1&&(hits[1].rank?.confidence||0)>=(anchor.rank?.confidence||0))return null
+  const geo=await get('v1/geocode/search',{text:destination,type:'city',limit:'5',format:'json'}) as {results?:{lat?:unknown;lon?:unknown;result_type?:string;rank?:{importance?:number;confidence?:number;confidence_city_level?:number}}[]}
+  const hits=(geo.results||[]).filter(h=>num(h.lat)&&num(h.lon))
+  const score=(h:typeof hits[number])=>(h.result_type==='city'?10:0)+(h.rank?.importance??0)+(h.rank?.confidence_city_level??h.rank?.confidence??0)
+  const anchor=[...hits].sort((a,b)=>score(b)-score(a))[0]
+  if(!anchor)return fail('geocode_empty')
+  const confidence=anchor.rank?.confidence_city_level??anchor.rank?.confidence
+  if(confidence!==undefined&&confidence<0.3)return fail('geocode_low_confidence')
+  phase='places'
   const out:ApiPlace[]=[],seen=new Set<string>(),providerRecords=new SourceRecords()
   for(const kind of kinds){
    await new Promise(resolve=>setTimeout(resolve,210))
@@ -32,10 +40,10 @@ export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],record
     out.push({line:out.length+1,kind,name,address,lat:p.lat,lon:p.lon,id:identity,source:rec.id,start:0,end:name.length})
    }
   }
-  if(!out.length)return null
+  if(!out.length)return fail('zero_results')
   for(const p of out){const rec=records.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',title:'Geoapify venue listing',content:providerRecords.pageText(p.source)},new Date().toISOString())[0];p.source=rec.id}
   return out
- }catch{return null}
+ }catch(error){return fail(status?`${phase}_error_${status}`:signal?.aborted||error instanceof Error&&/abort|timeout/i.test(error.name)?'timeout':`${phase}_error`)}
 }
 export function apiPlaceMenu(places:ApiPlace[]):string{
  return 'Typed Geoapify venue listings. Choose the places that fit the request by line number. Kind is fixed by the provider category and cannot be changed. Names and addresses are provider data, not proof of quality, hours, prices or availability. Do not select streets, generic areas or mismatched types. Each line: line | kind | complete name | address.\n'+places.map(p=>`L${p.line} | ${p.kind} | ${p.name} | ${p.address||'Address not supplied'}`).join('\n')
