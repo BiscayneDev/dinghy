@@ -94,7 +94,7 @@ it('server states the requested working sessions when the model agenda omits the
  await mkdir('/tmp/itinerary-pipeline-proof-ws',{recursive:true});await writeFile('/tmp/itinerary-pipeline-proof-ws/page.html',html);await writeFile('/tmp/itinerary-pipeline-proof-ws/file.pdf',made.bytes);await writeFile('/tmp/itinerary-pipeline-proof-ws/card.png',made.card!);await writeFile('/tmp/itinerary-pipeline-proof-ws/report.json',JSON.stringify({synthetic:true,noSend:true,stages,completed:true,httpMocked:true,publishMocked:true,files:1},null,2))
 })
 
-it('verification accepts only a bare yes, caches verdicts across retries, and an unverified pick never publishes',async()=>{
+it('verification accepts only a bare yes, caches verdicts across retries, and an unverified pick never appears in the agenda-only artifact',async()=>{
  vi.stubEnv('TAVILY_API_KEY','fictional-key')
  const url='https://harbor.test/visitors',ask='Make an itinerary for fictional founders visiting Harbor on Friday. Hotel recommendations.'
  const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
@@ -110,7 +110,7 @@ it('verification accepts only a bare yes, caches verdicts across retries, and an
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
  await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
- expect(verifies).toBeLessThanOrEqual(1);expect(published).not.toHaveBeenCalled();expect(stages.filter(s=>s==='invalid:selection:not_verified').length).toBeGreaterThan(0)
+ expect(verifies).toBeLessThanOrEqual(1);expect(published).toHaveBeenCalledTimes(1);expect(files.files()[0].markdown).not.toContain('Harbor Inn');expect(stages.filter(s=>s==='invalid:selection:not_verified').length).toBeGreaterThan(0)
 })
 
 it('verified picks survive later failed attempts and publish as an honest partial with a safe trace',async()=>{
@@ -264,4 +264,17 @@ it('actual handler omits a rejected activity and preserves an explicit weekend g
  if(typeof markdown!=='string')throw new Error('Expected itinerary markdown')
  expect(html).not.toContain('Invented dates');expect(stages).toContain('itinerary:reason_judge:yes');expect(html).toContain('Recommendation evidence');expect(markdown).toContain('https://harbor.test/venue');expect(html).not.toContain('{{source:');expect(html).toContain('courtyard garden');expect(html).toContain('wood-fired noodles');expect(html).not.toContain('Harbor Museum');expect(markdown).toContain('No evidence-backed meaningful weekend activity');expect(html).toContain('Geoapify');expect(html).toContain('OpenStreetMap contributors');expect(html).not.toContain('apiKey=');expect(html).toContain('Harbor &amp; Reed Inn');for(const forbidden of ['amp;amp','Address&amp;#58','learn-more','Exotic seafood','Liberty Tower','Invented Cafe'])expect(html).not.toContain(forbidden);expect((markdown.match(/Office visit/gi)||[])).toHaveLength(1);expect((markdown.match(/© OpenStreetMap contributors/g)||[])).toHaveLength(1);expect((markdown.match(/## Source provenance/g)||[])).toHaveLength(1);await mkdir('/tmp/venue-proof',{recursive:true});await writeFile('/tmp/venue-proof/page.html',html);await writeFile('/tmp/venue-proof/file.pdf',files.files()[0].bytes)
 
+})
+
+it('pre-selection gateway failure publishes the supplied agenda once without invented picks',async()=>{
+ vi.stubEnv('TAVILY_API_KEY','fictional-key')
+ const ask='Make an itinerary for fictional founders visiting Harbor on Friday. Office visit at 10am then working sessions, hotel and restaurant recommendations and weekend activities.'
+ const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
+ const files=fileToolsFor(),stages:string[]=[]
+ published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
+ vi.stubGlobal('fetch',vi.fn(async()=>{throw new Error('fictional gateway unavailable')}))
+ const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
+ const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ expect(result.deliverable?.state).toBe('completed');expect(published).toHaveBeenCalledTimes(1);expect(files.files()).toHaveLength(1);expect(stages).toContain('itinerary:agenda_only_fallback')
+ const md=files.files()[0].markdown;expect(md).toContain('Working sessions');expect(md).toContain('No hotel, restaurant or activity is recommended');expect(md).not.toContain('Harbor Inn')
 })
