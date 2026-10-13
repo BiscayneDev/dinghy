@@ -49,6 +49,7 @@ export function venueEvidenceSections(venue:EvidenceVenue,destination:EvidenceDe
  }
  return sections.map(s=>s.split(/\n(?:Nearby(?:\s|$)|What's nearby|You may also like|Recommended (?:hotels|restaurants)|Other (?:hotels|restaurants)|More (?:hotels|restaurants)|activity\s*$)/im)[0].trim()).filter(s=>s.length>=25&&!unsafe.test(s))
 }
+const NON_DESCRIPTION=/(?:\b(?:font-family|font-size|background-color|display\s*:|padding\s*:|margin\s*:|media\s*\(|stylesheet|customer reviews?|testimonials?|rated\s+\d|read more reviews|book your event|host your event)\b|[{}].*[;{}]|\b(?:I|we)\s+(?:got an upgrade|ordered|visited|ate|stopped|loved|had dinner)|\b(?:amazing|best ever|authentic thin crust)\b)/i
 const CHROME=/\b(?:accept (?:all )?cookies|cookie (?:policy|settings|consent)|privacy policy|terms (?:of use|and conditions)|all rights reserved|sign (?:in|up)|subscribe (?:to|now)|newsletter|forgot password|skip to (?:content|navigation)|enable javascript|manage preferences|copyright)\b/i
 const DETAILS=/\b(?:rooms?|suites?|beds?|courtyard|terrace|garden|rooftop|pool|breakfast|design|architecture|historic|restored|views?|menu|dishes?|serves?|cuisine|ingredients?|recipes?|sourced|vegetables?|seafood|pasta|pizza|cocktails?|dining|atmosphere|exhibits?|collections?|gallery|art|museum|trails?|walks?|scenery|wildlife|performances?|concerts?|workshops?|hands.on|games?|sports?|tour|tickets?|visitors?|experience)\b/gi
 /** Rank the entire identity-matched section for useful detail before limiting evidence.
@@ -62,7 +63,7 @@ export function relevantVenueExcerpts(sections:string[],text:string,venue:Eviden
    const parts=paragraph.split(/(?<=[.!?])\s+/)
    for(const part of parts){
     const clean=part.trim(),key=normalize(clean)
-    if(clean.length<25||clean.length>900||!text.includes(clean)||seen.has(key)||unsafe.test(clean)||CHROME.test(clean))continue
+    if(clean.length<25||clean.length>900||!text.includes(clean)||seen.has(key)||unsafe.test(clean)||CHROME.test(clean)||NON_DESCRIPTION.test(clean))continue
     if((clean.match(/https?:\/\//g)||[]).length>1||/^(?:home|menu|book now|contact|about us|view all|read more)(?:\s*[|›>:/-]\s*|$)/i.test(clean))continue
     const details=new Set((clean.match(DETAILS)||[]).map(w=>w.toLowerCase())).size
     const named=normalize(clean).includes(normalize(venue.name))
@@ -96,7 +97,7 @@ function contradictionPassages(sections:string[]):string[]{
  return out
 }
 function addressKey(text:string):{number:string;street:string}[]{
- return [...text.matchAll(ADDRESS)].map(m=>{const words=normalize(m[0]).replace(/[.,]/g,'').split(' ');const number=words.shift()!;const street=words.join(' ').replace(/\b(?:street|avenue|road|boulevard|drive|lane|court|place)\b/g,w=>({street:'st',avenue:'ave',road:'rd',boulevard:'blvd',drive:'dr',lane:'ln',court:'ct',place:'pl'}[w]!));return {number,street}})
+ return [...text.matchAll(ADDRESS)].map(m=>{const words=normalize(m[0]).replace(/[.,]/g,'').split(' ');const number=words.shift()!;const street=words.join(' ').replace(/\b(?:northeast|northwest|southeast|southwest|north|south|east|west)\b/g,w=>({northeast:'ne',northwest:'nw',southeast:'se',southwest:'sw',north:'n',south:'s',east:'e',west:'w'}[w]!)).replace(/\b(?:street|avenue|road|boulevard|drive|lane|court|place)\b/g,w=>({street:'st',avenue:'ave',road:'rd',boulevard:'blvd',drive:'dr',lane:'ln',court:'ct',place:'pl'}[w]!));return {number,street}})
 }
 function addressConflict(venue:EvidenceVenue,context:VenueEvidence[]):boolean{
  if(!venue.address)return false
@@ -111,7 +112,8 @@ function verifiedContradictionContext(packet:VenueEvidencePacket,records:SourceR
   const text=records.pageText(e.source)
   if(e.origin!=='fetched_page'||!text||records.pageUrl(e.source)!==e.url)continue
   const sections=venueEvidenceSections(packet.venue,{query:'',matchTerms:nameTokens(packet.venue.name)},e.title,text,e.url)
-  for(const excerpt of contradictionPassages(sections)){
+  const identity=sections.flatMap(section=>section.split('\n').filter(line=>{ADDRESS.lastIndex=0;const address=ADDRESS.test(line);ADDRESS.lastIndex=0;return address&&line.length<500&&!unsafe.test(line)&&!CHROME.test(line)}))
+  for(const excerpt of [...identity,...contradictionPassages(sections)]){
    const key=e.source+'\n'+excerpt;if(seen.has(key)||!text.includes(excerpt))continue
    seen.add(key);out.push({...e,id:'ctx'+packet.venue.line+'_'+(out.length+1),excerpt})
   }
