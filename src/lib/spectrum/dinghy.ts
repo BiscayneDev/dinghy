@@ -1,3 +1,4 @@
+import {activityFitPrompt,activityFitJudgePrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiEvidenceVenues,applyVerifiedApiReasons,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,type EvidenceJudge,type VerifiedVenueReason} from '@/lib/files/itinerary-venue-evidence'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
@@ -934,7 +935,9 @@ export async function chatWithTools(
                 const picked=apiPlaces?compileApiPlaces(parsed,apiPlaces,sourceRecords):await compileQuoteSelection(parsed,sourceRecords,currentRequest,verifyPick,viewEntries,pickNameTexts(pickedSoFar,sourceRecords))
                 if(apiPlaces&&'candidates'in picked){
                     const reasonPlaces=apiPlaces
+                    const apiCandidates=picked.candidates
                     const acceptedReasons:VerifiedVenueReason[]=[]
+                    let activityChecked=false
                     const searcher=tools.find(t=>t.name==='web_search'),reader=tools.find(t=>t.name==='web_fetch')
                     // Evidence collection is overall-capped inside withinTurn; per-venue budgets plus a required routed
                     // judge per reason keep latency bounded against the turn deadline. No judge, no recommendation why.
@@ -942,18 +945,18 @@ export async function chatWithTools(
                         await assertAccountActive(ctx.userId,ctx.chatGuid)
                         const io={search:async(query:string,signal:AbortSignal)=>{if(egressRejection('web_search',JSON.stringify({query}),tainted,corpus))return {};toolCallCount++;const r=await searcher.execute({query,maxResults:3},{...ctx,signal});return r.success?r.data:{}},read:async(url:string,signal:AbortSignal)=>{if(egressRejection('web_fetch',JSON.stringify({url}),tainted,corpus))return {};toolCallCount++;const r=await reader.execute({url},{...ctx,signal});return r.success?r.data:{}}}
                         try{
-                            const venues=apiEvidenceVenues(picked.candidates,reasonPlaces)
+                            const pickedSources=new Set(apiCandidates.map(c=>(c.name as {source:string}).source))
+                            const activityPlaces=[...reasonPlaces.filter(p=>p.kind==='activity'&&pickedSources.has(p.source)),...reasonPlaces.filter(p=>p.kind==='activity'&&!pickedSources.has(p.source)).slice(0,6)]
+                            const activityPool=activityPlaces.flatMap(p=>{const result=compileApiPlaces({candidates:[{kind:'activity',line:p.line}]},[p],sourceRecords);return 'candidates' in result?result.candidates.map(c=>({...c,evidenceLine:p.line})):[]})
+                            const researchPicks=[...apiCandidates,...activityPool.filter(c=>!apiCandidates.some(p=>(p.name as {source:string}).source===(c.name as {source:string}).source))]
+                            const venues=apiEvidenceVenues(researchPicks,reasonPlaces)
                             const packets=await withinTurn(opts.deadlineAt,signal=>collectVenueEvidence(venues,{query:destLabel||destinationTokens(currentRequest).join(' '),matchTerms:destTerms.length?destTerms:destinationTokens(currentRequest)},sourceRecords,io,{budgetMs:6000,concurrency:3,signal}))
                             const ready=packets.filter(pk=>pk.status==='ready').length
                             await opts.onStage?.('tool',`itinerary:venue_evidence:r${ready}_m${packets.length-ready}`)
-                            if(ready){
-                                const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Write evidence-grounded venue reasons. Return only JSON.'},{role:'user',content:venueSynthesisPrompt(currentRequest,packets)}],stream:false,max_tokens:3000})}))
-                                if(r.ok){
-                                    const j=await r.json() as {choices?:{message?:{content?:string}}[]};const raw=j.choices?.[0]?.message?.content||''
-                                    const judge:EvidenceJudge=async(input,jsignal)=>{
+                                    const routedVerdict=async(prompt:string,jsignal?:AbortSignal):Promise<{verdict:'yes'|'no'|'http'|'timeout'|'error'|'invalid'}>=>{
                                         // Bounded separate routed verdict; anything but a clear YES rejects the reason.
                                         try{
-                                            const jr=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:AbortSignal.any([...(signal?[signal]:[]),...(jsignal?[jsignal]:[]),AbortSignal.timeout(6000)]),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You are an evidence judge. Reply with exactly one word.'},{role:'user',content:venueReasonJudgePrompt(input)}],stream:false,max_tokens:8})}))
+                                            const jr=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:AbortSignal.any([...(signal?[signal]:[]),...(jsignal?[jsignal]:[]),AbortSignal.timeout(6000)]),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'You are an evidence judge. Reply with exactly one word.'},{role:'user',content:prompt}],stream:false,max_tokens:8})}))
                                             if(!jr.ok){await opts.onStage?.('tool','itinerary:judge:http');return {verdict:'http'}}
                                             const jj=await jr.json() as {choices?:{finish_reason?:string;message?:{content?:unknown}}[]}
                                             const finish=jj.choices?.[0]?.finish_reason
@@ -964,6 +967,20 @@ export async function chatWithTools(
                                             return {verdict:yes?'yes':/^\W*no\W*$/i.test(answer)?'no':'invalid'}
                                         }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;const verdict=err instanceof Error&&/timeout|abort/i.test(err.name)?'timeout' as const:'error' as const;await opts.onStage?.('tool','itinerary:judge:'+verdict);return {verdict}}
                                     }
+                            if(packets.some(p=>p.venue.kind==='activity')){
+                                const ar=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Assess evidence-backed visitor experiences. Return only JSON.'},{role:'user',content:activityFitPrompt(currentRequest,packets)}],stream:false,max_tokens:2200})}))
+                                let fits:import('@/lib/files/itinerary-activity-fit').ActivityFit[]=[]
+                                if(ar.ok){try{const aj=await ar.json() as {choices?:{message?:{content?:string}}[]};const av=await validateActivityFit(JSON.parse((aj.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,input=>routedVerdict(activityFitJudgePrompt(input)));fits=av.accepted;for(const code of [...new Set(av.rejected.map(r=>r.code))])await opts.onStage?.('tool','itinerary:activity_rejected:'+code)}catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:activity_fit:error')}}
+                                const activitySelection=applyActivityFit(apiCandidates,activityPool,fits)
+                                apiCandidates.splice(0,apiCandidates.length,...activitySelection.candidates);activityChecked=true
+                                await opts.onStage?.('tool',`itinerary:activity_fit:o${activitySelection.omitted}_r${activitySelection.reselected}`)
+                            }
+                            const judge:EvidenceJudge=(input,jsignal)=>routedVerdict(venueReasonJudgePrompt(input),jsignal)
+                            if(ready){
+                                const r=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Write evidence-grounded venue reasons. Return only JSON.'},{role:'user',content:venueSynthesisPrompt(currentRequest,packets.filter(pk=>apiCandidates.some(c=>(c.name as {source:string}).source===reasonPlaces.find(p=>p.line===pk.venue.line)?.source)))}],stream:false,max_tokens:3000})}))
+                                if(r.ok){
+                                    const j=await r.json() as {choices?:{message?:{content?:string}}[]};const raw=j.choices?.[0]?.message?.content||''
+
                                     const v=await validateVenueReasons(JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,judge)
                                     acceptedReasons.push(...v.accepted)
                                     await opts.onStage?.('tool',`itinerary:reasons:a${v.accepted.length}_r${v.rejected.length}`)
@@ -973,7 +990,8 @@ export async function chatWithTools(
                         }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:reasons:fallback')}
                     }else if(apiPlaces)await opts.onStage?.('tool','itinerary:venue_evidence:skipped_budget')
                     // Unverified venues keep an honest provider-listing line, never a generic type claim presented as a reason.
-                    const applied=applyVerifiedApiReasons(acceptedReasons,picked.candidates,reasonPlaces)
+                    if(!activityChecked){const retained=apiCandidates.filter(c=>c.kind!=='activity');apiCandidates.splice(0,apiCandidates.length,...retained)}
+                    const applied=applyVerifiedApiReasons(acceptedReasons,apiCandidates,reasonPlaces)
                     reasonCitations=applied.citations
                     for(const c of applied.citations){const url=c.url;if(url&&!foundSources.some(s=>s.url===url))foundSources.push({title:sourceRecords.pageTitle(c.source)||c.claim.slice(0,80),url})}
                 }
@@ -994,6 +1012,7 @@ export async function chatWithTools(
                 pickedSoFar=mergePicks(pickedSoFar,picked.candidates)
                 const missing=missingKinds(pickedSoFar,requiredKinds(currentRequest))
                 if(missing.length){
+                    if(apiPlaces){await enablePartial();messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:pickedSoFar.length,unsupported:missing,next:'No meaningful experience could be verified for missing kinds. Publish the supplied agenda and supported recommendations with an explicit gap. Do not invent replacements.'})});continue}
                     selectionFailures++;await opts.onStage?.('tool',`invalid:selection:missing_kind:${missing.join('_')}`)
                     if(selectionFailures>=3){
                         if(!pickedSoFar.length)return finish({reply:'I read the public sources but couldn\'t verify a '+missing.join(' or ')+' pick from them, so no researched itinerary was published. The supplied agenda is preserved.',toolCalls:toolCallCount,iterations:iteration,tainted})
@@ -1058,7 +1077,7 @@ export async function chatWithTools(
                                 const citations=reasonCitations.filter(c=>{const p=apiPlaces!.find(p=>p.line===c.line);return p&&citationPicks.some(pk=>(pk.name as {source:string}).source===p.source)})
                                 const seenCit=new Set<string>(),citLines:string[]=[]
                                 for(const c of citations){const p=apiPlaces!.find(p=>p.line===c.line)!,key=p.line+'|'+c.source;if(seenCit.has(key))continue;seenCit.add(key);citLines.push('- '+p.name+': {{source:'+c.source+'.url}}')}
-                                input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))+(citLines.length?'\n\n## Recommendation evidence\n'+citLines.join('\n'):'')}
+                                input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))+(unsupportedKinds.length?'\n\n## Not found\nNo evidence-backed '+unsupportedKinds.map(k=>k==='activity'?'meaningful weekend activity':k).join(' or ')+' was verified from the candidates checked. None are recommended here.':'')+( /\b(?:game|match)\b/i.test(currentRequest)?'\n\n## Optional game\nGame date, tickets and availability were not verified. No game is scheduled in this itinerary.':'')+(citLines.length?'\n\n## Recommendation evidence\n'+citLines.join('\n'):'')}
                             };
                         }
                     }
@@ -1176,4 +1195,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-        }
+                        }
