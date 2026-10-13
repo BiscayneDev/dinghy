@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('@/spectrum/store', () => ({ saveMessage: vi.fn(async () => undefined) }))
-import { demoGuid, demoSpace, isDemoGuid } from '@/lib/spectrum/demo-chat'
+import { demoGuid, demoSpace, isDemoGuid, demoSubmissionId } from '@/lib/spectrum/demo-chat'
 import { saveMessage } from '@/spectrum/store'
 
 describe('demo chat', () => {
@@ -21,4 +21,9 @@ describe('demo chat', () => {
         await p.send('yo')
         expect(saveMessage).toHaveBeenCalledWith('demo;-;x1', 'assistant', 'yo')
     })
+})
+
+it('stable synthetic submit ID survives transport replay and cannot collide between slugs',()=>{
+ const token='00000000-0000-4000-8000-000000000001'
+ expect(demoSubmissionId('demo;-;reed',token)).toBe(demoSubmissionId('demo;-;reed',token));expect(demoSubmissionId('demo;-;reed',token)).not.toBe(demoSubmissionId('demo;-;quay',token));expect(demoSubmissionId('demo;-;reed','bad token')).toBeNull()
 })
