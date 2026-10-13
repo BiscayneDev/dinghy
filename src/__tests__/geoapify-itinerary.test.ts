@@ -1,3 +1,4 @@
+import {discoveredVenueCandidates,discoveryVenuePrompt} from '@/lib/files/geoapify-itinerary'
 import {apiEvidenceVenues,activityResearchSlate} from '@/lib/files/geoapify-itinerary'
 import {it,expect,vi,afterEach} from 'vitest'
 import {geoapifyPlaces,compileApiPlaces,apiPlaceMenu,GEOAPIFY_ATTRIBUTION,apiReasonFacts,applyApiReasons,apiReasonPrompt,researchApiReasons,venueReasonSentence} from '@/lib/files/geoapify-itinerary'
@@ -144,4 +145,16 @@ it('research slate samples diverse experience subtypes without granting a type r
 it('passes provider website identity metadata to evidence without treating it as a quality reason',()=>{
  const place={line:1,kind:'restaurant' as const,name:'Reed Table',address:'42 Quay St',lat:0,lon:0,id:'fictional',source:'src1',start:0,end:10,website:'https://fictional.test/reed'}
  expect(apiEvidenceVenues([{name:{source:'src1'}}],[place])[0].website).toBe(place.website)
+})
+
+it('discovery accepts only literal fetched-page names, bounded per kind and never provider category evidence',()=>{
+ const r=new SourceRecords(),page=r.capture('web_fetch',{url:'https://fictional.test/guide',content:'Harbor: Reed Museum, Lantern Table, Tide Lodge.'},'fictional')[0],snippet=r.capture('web_search',{results:[{url:'https://fictional.test/search',content:'Imagined Inn'}]},'fictional')[0]
+ const out=discoveredVenueCandidates({candidates:[{name:'Reed Museum',kind:'activity',source:page.id},{name:'Lantern Table',kind:'restaurant',source:page.id},{name:'Imagined Inn',kind:'hotel',source:snippet.id},{name:'Reed Museum',kind:'activity',source:page.id},{name:'Wrong Venue',kind:'hotel',source:page.id}]},r)
+ expect(out).toEqual([{name:'Reed Museum',kind:'activity'},{name:'Lantern Table',kind:'restaurant'}]);expect(discoveryVenuePrompt('weekend',r)).toContain('separate Places')
+})
+it('named search validates provider identity and kind within the same city, not fuzzy name rescue',async()=>{
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-key');const urls:URL[]=[]
+ vi.stubGlobal('fetch',vi.fn(async(u:URL)=>{urls.push(u);if(u.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,city:'Harbor'}]}));return new Response(JSON.stringify({features:[{properties:{name:'Reed Museum',place_id:'reed',categories:['entertainment.museum'],lat:25,lon:-80,formatted:'42 Quay St'}},{properties:{name:'Reed Museum Annex',place_id:'annex',categories:['entertainment.museum'],lat:25,lon:-80}}]}))}))
+ const out=await geoapifyPlaces('Harbor',['activity'],new SourceRecords(),undefined,undefined,{namedCandidates:[{name:'Reed Museum',kind:'activity'}]})
+ expect(out?.map(p=>p.name)).toEqual(['Reed Museum']);expect(out?.[0].discovered).toBe(true);expect(urls[1].searchParams.get('name')).toBe('Reed Museum');expect(urls[1].searchParams.get('filter')).toBe('circle:-80,25,15000')
 })
