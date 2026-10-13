@@ -1,4 +1,4 @@
-import {activityFitPrompt,activityFitJudgePrompt,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
+import {activityFitPrompt,activityFitJudgePrompt,parseActivityJudge,validateActivityFit,applyActivityFit} from '@/lib/files/itinerary-activity-fit'
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,apiEvidenceVenues,applyVerifiedApiReasons,activityResearchSlate,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt,type EvidenceJudge,type VerifiedVenueReason} from '@/lib/files/itinerary-venue-evidence'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence} from '@/lib/files/itinerary-research'
@@ -967,10 +967,20 @@ export async function chatWithTools(
                                             return {verdict:yes?'yes':/^\W*no\W*$/i.test(answer)?'no':'invalid'}
                                         }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;const verdict=err instanceof Error&&/timeout|abort/i.test(err.name)?'timeout' as const:'error' as const;await opts.onStage?.('tool','itinerary:judge:'+verdict);return {verdict}}
                                     }
+                            const activityVerdict=async(prompt:string)=>{
+                                try{
+                                    const jr=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(6000)]):AbortSignal.timeout(6000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Verify visitor experience against evidence. Return only the specified JSON verdict.'},{role:'user',content:prompt}],stream:false,max_tokens:120})}))
+                                    if(!jr.ok)return {verdict:'http' as const}
+                                    const jj=await jr.json() as {choices?:{message?:{content?:string}}[]}
+                                    const verdict=parseActivityJudge(jj.choices?.[0]?.message?.content||'')
+                                    await opts.onStage?.('tool','itinerary:activity_judge:'+verdict.verdict+(verdict.reason?'_'+verdict.reason:''))
+                                    return verdict
+                                }catch(err){if(err instanceof TurnDeadlineExceeded)throw err;return {verdict:err instanceof Error&&/timeout|abort/i.test(err.name)?'timeout' as const:'error' as const}}
+                            }
                             if(packets.some(p=>p.venue.kind==='activity')){
                                 const ar=await withinTurn(opts.deadlineAt,signal=>fetch(`${opts.gatewayUrl}/v1/chat/completions`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(12000)]):AbortSignal.timeout(12000),method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${opts.apiKey}`,...hintHeaders(opts.taskClass&&classForIteration(opts.taskClass,iteration),true)},body:JSON.stringify({...modelFields(opts.model,routingNow()),messages:[{role:'system',content:'Assess evidence-backed visitor experiences. Return only JSON.'},{role:'user',content:activityFitPrompt(currentRequest,packets)}],stream:false,max_tokens:2200})}))
                                 let fits:import('@/lib/files/itinerary-activity-fit').ActivityFit[]=[]
-                                if(ar.ok){try{const aj=await ar.json() as {choices?:{message?:{content?:string}}[]};const av=await validateActivityFit(JSON.parse((aj.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,input=>routedVerdict(activityFitJudgePrompt(input)));fits=av.accepted;for(const code of [...new Set(av.rejected.map(r=>r.code))])await opts.onStage?.('tool','itinerary:activity_rejected:'+code)}catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:activity_fit:error')}}
+                                if(ar.ok){try{const aj=await ar.json() as {choices?:{message?:{content?:string}}[]};const av=await validateActivityFit(JSON.parse((aj.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*|\s*```$/g,'')),currentRequest,packets,sourceRecords,input=>activityVerdict(activityFitJudgePrompt(input)));fits=av.accepted;for(const code of [...new Set(av.rejected.map(r=>r.code))])await opts.onStage?.('tool','itinerary:activity_rejected:'+code)}catch(err){if(err instanceof TurnDeadlineExceeded)throw err;await opts.onStage?.('tool','itinerary:activity_fit:error')}}
                                 const activitySelection=applyActivityFit(apiCandidates,activityPool,fits)
                                 apiCandidates.splice(0,apiCandidates.length,...activitySelection.candidates);activityChecked=true
                                 await opts.onStage?.('tool',`itinerary:activity_fit:o${activitySelection.omitted}_r${activitySelection.reselected}`)
@@ -1195,4 +1205,4 @@ export async function chatWithTools(
         iterations: MAX_TOOL_ITERATIONS + 1,
         tainted,
     })
-                    }
+                                                                                 }
