@@ -746,12 +746,12 @@ export async function chatWithTools(
                 const args=JSON.stringify({url:source.url})
                 const blocked=egressRejection('web_fetch',args,tainted,corpus)
                 if(blocked){await opts.onStage?.('tool','research:read_blocked');break}
-                if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<18000){await opts.onStage?.('tool','research:read_budget');break}
+                if(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000){await opts.onStage?.('tool','research:read_budget');break}
                 await assertAccountActive(ctx.userId,ctx.chatGuid)
                 await opts.onStage?.('tool','research:read_step')
                 toolCallCount++
                 let result
-                try{result=await withinTurn(opts.deadlineAt,async signal=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([reader.execute({url:source.url},{...ctx,signal}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('Public read timed out'),{publicReadTimeout:true})),TOOL_TIMEOUT_MS)})])}finally{if(timer)clearTimeout(timer)}})}
+                try{result=await withinTurn(opts.deadlineAt,async signal=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([reader.execute({url:source.url},{...ctx,signal}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('Public read timed out'),{publicReadTimeout:true})),6000)})])}finally{if(timer)clearTimeout(timer)}})}
                 catch(err){if(err instanceof TurnDeadlineExceeded)throw err;result={success:false,publicReadFailure:(err instanceof Error&&'publicReadTimeout' in err?'timeout':'network') as 'timeout'|'network',error:'Public source read failed.'}}
                 const captured=result.success?sourceRecords.capture('web_fetch',result.data,new Date().toISOString()):[]
                 if(captured.some(r=>r.content)){
@@ -761,7 +761,7 @@ export async function chatWithTools(
                     const id=`required_read_${iteration}_${readsOk}`
                     messages.push({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'web_fetch',arguments:args}}]},{role:'tool',tool_call_id:id,content:sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)})
                     // Read across kinds. Provider listings must not trigger the public-page stop rule.
-                    if(readsOk>=4||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<35000))break
+                    if(readsOk>=3||(opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()<45000))break
                     await opts.onStage?.('tool','research:read_more')
                     continue
                 }
@@ -792,7 +792,7 @@ export async function chatWithTools(
         const callDeadline = itineraryResearch&&opts.deadlineAt!==undefined ? Math.min(opts.deadlineAt-18000,Date.now()+25000) : rescueEligible ? Math.min(opts.deadlineAt! - 8_000, Date.now() + 25_000) : opts.deadlineAt
         let res: Response
         try {
-          res = itineraryResearch&&apiPlaces&&selectedCandidates ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-file',function:{name:'create_file',arguments:JSON.stringify({title:'Itinerary for '+(destLabel||'your visit'),body:apiItineraryBody(currentRequest,[]),format:'pdf',kind:'itinerary'})}}]}}]})) : await withinTurn(callDeadline, (signal) => fetch(`${opts.gatewayUrl}/v1/chat/completions`, {
+          res = selecting&&apiPlaces ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-choose',function:{name:SELECT_CANDIDATES_TOOL,arguments:JSON.stringify({candidates:apiPlaces.slice(0,1).map(p=>({line:p.line,kind:p.kind}))})}}]}}]})) : itineraryResearch&&apiPlaces&&selectedCandidates ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-file',function:{name:'create_file',arguments:JSON.stringify({title:'Itinerary for '+(destLabel||'your visit'),body:apiItineraryBody(currentRequest,[]),format:'pdf',kind:'itinerary'})}}]}}]})) : await withinTurn(callDeadline, (signal) => fetch(`${opts.gatewayUrl}/v1/chat/completions`, {
             signal,
             method: 'POST',
             headers: {
