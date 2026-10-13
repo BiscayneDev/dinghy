@@ -33,7 +33,7 @@ export function parseChosenVenues(input:unknown,records:SourceRecords):ChosenVen
   const text=records.pageText(r.sourceId)
   if(name.length<3||name.length>100||why.length<15||why.length>300||unsafe.test(why)||!text||records.pageUrl(r.sourceId)===PROVIDER_URL)continue
   // The named place must genuinely appear on the cited page; case may differ after decoding.
-  if(!text.includes(name)&&!norm(text).includes(norm(name))){const page=records.capture('web_fetch',{url:records.pageUrl(r.sourceId),title:name,content:name+'\n'+text},new Date().toISOString())[0];if(page)r.sourceId=page.id}
+  if(!norm(text).includes(norm(name)))continue
   const kind=r.kind as PlaceKind,key=norm(name).replace(/[^a-z0-9]/g,'')
   if(seen.has(key)||counts[kind]>=caps[kind])continue
   seen.add(key);counts[kind]++;out.push({name,kind,why,sourceId:String(r.sourceId)})

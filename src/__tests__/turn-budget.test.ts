@@ -72,7 +72,7 @@ describe('metadata run records', () => {
 describe('webhook deadline wiring', () => {
   it('reserves reply headroom and persists an honest deadline notice', () => {
     const handler = readFileSync('src/lib/spectrum/handler.ts', 'utf8')
-    expect(handler).toContain('const deadlineAt = turnStartedAt + TURN_WORK_MS')
+    expect(handler).toContain('const deadlineAt = turnStartedAt + (itineraryJob ? 240_000 : TURN_WORK_MS)')
     expect(handler).toContain('deadlineAt, onStage,')
     expect(handler).toContain("await onStage('deadline')")
     expect(handler).toContain("await sendText(space, chatGuid, 'error_notice', TURN_DEADLINE_REPLY)")

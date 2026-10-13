@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AdminShell } from '@/components/brand/AdminShell'
 
 type Msg = { role: 'user' | 'assistant'; content: string }
@@ -36,6 +36,8 @@ export default function DemoChatPage() {
         } catch { setErr('network error') } finally { setBusy(false) }
     }, [slug, history])
 
+    useEffect(()=>{const timer=setInterval(()=>{void fetch(`/api/admin/demo-chat?slug=${encodeURIComponent(slug)}`,{credentials:'include',cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.history)setHistory(j.history)}).catch(()=>undefined)},5000);return()=>clearInterval(timer)},[slug])
+
     return (
         <AdminShell title="Demo chat" showBack backHref="/admin">
             <div className="dock-card" style={{ display: 'grid', gap: 12 }}>
@@ -58,4 +60,4 @@ export default function DemoChatPage() {
             </div>
         </AdminShell>
     )
-                    }
+}
