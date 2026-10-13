@@ -41,3 +41,14 @@ it('a possessive paragraph alias prefers the literal preceding venue heading',as
  if('error' in o)throw new Error(o.error)
  const ref=o.candidates[0].name as any;expect(r.pageText(ref.source)!.slice(ref.start,ref.end)).toBe('The Tide Club Restaurant')
 })
+
+it('keeps comma-connected heading names whole, not their brand suffix',()=>{
+ expect(extractLineName('Unfolded, Signature Collection')).toBe('Unfolded, Signature Collection')
+})
+it('a ranking label never borrows a neighboring hotels description',async()=>{
+ const r=new SourceRecords();r.capture('web_fetch',{url:'https://fictional.test/hotels',title:'Harbor hotels',content:'## Most romantic: Lantern Hotel Harbor\n## Unfolded, Signature Collection\nUnfolded, Signature Collection has quiet rooms with a rooftop garden.\n'},'2026-01-01T00:00:00Z')
+ const v=buildPageView(r),line=v.entries.find(e=>e.name==='Lantern Hotel Harbor')!.n
+ const o=await compileQuoteSelection({candidates:[{kind:'hotel',line}]},r,'hotels in Harbor',async()=>true,v.entries)
+ if('error' in o)throw new Error(o.error)
+ expect(String(o.candidates[0].reason)).not.toMatch(/Most romantic|rooftop garden/)
+})
