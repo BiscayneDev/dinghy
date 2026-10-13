@@ -8,7 +8,7 @@ it('a useful activity needs checked experience evidence and judgment, not attrac
  const records=new SourceRecords(),r=records.capture('web_fetch',{url:'https://fictional.test/workshop',content:'Reed Workshop offers hands-on printmaking sessions in Harbor.'},'fictional-check')[0]
  const packet={venue:{line:1,name:'Reed Workshop',kind:'activity' as const},status:'ready' as const,notes:[],evidence:[{id:'ev1_1',source:r.id,url:r.url,title:'Reed Workshop',excerpt:r.content!,origin:'fetched_page' as const,sourceRole:'unclassified' as const}]}
  const request='Fun things for the weekend after our workday.'
- const verdict={line:1,decision:'recommend',experience:'Hands-on printmaking sessions',requestBasis:['weekend'],evidenceIds:['ev1_1'],reason:'An active break after the workday.',unknowns:['Session schedule not checked']}
+ const verdict={line:1,decision:'recommend',experience:'hands-on printmaking sessions',requestBasis:['weekend'],evidenceIds:['ev1_1'],reason:'An active break after the workday.',unknowns:['Session schedule not checked']}
  expect((await validateActivityFit({activities:[verdict]},request,[packet],records,async()=>true)).accepted).toHaveLength(1)
  expect((await validateActivityFit({activities:[{...verdict,evidenceIds:[]}]},request,[packet],records,async()=>true)).rejected[0].code).toBe('no_experience')
  expect((await validateActivityFit({activities:[verdict]},request,[packet],records,async()=>false)).rejected[0].code).toBe('judge_no')
@@ -31,7 +31,7 @@ it('HTTP/invalid judge outcomes never grant experience permission',async()=>{
 it('request authority is server-held and field failures have finite codes',async()=>{
  const records=new SourceRecords(),r=records.capture('web_fetch',{url:'https://fictional.test/workshop',content:'Reed Workshop offers hands-on printmaking sessions in Harbor.'},'fictional')[0]
  const packet={venue:{line:1,name:'Reed Workshop',kind:'activity' as const},status:'ready' as const,notes:[],evidence:[{id:'ev1_1',source:r.id,url:r.url,title:'Reed Workshop',excerpt:r.content!,origin:'fetched_page' as const,sourceRole:'unclassified' as const}]}
- const row={line:1,decision:'recommend',experience:'Hands-on printmaking sessions',evidenceIds:['ev1_1'],reason:'An active break after work.',unknowns:[]}
+ const row={line:1,decision:'recommend',experience:'hands-on printmaking sessions',evidenceIds:['ev1_1'],reason:'An active break after work.',unknowns:[]}
  expect((await validateActivityFit({activities:[row]},'fun weekend',[packet],records,async input=>({verdict:input.request==='fun weekend'?'yes':'no'}))).accepted).toHaveLength(1)
  expect((await validateActivityFit({activities:[{...row,experience:'x'.repeat(251)}]},'fun weekend',[packet],records,async()=>true)).rejected[0].code).toBe('experience_bounds')
 })
@@ -52,8 +52,17 @@ it('repair targets only unsupported claims, not incidental or missing experience
 it('optional unknowns do not create authority; malformed caveats remain rejected with finite codes',async()=>{
  const records=new SourceRecords(),r=records.capture('web_fetch',{url:'https://fictional.test/workshop',content:'Reed Workshop offers hands-on printmaking sessions in Harbor.'},'fictional')[0]
  const packet={venue:{line:1,name:'Reed Workshop',kind:'activity' as const},status:'ready' as const,notes:[],evidence:[{id:'ev1_1',source:r.id,url:r.url,title:'Reed Workshop',excerpt:r.content!,origin:'fetched_page' as const,sourceRole:'unclassified' as const}]}
- const row={line:1,decision:'recommend',experience:'Hands-on printmaking sessions',evidenceIds:['ev1_1'],reason:'A possible weekend visit'}
+ const row={line:1,decision:'recommend',experience:'hands-on printmaking sessions',evidenceIds:['ev1_1'],reason:'A possible weekend visit'}
  expect((await validateActivityFit({activities:[row]},'fun weekend',[packet],records,async()=>true)).accepted[0].unknowns).toEqual([])
  expect((await validateActivityFit({activities:[row]},'fun weekend',[packet],records,async()=>false)).accepted).toHaveLength(0)
  for(const [unknowns,code] of [[{},'unknowns_array'],[false,'unknowns_array'],[[9],'unknowns_item'],[['x'.repeat(121)],'unknowns_bounds']] as const)expect((await validateActivityFit({activities:[{...row,unknowns}]},'fun weekend',[packet],records,async()=>true)).rejected[0].code).toBe(code)
+})
+
+it('enforces literal experience and keeps contradictory uncited context available to the judge',async()=>{
+ const records=new SourceRecords(),r=records.capture('web_fetch',{url:'https://fictional.test/workshop',content:'Reed Workshop offers hands-on printmaking sessions. Sessions are temporarily suspended.'},'fictional')[0]
+ const packet={venue:{line:1,name:'Reed Workshop',kind:'activity' as const},status:'ready' as const,notes:[],evidence:[{id:'ev1_1',source:r.id,url:r.url,title:'Reed Workshop',excerpt:'Reed Workshop offers hands-on printmaking sessions.',origin:'fetched_page' as const,sourceRole:'unclassified' as const},{id:'ev1_2',source:r.id,url:r.url,title:'Reed Workshop',excerpt:'Sessions are temporarily suspended.',origin:'fetched_page' as const,sourceRole:'unclassified' as const}]}
+ const row={line:1,decision:'recommend',experience:'hands-on printmaking sessions',evidenceIds:['ev1_1'],reason:'Relaxing and fun'}
+ expect((await validateActivityFit({activities:[{...row,experience:'Amazing creative fun'}]},'weekend',[packet],records,async()=>true)).rejected[0].code).toBe('experience_not_literal')
+ const result=await validateActivityFit({activities:[row]},'weekend',[packet],records,async input=>{expect(input.packet.evidence).toHaveLength(2);expect(input.verdict.reason).not.toContain('Relaxing');return {verdict:'no',reason:'availability'}})
+ expect(result.accepted).toHaveLength(0)
 })

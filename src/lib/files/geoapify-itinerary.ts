@@ -2,7 +2,7 @@ import {SourceRecords} from './source-records'
 import {decodeEntities} from './entities'
 import {ensureRequestAgenda,ensureWorkingSessions,ensurePlanFromPicks} from './itinerary-selection'
 export type PlaceKind='hotel'|'restaurant'|'activity'
-export type ApiPlace={line:number;kind:PlaceKind;name:string;address:string;lat:number;lon:number;id:string;source:string;start:number;end:number;distance?:number;cuisine?:string;attractionType?:string;hotelType?:string;hours?:string;neighborhood?:string;webReason?:string;webSource?:string}
+export type ApiPlace={line:number;kind:PlaceKind;name:string;address:string;lat:number;lon:number;id:string;source:string;start:number;end:number;distance?:number;cuisine?:string;attractionType?:string;hotelType?:string;hours?:string;neighborhood?:string;website?:string;webReason?:string;webSource?:string}
 export const GEOAPIFY_ATTRIBUTION='Venue names, categories and addresses: Geoapify · © OpenStreetMap contributors. Provider listings do not confirm current hours, availability, prices or quality.'
 const categories:Record<PlaceKind,string>={hotel:'accommodation.hotel',restaurant:'catering.restaurant',activity:'tourism.attraction'}
 const num=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x)
@@ -57,12 +57,13 @@ export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],record
     const attractionType=kind==='activity'?cats.find(c=>c.startsWith('tourism.attraction.')||/^(?:entertainment\.(?:museum|culture\.gallery|zoo|aquarium|theme_park)|leisure\.park|beach)(?:\.|$)/.test(c))||(['museum','gallery','viewpoint','zoo','aquarium','theme_park'].includes(String(raw.tourism))?String(raw.tourism):typeof raw.historic==='string'?raw.historic:undefined):undefined
     const clean=(v:unknown)=>typeof v==='string'?decodeEntities(v).replace(/[\n\r|<>]/g,' ').trim().slice(0,200):undefined
     const cuisine=clean(raw.cuisine)||clean(p.cuisine),hotelType=kind==='hotel'?cats.find(c=>c.startsWith('accommodation.hotel.'))||clean(raw.tourism):undefined,hours=clean(raw.opening_hours)||clean(p.opening_hours),neighborhood=clean(p.suburb)||clean(p.neighbourhood)
+    const site=clean(raw.website)||clean(raw['contact:website'])||clean(p.website);let website:string|undefined;try{const u=new URL(site||'');if(/^https?:$/.test(u.protocol)&&!u.username&&!u.password)website=u.href}catch{}
     const identity=p.place_id;if(seen.has(identity))continue;seen.add(identity)
     const address=typeof p.formatted==='string'?decodeEntities(p.formatted).replace(/[\n\r|<>]/g,' ').slice(0,300):''
     const content=`${name}\nKind: ${kind}\nAddress: ${address||'Not supplied'}\nCoordinates: ${p.lat}, ${p.lon}\nProvider place ID: ${identity}\nCuisine: ${cuisine||'Not supplied'}\nSubtype: ${hotelType||attractionType||'Not supplied'}\nNeighborhood: ${neighborhood||'Not supplied'}\nProvider-reported hours: ${hours||'Not supplied'}\n${GEOAPIFY_ATTRIBUTION}`
     // Public documentation link, never an API URL containing a key. Content explicitly labels provider data.
     const rec=providerRecords.capture('web_fetch',{url:'https://www.geoapify.com/places-api/',title:'Geoapify venue listing',content},new Date().toISOString())[0]
-    out.push({line:out.length+1,kind,name,address,lat:p.lat,lon:p.lon,id:identity,source:rec.id,start:0,end:name.length,distance:Math.hypot((p.lat-(anchor.lat as number)),(p.lon-(anchor.lon as number))*Math.cos((anchor.lat as number)*Math.PI/180)),cuisine,attractionType,hotelType,hours,neighborhood})
+    out.push({line:out.length+1,kind,name,address,lat:p.lat,lon:p.lon,id:identity,source:rec.id,start:0,end:name.length,distance:Math.hypot((p.lat-(anchor.lat as number)),(p.lon-(anchor.lon as number))*Math.cos((anchor.lat as number)*Math.PI/180)),cuisine,attractionType,hotelType,hours,neighborhood,website})
    }
   }
   }
@@ -200,7 +201,7 @@ export async function researchApiReasons(picks:Record<string,unknown>[],places:A
 export {collectVenueEvidence,venueSynthesisPrompt,validateVenueReasons,venueReasonJudgePrompt} from './itinerary-venue-evidence'
 export type {VenueEvidencePacket,VerifiedVenueReason,EvidenceJudge,EvidenceDestination,EvidenceIO} from './itinerary-venue-evidence'
 export function apiEvidenceVenues(picks:Record<string,unknown>[],places:ApiPlace[]){
- return picks.flatMap(c=>{const p=places.find(p=>p.source===(c.name as {source?:string}|undefined)?.source);return p?[{line:p.line,name:p.name,kind:p.kind,address:p.address}]:[]})
+ return picks.flatMap(c=>{const p=places.find(p=>p.source===(c.name as {source?:string}|undefined)?.source);return p?[{line:p.line,name:p.name,kind:p.kind,address:p.address,website:p.website}]:[]})
 }
 /** Apply only independently evidence-checked synthesized reasons. Return missing lines so
  * orchestration can omit/downrank them or label the factual listing as unresearched. */
