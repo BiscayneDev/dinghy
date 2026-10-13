@@ -24,7 +24,7 @@ it('parse keeps literal named picks and drops invented, miscased-kind and over-c
  const {records,page}=fixture()
  const out=parseChosenVenues({venues:[
   {name:'Reed Hotel',kind:'hotel',why:'Courtyard rooms and a rooftop pool.',sourceId:page.id},
-  {name:'Invented Inn',kind:'hotel',why:'Not on the page at all.',sourceId:'unknown'},
+  {name:'Invented Inn',kind:'hotel',why:'Not on the page at all.',sourceId:page.id},
   {name:'Lantern Table',kind:'spa',why:'Wood-fired fish.',sourceId:page.id},
   {name:'Lantern Table',kind:'restaurant',why:'Wood-fired fish and seasonal vegetables.',sourceId:page.id},
   {name:'Lantern Table',kind:'restaurant',why:'Duplicate row with another why text.',sourceId:page.id},
