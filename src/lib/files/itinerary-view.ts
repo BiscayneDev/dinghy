@@ -81,6 +81,8 @@ function extractFromHead(head:string,text:string):string|null{
  // A possessive owner prefix is not the venue. Keep an immediately continued full venue name.
  if(/['’]s$/i.test(ws[ws.length-1])&&!OWN_WORD.test(ws.join(' ')))return null
  const name=ws.join(' ').replace(/[.\-]+$/,'')
+ if(/^(?:This|That|These|Those|Our|Your|My|A|An)\b/i.test(name))return null
+ if(/^The\s+\w+$/i.test(name)&&!OWN_WORD.test(name))return null
  if(MARKETING_NAME.test(name))return null
  if(ws.some(w=>/^(?:restaurants|hotels|attractions|activities)$/i.test(w))&&ws.every(w=>/^(?:restaurants|hotels|attractions|activities)$/i.test(w)||GEO_NAMES.includes(w.toLowerCase())||NAME_CONNECT.has(w.toLowerCase())))return null
  if(!OWN_WORD.test(name)&&(/\b(?:menus?|months?|through|powered by)\b/i.test(name)||ws.every(w=>GEO_NAMES.includes(w.toLowerCase())||NAME_CONNECT.has(w.toLowerCase()))))return null
@@ -115,12 +117,13 @@ export function buildPageView(records:SourceRecords,perPage=4500,total=13000,ski
    const lead=raw.match(/^[\s#>*•\-\d.)]*/)![0].length,content=raw.slice(lead).replace(/\s+$/,'')
    const flat=content.replace(/\s+/g,' ').trim()
    if(/^\s*#/.test(raw)||(flat.length<60&&!/[.!?:]$/.test(flat))){const sk=sectionKind(flat);if(sk)ctx=sk;else if(/^\s*#{1,2}\s/.test(raw))ctx=undefined}
-   if(flat.length<8||flat.split(' ').length<2||NAV.test(flat))continue
+   const loneHeading=!!ctx&&/^\s*#{1,6}\s/.test(raw)&&/^\p{Lu}[\p{L}'’]{3,}$/u.test(flat)
+   if((!loneHeading&&(flat.length<8||flat.split(' ').length<2))||NAV.test(flat))continue
    for(const m of content.matchAll(/\S[^.!?]*(?:[.!?]+(?=\s|$)|$)/g)){
     const lit=m[0].slice(0,260),flatS=stripUi(lit.replace(/\s+/g,' ').trim())
-    if(flatS.length<8||flatS.split(' ').length<2)continue
+    if(!loneHeading&&(flatS.length<8||flatS.split(' ').length<2))continue
     if(size+flatS.length>perPage||used+size+flatS.length>total){full=true;break}
-    const name=extractLineName(flatS);if(!name)continue
+    const name=extractLineName(flatS)||(ctx&&/^(?:\p{Lu}[\p{L}'’]{3,})$/u.test(flatS)&&/^\s*#{1,6}\s/.test(raw)&&!MARKETING_NAME.test(flatS)&&!isNonVenueName(flatS)&&!isCategoryPhrase([flatS])?flatS:null);if(!name)continue
     if(titlePrefix&&flatS.startsWith(titlePrefix)&&/[|]/.test(flatS)&&name===titlePrefix)continue
     const start=lineStart+lead+m.index!
     entries.push({n:entries.length+1,source:id,start,end:start+lit.length,text:flatS,name,ctx});size+=flatS.length+name.length+12;added++
