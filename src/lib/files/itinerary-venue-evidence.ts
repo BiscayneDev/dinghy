@@ -14,28 +14,40 @@ const host=(url:string)=>{try{return new URL(url).hostname.replace(/^www\./,'')}
 /** Identity is anchored by an exact name in the fetched page title/heading. A generic roundup
  * is sliced at heading boundaries, so another venue cannot supply this venue's evidence.
  * Canonical destination terms come from the caller's resolved location, never geocoded here. */
-export function venueEvidenceSections(venue:EvidenceVenue,destination:EvidenceDestination,title:string,text:string):string[]{
+function nameTokens(s:string):string[]{return normalize(s).replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(w=>w&&!['and','the','by','at','in','restaurant','cafe','pizza','hotel','historic','area'].includes(w))}
+function nameMatch(name:string,title:string):boolean{
+ if(normalize(title).includes(normalize(name)))return true
+ const a=nameTokens(name),b=new Set(nameTokens(title))
+ // Token reordering/punctuation can resolve a branded alias, never a single common word.
+ return a.length>=2&&a.every(w=>b.has(w))
+}
+export function venueEvidenceSections(venue:EvidenceVenue,destination:EvidenceDestination,title:string,text:string,url?:string):string[]{
  const name=normalize(venue.name),page=normalize(title+'\n'+text)
  if(!name||!destination.matchTerms.some(term=>normalize(term)&&page.includes(normalize(term))))return []
  const lines=text.split('\n'),sections:string[]=[]
- const namedTitle=normalize(title).includes(name)
+ const namedTitle=nameMatch(venue.name,title)
+ const addressBound=!!venue.address&&addressKey(venue.address).some(want=>addressKey(text).some(actual=>want.number===actual.number&&want.street===actual.street))
+ const firstParty=!!url&&!!venue.website&&host(url)===host(venue.website)
+ const titleTokens=nameTokens(title),aliasTokens=nameTokens(venue.name)
+ const addressAlias=addressBound&&aliasTokens.filter(w=>titleTokens.includes(w)).length>=2
+ const boundTitle=namedTitle||addressAlias||(firstParty&&addressBound)
  const headings=lines.map((line,index)=>({line,index})).filter(x=>/^\s*#{1,6}\s/.test(x.line))
  for(const h of headings){
-  if(!normalize(h.line).includes(name))continue
+  if(!nameMatch(venue.name,h.line))continue
   const depth=h.line.trimStart().match(/^#+/)![0].length
   const next=headings.find(x=>x.index>h.index&&x.line.trimStart().match(/^#+/)![0].length<=depth)
   sections.push(lines.slice(h.index,next?.index??lines.length).join('\n'))
  }
- if(!sections.length&&namedTitle){
+ if(!sections.length&&boundTitle){
   // A single-venue page can use "we" or pronouns; first-person is source attribution,
   // not a reason to discard evidence. Exclude navigation and huge tail sections.
   sections.push(text)
  }
  if(!sections.length){
   // Plain article text without headings: only paragraphs actually naming this venue.
-  for(const line of lines)if(normalize(line).includes(name))sections.push(line)
+  for(const line of lines)if(nameMatch(venue.name,line))sections.push(line)
  }
- return sections.map(s=>s.trim()).filter(s=>s.length>=25&&!unsafe.test(s))
+ return sections.map(s=>s.split(/\n(?:Nearby(?:\s|$)|What's nearby|You may also like|Recommended (?:hotels|restaurants)|Other (?:hotels|restaurants)|More (?:hotels|restaurants)|activity\s*$)/im)[0].trim()).filter(s=>s.length>=25&&!unsafe.test(s))
 }
 const CHROME=/\b(?:accept (?:all )?cookies|cookie (?:policy|settings|consent)|privacy policy|terms (?:of use|and conditions)|all rights reserved|sign (?:in|up)|subscribe (?:to|now)|newsletter|forgot password|skip to (?:content|navigation)|enable javascript|manage preferences|copyright)\b/i
 const DETAILS=/\b(?:rooms?|suites?|beds?|courtyard|terrace|garden|rooftop|pool|breakfast|design|architecture|historic|restored|views?|menu|dishes?|serves?|cuisine|ingredients?|recipes?|sourced|vegetables?|seafood|pasta|pizza|cocktails?|dining|atmosphere|exhibits?|collections?|gallery|art|museum|trails?|walks?|scenery|wildlife|performances?|concerts?|workshops?|hands.on|games?|sports?|tour|tickets?|visitors?|experience)\b/gi
@@ -73,7 +85,10 @@ function contradictionPassages(sections:string[]):string[]{
  const out:string[]=[],seen=new Set<string>()
  for(const section of sections){const lines=section.split('\n');for(let i=0;i<lines.length;i++){
   const line=lines[i].trim();ADDRESS.lastIndex=0
-  if(!line||unsafe.test(line)||(!CONTRADICTION.test(line)&&!ADDRESS.test(line)))continue
+  if(!line||unsafe.test(line)||CHROME.test(line))continue
+  const isAddress=ADDRESS.test(line);ADDRESS.lastIndex=0
+  const namedAddress=isAddress&&(/^(?:address|location|contact)\b/i.test(lines[i-1]?.trim()||'')||/^(?:address|location)\s*:/i.test(line)||/^\d/.test(line))
+  if(!namedAddress&&!CONTRADICTION.test(line.replace(/\blocation\b/gi,'')))continue
   const passage=lines.slice(Math.max(0,i-1),Math.min(lines.length,i+2)).join('\n').trim()
   if(passage.length>1600||unsafe.test(passage)||seen.has(passage))continue
   seen.add(passage);out.push(passage)
@@ -95,7 +110,7 @@ function verifiedContradictionContext(packet:VenueEvidencePacket,records:SourceR
  for(const e of [...packet.evidence,...(packet.contradictionContext||[])]){
   const text=records.pageText(e.source)
   if(e.origin!=='fetched_page'||!text||records.pageUrl(e.source)!==e.url)continue
-  const sections=venueEvidenceSections(packet.venue,{query:'',matchTerms:[packet.venue.name]},e.title,text)
+  const sections=venueEvidenceSections(packet.venue,{query:'',matchTerms:nameTokens(packet.venue.name)},e.title,text,e.url)
   for(const excerpt of contradictionPassages(sections)){
    const key=e.source+'\n'+excerpt;if(seen.has(key)||!text.includes(excerpt))continue
    seen.add(key);out.push({...e,id:'ctx'+packet.venue.line+'_'+(out.length+1),excerpt})
@@ -119,22 +134,24 @@ export async function collectVenueEvidence(venues:EvidenceVenue[],destination:Ev
     const q='"'+v.name+'" '+destination.query+' '+(v.kind==='restaurant'?'food atmosphere review':v.kind==='hotel'?'rooms atmosphere review':'visitor highlights review')
     const data=await io.search(q,controller.signal) as {results?:{url?:unknown;title?:unknown}[]}
     const hits=(data?.results||[]).filter(h=>typeof h.url==='string'&&safeUrl(h.url as string)).slice(0,3)
-    const pages=await Promise.all(hits.map(async h=>{
-     try{const p=await io.read(h.url as string,controller.signal) as {title?:unknown;content?:unknown};return {url:h.url as string,title:typeof p?.title==='string'?p.title:typeof h.title==='string'?h.title:'',text:typeof p?.content==='string'?decodeEntities(p.content):''}}catch{return null}
+    const urls=[...(v.website&&safeUrl(v.website)?[{url:v.website,title:v.name}]:[]),...hits].filter((h,i,a)=>a.findIndex(x=>x.url===h.url)===i).slice(0,4)
+    await Promise.all(urls.map(async h=>{
+     try{
+      const p=await io.read(h.url as string,controller.signal) as {title?:unknown;content?:unknown}
+      if(controller.signal.aborted)return
+      const page={url:h.url as string,title:typeof p?.title==='string'?p.title:typeof h.title==='string'?h.title:'',text:typeof p?.content==='string'?decodeEntities(p.content):''}
+      if(!page.text)return
+      const sections=venueEvidenceSections(v,destination,page.title,page.text,page.url),excerpts=relevantVenueExcerpts(sections,page.text,v),context=contradictionPassages(sections)
+      if(!excerpts.length&&!context.length)return
+      const rec=records.capture('web_fetch',{url:page.url,title:page.title,content:page.text},new Date().toISOString())[0]
+      if(!rec)return
+      for(const excerpt of context)(packet.contradictionContext??=[]).push({id:'ctx'+v.line+'_'+((packet.contradictionContext?.length??0)+1),source:rec.id,url:rec.url,title:page.title,excerpt,origin:'fetched_page',sourceRole:v.website&&host(v.website)===host(page.url)?'first_party':'unclassified'})
+      for(const excerpt of excerpts)packet.evidence.push({id:'ev'+v.line+'_'+(packet.evidence.length+1),source:rec.id,url:rec.url,title:page.title,excerpt,origin:'fetched_page',sourceRole:v.website&&host(v.website)===host(page.url)?'first_party':'unclassified'})
+     }catch{/* a failed or slow sibling cannot discard already fetched scoped evidence */}
     }))
-    if(controller.signal.aborted)return
-    for(const page of pages){
-     if(!page?.text)continue
-     const sections=venueEvidenceSections(v,destination,page.title,page.text),excerpts=relevantVenueExcerpts(sections,page.text,v),context=contradictionPassages(sections)
-     if(!excerpts.length&&!context.length)continue
-     const rec=records.capture('web_fetch',{url:page.url,title:page.title,content:page.text},new Date().toISOString())[0]
-     if(!rec)continue
-     for(const excerpt of context)(packet.contradictionContext??=[]).push({id:'ctx'+v.line+'_'+((packet.contradictionContext?.length??0)+1),source:rec.id,url:rec.url,title:page.title,excerpt,origin:'fetched_page',sourceRole:v.website&&host(v.website)===host(page.url)?'first_party':'unclassified'})
-     for(const excerpt of excerpts)packet.evidence.push({id:'ev'+v.line+'_'+(packet.evidence.length+1),source:rec.id,url:rec.url,title:page.title,excerpt,origin:'fetched_page',sourceRole:v.website&&host(v.website)===host(page.url)?'first_party':'unclassified'})
-    }
     if(packet.evidence.length)packet.status='ready'
    })(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('evidence_timeout'))},options.budgetMs??8000)})])
-  }catch{packet.status=controller.signal.aborted?'timeout':'missing'}finally{if(timer)clearTimeout(timer);controller.abort();options.signal?.removeEventListener('abort',cancel)}
+  }catch{packet.status=packet.evidence.length?'ready':controller.signal.aborted?'timeout':'missing'}finally{if(timer)clearTimeout(timer);controller.abort();options.signal?.removeEventListener('abort',cancel)}
   if(!packet.evidence.length)packet.notes.push('No fetched venue-specific description was verified; do not call a provider category a researched recommendation.')
  }}
  await Promise.all(Array.from({length:Math.max(1,Math.min(options.concurrency??3,venues.length))},worker))
