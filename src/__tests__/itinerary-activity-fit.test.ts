@@ -27,3 +27,11 @@ it('HTTP/invalid judge outcomes never grant experience permission',async()=>{
  const verdict={line:1,decision:'recommend',experience:'A commemorative plaque',requestBasis:['weekend'],evidenceIds:['ev1_1'],reason:'Weekend history stop',unknowns:[]}
  expect((await validateActivityFit({activities:[verdict]},'fun weekend',[packet],records,async()=>({verdict:'http'}))).accepted).toHaveLength(0)
 })
+
+it('request authority is server-held and field failures have finite codes',async()=>{
+ const records=new SourceRecords(),r=records.capture('web_fetch',{url:'https://fictional.test/workshop',content:'Reed Workshop offers hands-on printmaking sessions in Harbor.'},'fictional')[0]
+ const packet={venue:{line:1,name:'Reed Workshop',kind:'activity' as const},status:'ready' as const,notes:[],evidence:[{id:'ev1_1',source:r.id,url:r.url,title:'Reed Workshop',excerpt:r.content!,origin:'fetched_page' as const,sourceRole:'unclassified' as const}]}
+ const row={line:1,decision:'recommend',experience:'Hands-on printmaking sessions',evidenceIds:['ev1_1'],reason:'An active break after work.',unknowns:[]}
+ expect((await validateActivityFit({activities:[row]},'fun weekend',[packet],records,async input=>({verdict:input.request==='fun weekend'?'yes':'no'}))).accepted).toHaveLength(1)
+ expect((await validateActivityFit({activities:[{...row,experience:'x'.repeat(251)}]},'fun weekend',[packet],records,async()=>true)).rejected[0].code).toBe('experience_bounds')
+})
