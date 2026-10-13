@@ -1,3 +1,4 @@
+import {decodeEntities} from './entities'
 import {pageRuntimeHtml,staticPageText} from '@/lib/pages/runtime'
 /**
  * Dinghy file renderer. One document model (title + markdown body) rendered in
@@ -117,7 +118,7 @@ const safe = new Marked({
     },
 })
 
-const decodeSourceLiteral = (s: string): string => s.replace(/&#(\d+);/g, (entity, code) => { const n = Number(code); return [92,96,42,95,123,125,91,93,40,41,33,35,124,58].includes(n) ? String.fromCharCode(n) : entity }).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+const decodeSourceLiteral = decodeEntities
 
 /** Inline markdown (bold/italic/code/links) to plain text for PDF/DOCX runs. */
 function plain(text: string): string {
@@ -357,7 +358,7 @@ export function itineraryCover(doc:DinghyDoc):{name:string;destination:string}|n
  if(!/Selection reasons:/i.test(doc.body))return null
  const stay=splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='stay')
  if(!stay||stay.kind!=='block')return null
- const name=stay.lines.find(l=>l.trim())?.split(' | ')[0]?.trim()
+ const name=decodeEntities(stay.lines.find(l=>l.trim())?.split(' | ')[0]?.trim()??'')
  return name?{name,destination:doc.title}:null
 }
 function coverHtml(cover:{name:string;destination:string}):string{
