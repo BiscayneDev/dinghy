@@ -45,7 +45,6 @@ export async function geoapifyPlaces(destination:string,kinds:PlaceKind[],record
   const out:ApiPlace[]=[],seen=new Set<string>(),providerRecords=new SourceRecords()
   for(const kind of kinds){
    for(const radius of kind==='activity'?[4000,10000]:[4000]){
-   if(radius===10000&&out.filter(p=>p.kind==='activity').length>=3)break
    await new Promise(resolve=>setTimeout(resolve,210))
    const category=radius===10000?'tourism.attraction,entertainment.museum,entertainment.culture.gallery,entertainment.zoo,entertainment.aquarium,entertainment.theme_park,leisure.park,beach':categories[kind]
    let data:{features?:{properties?:Record<string,unknown>}[]}
@@ -214,3 +213,14 @@ export function applyVerifiedApiReasons(reasons:import('./itinerary-venue-eviden
  }
  return {accepted,missing,citations}
 }
+
+/** Keep selected activities, then sample different provider subtypes for research.
+ * Subtypes choose what to inspect, never grant recommendation quality. */
+export function activityResearchSlate(places:ApiPlace[],selectedSources:Set<string>,replacementLimit=6):ApiPlace[]{
+ const selected=places.filter(p=>p.kind==='activity'&&selectedSources.has(p.source)),remaining=places.filter(p=>p.kind==='activity'&&!selectedSources.has(p.source))
+ const groups=new Map<string,ApiPlace[]>()
+ for(const p of remaining){const type=p.attractionType||'unspecified';groups.set(type,[...(groups.get(type)||[]),p])}
+ const result:ApiPlace[]=[]
+ while(result.length<replacementLimit){let added=false;for(const group of groups.values()){const p=group.shift();if(p){result.push(p);added=true;if(result.length===replacementLimit)break}}if(!added)break}
+ return [...selected,...result]
+ }
