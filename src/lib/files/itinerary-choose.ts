@@ -88,8 +88,13 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  if(!chooserPages(opts.records).length)return empty
  let venues:ChosenVenue[]=[]
  try{
-  const raw=await opts.json(chooseVenuesPrompt(opts.request,opts.records,opts.knownPlaces),1800,opts.signal)
-  venues=parseChosenVenues(JSON.parse(raw.slice(raw.indexOf('{'),raw.lastIndexOf('}')+1)),opts.records)
+  const base=chooseVenuesPrompt(opts.request,opts.records,opts.knownPlaces)
+  const groups=await Promise.all((['hotel','restaurant','activity'] as const).map(async kind=>{
+   const focus=kind==='hotel'?'Choose exactly two hotels.':kind==='restaurant'?'Choose exactly three restaurants.':'Choose three distinct weekend activities, preferably art museums or outdoor art plus the optional arena only if sourced.'
+   const raw=await opts.json(base+'\nFor this call only: '+focus+' Return only '+kind+' rows. Each explanation must describe the venue itself, not surrounding neighborhoods or venues. Prefer concrete features and omit unsupported fit claims.',1800,opts.signal)
+   return parseChosenVenues(JSON.parse(raw.slice(raw.indexOf('{'),raw.lastIndexOf('}')+1)),opts.records).filter(v=>v.kind===kind)
+  }))
+  venues=groups.flat()
  }catch(error){await opts.onStage?.(error instanceof SyntaxError?'itinerary:choose_bad_json':'itinerary:choose_call_failed');return empty}
  if(!venues.length)return empty
  const verify=opts.verify??((noms:{name:string;kind:PlaceKind}[],records:SourceRecords,signal:AbortSignal)=>geoapifyPlaces(opts.destination,[...new Set(noms.map(n=>n.kind))],records,signal,undefined,{...opts.hints,namedCandidates:noms}))
@@ -104,10 +109,10 @@ export async function chooseItineraryVenues(opts:{request:string;records:SourceR
  const surviving=matched.filter(m=>!venueVeto(m.venue.name,opts.records.pageText(m.venue.sourceId)||'',m.place.address))
  let picks=surviving
  if(surviving.length)try{
-  const raw=await opts.json(venueSanityPrompt(surviving.map(m=>({name:m.venue.name,kind:m.venue.kind,why:m.venue.why,excerpt:nameWindow(opts.records.pageText(m.venue.sourceId)||'',m.venue.name)}))),700,opts.signal)
+  const raw=await opts.json(venueSanityPrompt(surviving.map(m=>({name:m.venue.name,kind:m.venue.kind,why:m.venue.why,excerpt:nameWindow(opts.records.pageText(m.venue.sourceId)||'',m.venue.name)}))),1601,opts.signal)
   const checks=parseSanityChecks(JSON.parse(raw.slice(raw.indexOf('{'),raw.lastIndexOf('}')+1)))
-  if(checks){const rows=(JSON.parse(raw.slice(raw.indexOf('{'),raw.lastIndexOf('}')+1)) as {checks:{name:string;ok:boolean;why?:string}[]}).checks;picks=surviving.filter(m=>{if(checks.get(norm(m.venue.name))!==false)return true;const corrected=rows.find(r=>norm(r.name)===norm(m.venue.name))?.why;if(typeof corrected==='string'&&corrected.length>=15&&corrected.length<=300&&!unsafe.test(corrected)&&!/\b(?:excerpt|provided description|does not (?:detail|support|mention)|not (?:stated|supported)|source (?:text|does))\b/i.test(corrected)){m.venue={...m.venue,why:corrected};return true}return false})}
+  if(checks){const rows=(JSON.parse(raw.slice(raw.indexOf('{'),raw.lastIndexOf('}')+1)) as {checks:{name:string;ok:boolean;why?:string}[]}).checks;picks=surviving.filter(m=>{if(checks.get(norm(m.venue.name))===true)return true;const corrected=rows.find(r=>norm(r.name)===norm(m.venue.name))?.why;if(typeof corrected==='string'&&corrected.length>=15&&corrected.length<=300&&!unsafe.test(corrected)&&!/\b(?:excerpt|provided description|does not (?:detail|support|mention)|not (?:stated|supported)|source (?:text|does))\b/i.test(corrected)){m.venue={...m.venue,why:corrected};return true}return false})}
   else await opts.onStage?.('itinerary:sanity_unparsed')
  }catch{await opts.onStage?.('itinerary:sanity_skipped')}
  return {picks:picks.map(m=>({place:m.place,why:m.venue.why,sourceId:m.venue.sourceId})),chosen:venues.length,verified,dropped:venues.length-picks.length}
-}
+   }
