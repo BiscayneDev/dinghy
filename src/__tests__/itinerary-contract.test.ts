@@ -26,7 +26,7 @@ describe('researched itinerary contract',()=>{
   const result=await chatWithTools([{role:'user',content:ask}],opts,[file,search,read,tool('find_places')],ctx)
   expect(requests[0].tool_choice.function.name).toBe('web_search');expect(read.execute).toHaveBeenCalled();expect(file.execute).toHaveBeenCalledTimes(1);expect(result.deliverable?.state).toBe('completed');expect(JSON.stringify(requests[0].messages)).toContain('unspecified Friday');expect(requests[0].tools.some((t:any)=>t.function.name==='find_places')).toBe(false)
  })
- it('does not invent recommendations when public research is unavailable',async()=>{const file=tool('create_file');harness([call('create_file',{title:'Harbor',body}),stop('Office visit supplied by the user. Recommendations were not verified.')]);const result=await chatWithTools([{role:'user',content:ask}],opts,[file],ctx);expect(file.execute).not.toHaveBeenCalled();expect(result.deliverable?.state).toBe('unfulfilled')})
+ it('does not invent recommendations when public research is unavailable',async()=>{const file=tool('create_file');harness([call('create_file',{title:'Harbor',body}),stop('Office visit supplied by the user. Recommendations were not verified.')]);const result=await chatWithTools([{role:'user',content:ask}],opts,[file],ctx);expectAgendaOnly(file);expect(result.deliverable?.state).toBe('completed')})
  it('local structured chat card never calls the network, including unsupported text',async()=>{
   const network=vi.fn(async()=>{throw Error('No network permitted')});vi.stubGlobal('fetch',network)
   const card=await renderSurfacePreview({title:'Harbor founders itinerary',subtitle:'Office visit and weekend options',body},'chat',[],true)
@@ -67,10 +67,10 @@ describe('production iMessage itinerary research wiring',()=>{
   const fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock)
   const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage},[search,file],ctx)
   expect(onStage).toHaveBeenCalledWith('tool','research:unavailable:web_fetch')
-  expect(fetchMock).not.toHaveBeenCalled();expect(file.execute).not.toHaveBeenCalled()
-  expect(result.reply).toContain('not researched');expect(result.deliverable?.state).toBe('unfulfilled')
+  expect(fetchMock).not.toHaveBeenCalled();expectAgendaOnly(file)
+  expect(result.reply).toContain('unverified');expect(result.deliverable?.state).toBe('completed')
  })
- it('HTTP reader failure does not become a verified source or published file',async()=>{
+ it('HTTP reader failure publishes agenda only, never verified sources',async()=>{
   vi.stubEnv('TAVILY_API_KEY','fictional-key')
   const {liveInfoTools}=await import('@/lib/spectrum/imessage-tools')
   const file=tool('create_file'),onStage=vi.fn(async()=>{})
@@ -81,7 +81,7 @@ describe('production iMessage itinerary research wiring',()=>{
    return new Response(JSON.stringify([call('web_search',{query:'Harbor official guide'}),call('web_fetch',{url}),call('create_file',{title:'Harbor',body}),stop('Page read blocked; recommendations unverified.')][iteration++]??stop()))
   }))
   const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage},[...liveInfoTools(),file],ctx)
-  expect(file.execute).not.toHaveBeenCalled();expect(onStage).toHaveBeenCalledWith('tool','research:read_failed');expect(result.deliverable?.state).toBe('unfulfilled')
+  expectAgendaOnly(file);expect(onStage).toHaveBeenCalledWith('tool','research:read_failed');expect(result.deliverable?.state).toBe('completed')
  })
 })
 
@@ -103,7 +103,7 @@ describe('server-owned required read transition',()=>{
   const file=tool('create_file'),search=tool('web_search',{results:[{title:'Harbor',url,content:'lead'}]}),read=tool('web_fetch',{title:'Empty page',url,content:''}),onStage=vi.fn(async()=>{})
   harness([call('web_search'),call('create_file',{title:'Harbor',body})])
   const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage},[search,read,file],ctx)
-  expect(onStage).toHaveBeenCalledWith('tool','research:read_empty');expect(file.execute).not.toHaveBeenCalled();expect(result.deliverable?.state).toBe('unfulfilled')
+  expect(onStage).toHaveBeenCalledWith('tool','research:read_empty');expectAgendaOnly(file);expect(result.deliverable?.state).toBe('completed')
  })
  it('honors full egress block on the required server read',async()=>{
   vi.stubEnv('DINGHY_EGRESS_POLICY','block');vi.stubEnv('DINGHY_PRIVATE_ROUTE','on');vi.stubEnv('DINGHY_PRIVATE_PROVIDERS','test-private')
@@ -137,7 +137,7 @@ it('offers only create_file on the bounded itinerary repair and keeps research u
  const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search,read,file],ctx)
  expect(req[2].tools.map((t:any)=>t.function.name)).toEqual(['create_file'])
  expect(stage).toHaveBeenCalledWith('tool','invalid:itinerary_shape:stay_rows')
- expect(read.execute).toHaveBeenCalledTimes(1);expect(file.execute).not.toHaveBeenCalled();expect(result.deliverable?.state).toBe('unfulfilled')
+ expect(read.execute).toHaveBeenCalledTimes(1);expectAgendaOnly(file);expect(result.deliverable?.state).toBe('completed')
 })
 
 import {ITINERARY_DAY_HEADING_NOTE,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
@@ -175,13 +175,21 @@ describe('bounded required read fallback',()=>{
  it('stops at six actual URLs with no recommendation from search snippets',async()=>{
   const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async(_input:any)=>({success:false,publicReadFailure:'timeout' as const,error:'raw'}))};harness([call('web_search')])
   const result=await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search(),read,file],ctx)
-  expect(read.execute.mock.calls.map(c=>(c[0] as any).url)).toEqual(urls.slice(0,6));expect(file.execute).not.toHaveBeenCalled();expect(result.deliverable?.state).toBe('unfulfilled');expect(stage).toHaveBeenCalledWith('tool','research:read_failure:timeout')
+  expect(read.execute.mock.calls.map(c=>(c[0] as any).url)).toEqual(urls.slice(0,6));expectAgendaOnly(file);expect(result.deliverable?.state).toBe('completed');expect(stage).toHaveBeenCalledWith('tool','research:read_failure:timeout')
  })
  it('stops fallback when synthesis headroom falls below18s',async()=>{
   const start=Date.now();const clock=vi.spyOn(Date,'now').mockReturnValue(start),file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async()=>{clock.mockReturnValue(start+83_000);return{success:false,publicReadFailure:'http' as const}})};harness([call('web_search')])
-  try{await chatWithTools([{role:'user',content:ask}],{...opts,deadlineAt:start+100_000,onStage:stage},[search(),read,file],ctx);expect(read.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','research:read_budget');expect(file.execute).not.toHaveBeenCalled()}finally{clock.mockRestore()}
+  try{await chatWithTools([{role:'user',content:ask}],{...opts,deadlineAt:start+100_000,onStage:stage},[search(),read,file],ctx);expect(read.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','research:read_budget');expectAgendaOnly(file)}finally{clock.mockRestore()}
  })
  it('classifies thrown custom reader errors without retaining their text',async()=>{
-  const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async()=>{throw Error('private message')})};harness([call('web_search')]);await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search(),read,file],ctx);expect(stage).toHaveBeenCalledWith('tool','research:read_failure:network');expect(JSON.stringify(stage.mock.calls)).not.toContain('private message');expect(file.execute).not.toHaveBeenCalled()
+  const file=tool('create_file'),stage=vi.fn(async()=>{}),read={...tool('web_fetch'),execute:vi.fn(async()=>{throw Error('private message')})};harness([call('web_search')]);await chatWithTools([{role:'user',content:ask}],{...opts,onStage:stage},[search(),read,file],ctx);expect(stage).toHaveBeenCalledWith('tool','research:read_failure:network');expect(JSON.stringify(stage.mock.calls)).not.toContain('private message');expectAgendaOnly(file)
  })
 })
+
+function expectAgendaOnly(file:{execute:{mock:{calls:unknown[][]}}}){
+ expect(file.execute).toHaveBeenCalledTimes(1)
+ const input=file.execute.mock.calls[0][0] as {body:string;title:string}
+ expect(input.title).toBe('Unverified itinerary');expect(input.body).toContain('No hotel, restaurant or activity is recommended')
+ expect(input.body).not.toMatch(/:::stay|:::options|:::sources|Harbor Inn|Harbor Cafe|Harbor Museum/)
+ expect(input.body).toContain('10am');expect(input.body).toContain('Working sessions')
+}
