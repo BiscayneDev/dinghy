@@ -226,3 +226,40 @@ it('typed provider listings feed model selection and publish attribution without
  expect(html).not.toContain('Invented dates');expect(stages).toContain('itinerary:judge:yes');expect(html).toContain('Recommendation evidence');expect(markdown).toContain('https://harbor.test/venue');expect(html).not.toContain('{{source:');expect(html).toContain('courtyard garden');expect(html).toContain('wood-fired noodles');expect(html).toContain('maritime paintings');expect(html).toContain('Geoapify');expect(html).toContain('OpenStreetMap contributors');expect(html).not.toContain('apiKey=');expect(html).toContain('Harbor &amp; Reed Inn');for(const forbidden of ['amp;amp','Address&amp;#58','learn-more','Exotic seafood','Liberty Tower','Invented Cafe'])expect(html).not.toContain(forbidden);expect((markdown.match(/Office visit/gi)||[])).toHaveLength(1);expect((markdown.match(/© OpenStreetMap contributors/g)||[])).toHaveLength(1);expect((markdown.match(/## Source provenance/g)||[])).toHaveLength(1);await mkdir('/tmp/venue-proof',{recursive:true});await writeFile('/tmp/venue-proof/page.html',html);await writeFile('/tmp/venue-proof/file.pdf',files.files()[0].bytes)
 
 })
+
+it('actual handler omits a rejected activity and preserves an explicit weekend gap',async()=>{
+ vi.stubEnv('TAVILY_API_KEY','fictional-key')
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-key')
+ const url='https://harbor.test/visitors'
+ const ask='Make an itinerary for fictional founders visiting Harbor on Friday. Office visit10am then working sessions, hotel and restaurant recommendations and weekend activities.'
+ const body='## Friday\n- 10:00 User supplied office visit.\n- Working sessions: venue and duration to confirm.\n## Weekend\nPlans to confirm.'
+ const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
+ const files=fileToolsFor(),stages:string[]=[],requests:any[]=[]
+ published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
+ vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
+  if(String(u).startsWith('https://api.geoapify.com/')){const url=new URL(String(u));if(url.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,rank:{confidence:1}}]}));const category=url.searchParams.get('categories')!,name=category.startsWith('accommodation')?'Harbor &amp;amp; Reed Inn':category.startsWith('catering')?'Harbor Cafe':'Harbor Museum';return new Response(JSON.stringify({features:[{properties:{name,categories:[category],lat:25,lon:-80,place_id:name,formatted:'42 Quay St, Harbor'}}]}))}
+  if(String(u)==='https://api.tavily.com/search'&&JSON.parse(init.body).query.startsWith('"'))return new Response(JSON.stringify({results:[{url:'https://harbor.test/venue',title:'Harbor venue'}]}))
+  if(String(u)==='https://harbor.test/venue')return new Response('<html><title>Harbor venues</title><body>Harbor city. Harbor &amp; Reed Inn has a courtyard garden and a reading lounge. Harbor Cafe serves seasonal vegetable bowls and wood-fired noodles. Harbor Museum houses maritime paintings and model ships.</body></html>')
+  if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Hotel, dining and museum public listings.'}]}))
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Inn rooms. Harbor Cafe dinner. Harbor Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
+  const reasonReq=JSON.parse(init.body);if(reasonReq.max_tokens===2200){return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({activities:[{line:3,decision:'recommend',experience:'Maritime paintings and model ships',requestBasis:['weekend'],evidenceIds:['ev3_1'],reason:'A supported weekend museum visit.',unknowns:[]}]})}}]}))}if(reasonReq.max_tokens===3000){
+   const whys=['A courtyard garden and reading lounge make it a calm base for the fictional founders visit.','Seasonal vegetable bowls and wood-fired noodles suit a team dinner.','Its maritime paintings and model ships make a fitting weekend stop.']
+   const claims=['A courtyard garden and reading lounge','Seasonal vegetable bowls and wood-fired noodles','Maritime paintings and model ships']
+   const reasons=[1,2,3].map(line=>({line,why:whys[line-1],claims:[{text:claims[line-1],evidenceIds:['ev'+line+'_1']}],fit:'Fits the fictional founders visit.',fitBasis:['founders'],unknowns:['Hours and availability not checked']}))
+   return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({reasons})}}]}))
+  }
+  requests.push(reasonReq)
+  if(requests.at(-1).max_tokens===8){const req=requests.pop();const activity=req.messages.some((m:any)=>String(m.content).startsWith('Verify experience and reason'));return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:activity?'no':'yes'}}]}))}
+  const n=requests.length,source=JSON.parse(requests.at(-1).messages.filter((m:any)=>m.role==='tool').at(-1)?.content??'{}').source_records?.find((r:any)=>r.origin==='page')
+  const name=n===1?'web_search':n===2?'select_itinerary_candidates':'create_file'
+  const args=name==='web_search'?{query:'Harbor visitor guide'}:name==='select_itinerary_candidates'?{candidates:[{kind:'hotel',line:1},{kind:'restaurant',line:9999},{kind:'restaurant',line:1},{kind:'activity',line:3}]}:{title:'Synthetic Harbor itinerary',subtitle:'Invented dates June 12 to June 14',body:body+'\n- Hotel Recommendations unknown / learn-more\n- Restaurant Recommendations unknown / learn-more\n- Exotic seafood dishes for dinner\n- Liberty Tower\n- 10am office visit\n',itinerary_candidates:[{kind:'restaurant',name:'Invented Cafe'}],format:'pdf',kind:'itinerary'}
+  return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
+ }))
+ const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
+ const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ expect(result.deliverable?.state).toBe('completed');expect(published).toHaveBeenCalledTimes(1);expect(stages).toContain('itinerary:places_api:ready_3');expect(stages).toContain('itinerary:accepted:h1_r1_a0');expect(stages).toContain('itinerary:activity_fit:o1_r0');expect(stages).toContain('itinerary:partial_unverified:activity');expect(stages).toContain('itinerary:venue_evidence:r3_m0');expect(stages).toContain('itinerary:reasons:a3_r0')
+ const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString(),markdown=files.files()[0].markdown;
+ if(typeof markdown!=='string')throw new Error('Expected itinerary markdown')
+ expect(html).not.toContain('Invented dates');expect(stages).toContain('itinerary:judge:yes');expect(html).toContain('Recommendation evidence');expect(markdown).toContain('https://harbor.test/venue');expect(html).not.toContain('{{source:');expect(html).toContain('courtyard garden');expect(html).toContain('wood-fired noodles');expect(html).not.toContain('Harbor Museum');expect(markdown).toContain('No evidence-backed meaningful weekend activity');expect(html).toContain('Geoapify');expect(html).toContain('OpenStreetMap contributors');expect(html).not.toContain('apiKey=');expect(html).toContain('Harbor &amp; Reed Inn');for(const forbidden of ['amp;amp','Address&amp;#58','learn-more','Exotic seafood','Liberty Tower','Invented Cafe'])expect(html).not.toContain(forbidden);expect((markdown.match(/Office visit/gi)||[])).toHaveLength(1);expect((markdown.match(/© OpenStreetMap contributors/g)||[])).toHaveLength(1);expect((markdown.match(/## Source provenance/g)||[])).toHaveLength(1);await mkdir('/tmp/venue-proof',{recursive:true});await writeFile('/tmp/venue-proof/page.html',html);await writeFile('/tmp/venue-proof/file.pdf',files.files()[0].bytes)
+
+})
