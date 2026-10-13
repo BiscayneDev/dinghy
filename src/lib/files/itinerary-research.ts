@@ -40,8 +40,8 @@ export function activityPageEvidence(records:SourceRecords,ids:string[]):{usable
 /** Cover requested kinds before more same-kind guides. Provider records are not research. */
 export function diverseResearchSources(sources:{url:string;title:string}[],kinds:string[]):{url:string;title:string}[]{
  const seen=new Set<string>(),out:{url:string;title:string}[]=[]
- const ranked=sources.filter(s=>s.url!=='https://www.geoapify.com/places-api/'&&!isHubUrl(s.url)).sort((a,b)=>sourceScore(b.url,b.title)-sourceScore(a.url,a.title))
- for(const kind of kinds){
+ const ranked=sources.filter(s=>s.url!=='https://www.geoapify.com/places-api/'&&!isHubUrl(s.url)&&new URL(s.url).pathname!=='/').sort((a,b)=>sourceScore(b.url,b.title)-sourceScore(a.url,a.title))
+ for(const kind of [...kinds].sort((a,b)=>Number(b==='restaurant')-Number(a==='restaurant'))){
   const pattern=kind==='restaurant'?/\b(?:restaurants?|dining|where to eat|food|eats)\b/i:kind==='hotel'?/\b(?:hotels?|stays|lodging|where to stay)\b/i:/\b(?:things to do|attractions?|activities|museums?|sights)\b/i
   const source=ranked.find(s=>!seen.has(s.url)&&pattern.test((s.url+' '+s.title).replace(/[-_/]/g,' ')))
   if(source){seen.add(source.url);out.push(source)}
