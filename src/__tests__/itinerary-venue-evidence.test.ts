@@ -148,3 +148,28 @@ it('includes same-venue subsection closure but stops before a sibling venue',()=
  const sections=venueEvidenceSections(venue,destination,'Harbor guide',text)
  expect(sections.join(' ')).toContain('Temporarily closed');expect(sections.join(' ')).not.toContain('rooftop pool')
 })
+
+
+it('binds punctuation aliases and reordered names but not another branch',()=>{
+ const v={line:1,name:'Reed the Baker Pizza',kind:'restaurant' as const,address:'42 Quay Street',website:'https://fictional.test'}
+ const text='Harbor\nReed the Baker serves wood-fired pizza.\nLocation\n42 Quay Street'
+ expect(venueEvidenceSections(v,destination,'Best Pizza in Harbor | Reed the Baker',text,'https://other.test').join(' ')).toContain('wood-fired pizza')
+ expect(venueEvidenceSections({...v,name:'Reed - Mediterranean Cafe & Restaurant'},destination,'Downtown - Reed',text,'https://fictional.test').length).toBe(1)
+ expect(venueEvidenceSections({...v,name:'Reed - Mediterranean Cafe & Restaurant'},destination,'Downtown - Reed',text.replace('42 Quay','96 Quay'),'https://fictional.test')).toEqual([])
+ expect(venueEvidenceSections({...v,name:'Patricia and Phillip Reed Museum of Science'},destination,'Phillip & Patricia Reed Museum of Science in Harbor','Harbor\nThe museum houses exhibits.').length).toBe(1)
+})
+it('excludes neighboring address/footer chrome from negative identity context',async()=>{
+ const records=new SourceRecords(),v={...venue,website:'https://fictional.test'}
+ const text='Lantern Table serves seasonal bowls in Harbor.\nAddress: 42 Quay Street\nNearby\nReed Hall\n701 Quay Street\nCookie settings location and privacy policy.'
+ const packets=await collectVenueEvidence([v],destination,records,{search:async()=>({results:[{url:'https://fictional.test'}]}),read:async()=>({title:'Lantern Table Harbor',content:text})})
+ expect(JSON.stringify(packets[0].contradictionContext)).toContain('42 Quay')
+ expect(JSON.stringify(packets[0].contradictionContext)).not.toContain('701 Quay')
+ expect(JSON.stringify(packets[0].contradictionContext)).not.toContain('Cookie')
+})
+it('keeps completed evidence when a sibling read times out and reads the provider website directly',async()=>{
+ const records=new SourceRecords(),v={...venue,website:'https://fictional.test/own'}
+ const read=vi.fn(async(url:string)=>{if(url.endsWith('slow'))await new Promise(r=>setTimeout(r,40));return {title:'Lantern Table Harbor',content:'Lantern Table serves seasonal bowls in Harbor.'}})
+ const packets=await collectVenueEvidence([v],destination,records,{search:async()=>({results:[{url:'https://fictional.test/slow'}]}),read},{budgetMs:10})
+ expect(read.mock.calls.some(c=>c[0]===v.website)).toBe(true);expect(packets[0].status).toBe('ready');expect(packets[0].evidence.length).toBeGreaterThan(0)
+ const count=records.size();await new Promise(r=>setTimeout(r,50));expect(records.size()).toBe(count)
+})
