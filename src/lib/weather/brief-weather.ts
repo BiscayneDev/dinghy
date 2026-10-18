@@ -20,13 +20,17 @@ export interface CardWeather {
 }
 
 const TIMEOUT_MS = 8_000
+// Same stall guard as the chat weather tool: one hung connection must not
+// silently drop weather from the brief card.
+const ATTEMPTS = 3
+const BACKOFF_MS = [400, 1_200]
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 
 export function compass(deg: number): string {
     return COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8]
 }
 
-async function getJson(url: string, headers?: Record<string, string>): Promise<unknown> {
+async function getJsonOnce(url: string, headers?: Record<string, string>): Promise<unknown> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
     try {
@@ -36,6 +40,19 @@ async function getJson(url: string, headers?: Record<string, string>): Promise<u
     } finally {
         clearTimeout(timer)
     }
+}
+
+async function getJson(url: string, headers?: Record<string, string>): Promise<unknown> {
+    let lastErr: unknown
+    for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt - 1]))
+        try {
+            return await getJsonOnce(url, headers)
+        } catch (err) {
+            lastErr = err
+        }
+    }
+    throw lastErr
 }
 
 /** Geocode "Miami, FL" style names; the part after the comma picks among hits. */

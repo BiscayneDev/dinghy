@@ -56,6 +56,42 @@ describe('weather tool', () => {
     expect((r.data as { place: string }).place).toBe('Portland, Maine, United States')
   })
 
+  it('retries a stalled request and still answers', async () => {
+    let forecastCalls = 0
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('geocoding-api')) {
+        return jsonResponse({ results: [{ name: 'Miami', admin1: 'Florida', country: 'United States', latitude: 25.77, longitude: -80.19 }] })
+      }
+      forecastCalls += 1
+      if (forecastCalls === 1) throw new TypeError('fetch failed')
+      return jsonResponse({
+        timezone: 'America/New_York',
+        current: { time: 't', temperature_2m: 88, apparent_temperature: 90, relative_humidity_2m: 70, weather_code: 2, wind_speed_10m: 9 },
+        daily: { time: ['t'], weather_code: [2], temperature_2m_max: [90], temperature_2m_min: [79], precipitation_probability_max: [40] },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await weather.execute({ location: 'Miami' }, ctx)
+    expect(r.success).toBe(true)
+    expect(forecastCalls).toBe(2)
+    expect((r.data as { now: { temp: number } }).now.temp).toBe(88)
+  })
+
+  it('fails only after every retry stalls', async () => {
+    let forecastCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('geocoding-api')) {
+        return jsonResponse({ results: [{ name: 'Miami', admin1: 'Florida', country: 'United States', latitude: 25.77, longitude: -80.19 }] })
+      }
+      forecastCalls += 1
+      throw new TypeError('fetch failed')
+    }))
+    const r = await weather.execute({ location: 'Miami' }, ctx)
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('weather lookup failed')
+    expect(forecastCalls).toBe(3)
+  })
+
   it('reports unknown places and missing input without throwing', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})))
     expect((await weather.execute({ location: 'Nowhereville' }, ctx)).success).toBe(false)
