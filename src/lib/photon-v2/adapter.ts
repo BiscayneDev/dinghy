@@ -246,7 +246,7 @@ export async function inboundFromV2Event(event: V2MessageReceivedEvent, deps: V2
     })
 
     // Content normalization into the legacy MessageLike shape.
-    let content: Record<string, unknown> | null = null
+    let content: unknown = null
     const c = msg.content ?? {}
     if (c.type === 'text' && typeof c.text === 'string') {
         if (msg.parentMessageId) {
