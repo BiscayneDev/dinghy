@@ -40,3 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 __pycache__/
+
+# offline replay artifacts (captures hold chat content; never commit)
+/.replay/

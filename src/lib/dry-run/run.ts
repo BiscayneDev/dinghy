@@ -13,8 +13,12 @@ import type { Tool, ToolResult, UserContext } from '@/lib/llm/types'
 import { chatWithTools } from '@/lib/spectrum/dinghy'
 import { GATEWAY_URL, SHIPYARD_API_KEY, SHIPYARD_MODEL } from '@/lib/spectrum/config'
 import { routingFor } from '@/lib/spectrum/routing'
-import { toolsFor } from '@/lib/spectrum/imessage-tools'
 import { actionToolsFor } from '@/lib/spectrum/actions'
+
+/** Resolved lazily: a static import pulls the wallet SDK chain, which offline runners (tsx scripts) cannot load. Same tools either way. */
+async function defaultToolsFor(ctx: Parameters<typeof import('@/lib/spectrum/imessage-tools').toolsFor>[0]) {
+    return (await import('@/lib/spectrum/imessage-tools')).toolsFor(ctx)
+}
 import { reminderToolsFor } from '@/lib/spectrum/reminders'
 import { normalizeSite } from '@/lib/browser-sessions/policy'
 import { buildWorld, CANARY_COOKIE, CAPABILITY_HANDLERS, FALLBACK_CAPABILITY_TOOLS, liveGrantFor, type DryWorld, type ScenarioWorld } from './world'
@@ -123,7 +127,7 @@ export async function runDryRun(
   }
   const actions = actionToolsFor('dry-run')
   const proposeGated = new Set(actions.tools.map((t) => t.name))
-  const real = deps.realTools ?? [...toolsFor(ctx), ...actions.tools, ...reminderToolsFor('dry-run', world.actingUser, ctx.timezone)]
+  const real = deps.realTools ?? [...(await defaultToolsFor(ctx)), ...actions.tools, ...reminderToolsFor('dry-run', world.actingUser, ctx.timezone)]
   const tools = stubTools(real, world, trace, proposeGated)
   const run = deps.chatWithTools ?? chatWithTools
   const routed: Array<{ model: string; input_tokens: number; output_tokens: number; cost_usd: number | null; latency_ms: number }> = []
