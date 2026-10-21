@@ -36,9 +36,20 @@ export function routingFor(): RoutingPrefs | undefined {
     return { providers: providers() }
 }
 
+/**
+ * Tier ceiling for the gateway's Jev judgment. Default 'economy' keeps iMessage
+ * spend bounded; DINGHY_MAX_TIER ('economy'|'standard'|'frontier') raises it so
+ * Jev's frontier judgments on research turns can actually take effect instead
+ * of being floored back to economy by the cap.
+ */
+export function maxTier(): 'economy' | 'standard' | 'frontier' {
+    const raw = (process.env.DINGHY_MAX_TIER ?? 'economy').toLowerCase()
+    return raw === 'standard' || raw === 'frontier' ? raw : 'economy'
+}
+
 /** Request model + body extension for a gateway call. */
 export function modelFields(pinned: string, routing: RoutingPrefs | undefined): { model: string; shipyard?: RoutingPrefs } {
-    return routing ? { model: 'auto', shipyard: { ...routing, attempt_timeout_ms: 15_000, max_tier: 'economy' } } : { model: pinned }
+    return routing ? { model: 'auto', shipyard: { ...routing, attempt_timeout_ms: 15_000, max_tier: maxTier() } } : { model: pinned }
 }
 
 /**
