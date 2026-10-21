@@ -18,7 +18,7 @@ export interface RoutingPrefs {
     providers?: string[]
     /** Requires gateway attempt-timeout support; preserves Jev quality floor. */
     attempt_timeout_ms?: number
-    max_tier?: 'economy'
+    max_tier?: 'economy' | 'standard' | 'frontier'
 }
 
 export function routingEnabled(): boolean {
@@ -37,19 +37,25 @@ export function routingFor(): RoutingPrefs | undefined {
 }
 
 /**
- * Tier ceiling for the gateway's Jev judgment. Default 'economy' keeps iMessage
- * spend bounded; DINGHY_MAX_TIER ('economy'|'standard'|'frontier') raises it so
- * Jev's frontier judgments on research turns can actually take effect instead
- * of being floored back to economy by the cap.
+ * Operator override for the gateway's Jev tier ceiling. Deliberately NO
+ * default: unset (the norm) means Dinghy sends no max_tier at all and the
+ * gateway's per-task-class policy governs — synthesize turns cap at standard,
+ * background at economy, research and confident chat/lookup turns are Jev's
+ * call entirely (so a hardcore-coding or deep-research turn can reach
+ * frontier). Setting DINGHY_MAX_TIER force-caps every turn, overriding the
+ * gateway policy.
  */
-export function maxTier(): 'economy' | 'standard' | 'frontier' {
-    const raw = (process.env.DINGHY_MAX_TIER ?? 'economy').toLowerCase()
-    return raw === 'standard' || raw === 'frontier' ? raw : 'economy'
+export function maxTierOverride(): 'economy' | 'standard' | 'frontier' | undefined {
+    const raw = (process.env.DINGHY_MAX_TIER ?? '').toLowerCase()
+    return raw === 'economy' || raw === 'standard' || raw === 'frontier' ? raw : undefined
 }
 
 /** Request model + body extension for a gateway call. */
 export function modelFields(pinned: string, routing: RoutingPrefs | undefined): { model: string; shipyard?: RoutingPrefs } {
-    return routing ? { model: 'auto', shipyard: { ...routing, attempt_timeout_ms: 15_000, max_tier: maxTier() } } : { model: pinned }
+    const max_tier = maxTierOverride()
+    return routing
+        ? { model: 'auto', shipyard: { ...routing, attempt_timeout_ms: 15_000, ...(max_tier ? { max_tier } : {}) } }
+        : { model: pinned }
 }
 
 /**

@@ -18,6 +18,13 @@ describe('routingFor', () => {
     })
     it('builds the request fields', () => {
         expect(modelFields('pinned', undefined)).toEqual({ model: 'pinned' })
-        expect(modelFields('pinned', { providers: ['hopscotch'] })).toEqual({ model: 'auto', shipyard: { providers: ['hopscotch'], attempt_timeout_ms: 15_000, max_tier: 'economy' } })
+        // No max_tier by default: the gateway's per-task-class policy governs.
+        expect(modelFields('pinned', { providers: ['hopscotch'] })).toEqual({ model: 'auto', shipyard: { providers: ['hopscotch'], attempt_timeout_ms: 15_000 } })
+    })
+    it('DINGHY_MAX_TIER is an explicit per-turn-cap override, not a default', () => {
+        process.env.DINGHY_MAX_TIER = 'standard'
+        expect(modelFields('pinned', { providers: ['hopscotch'] }).shipyard?.max_tier).toBe('standard')
+        process.env.DINGHY_MAX_TIER = 'nonsense'
+        expect(modelFields('pinned', { providers: ['hopscotch'] }).shipyard?.max_tier).toBeUndefined()
     })
 })
