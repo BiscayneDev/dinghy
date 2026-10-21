@@ -15,6 +15,11 @@ describe('classifyUserTurn', () => {
     expect(classifyUserTurn('make a component showing my whoop recovery as a chart')).toBe('create')
     expect(classifyUserTurn('create a dashboard widget for my flight budget')).toBe('create')
   })
+  it('build-asks naming an EXISTING comp are not create — the page builder serves them', () => {
+    expect(classifyUserTurn('make me a page for the weather in Tokyo this week')).not.toBe('create')
+    expect(classifyUserTurn('build an itinerary page for my Lisbon trip')).not.toBe('create')
+    expect(classifyUserTurn('make a comparison page of the two hotels')).not.toBe('create')
+  })
   it('short statements are chat', () => {
     expect(classifyUserTurn('thanks, that works')).toBe('chat')
   })

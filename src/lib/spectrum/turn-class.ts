@@ -19,14 +19,18 @@ export const LATENCY_BUDGET_MS: Record<TaskClass, number | null> = {
 const RESEARCH = /\b(research|compare|comparison|versus|vs\.?|best|pros and cons|deep dive|analy[sz]e|analysis|report|investigate|in[- ]depth|summari[sz]e (the|this|these)|news|latest on)\b/i
 const LOOKUP = /\b(near(by| me)?|where|open( now)?|hours|address|phone|directions?|weather|forecast|price of|how much|what time|when does|restaurants?|food|eat|coffee|find|search|look up|who is|what is)\b/i
 // Generative-UI signal: the user asks for something to be BUILT — a page,
-// component, widget, chart, dashboard... When no exact comp exists the model
+// component, widget, chart, dashboard. When no exact comp exists the model
 // has to author it, which is code generation and deserves the frontier rung.
 const CREATE = /\b(build|create|make|generate|design|code|write)\b[^.?!]*\b(page|component|widget|view|dashboard|chart|graph|visuali[sz]|card|tracker|tool|interface|ui|website|site|app|landing|form|calculator|planner)\b/i
+// Comps that ALREADY exist (kinds.ts blocks + deliverable contracts): a
+// build-ask naming one of these is served by the designed page builder at the
+// normal tier, not novel code generation. Only an UNMATCHED build-ask is `create`.
+const KNOWN_COMP = /\b(weather|forecast|score|game|match|movie|film|book|show|stay|hotel|hostel|airbnb|route|direction|itinerary|trip|travel plan|briefing|news|gallery|photo|checklist|to-?do|comparison|versus|pros and cons|map)\b/i
 
 /** Deterministic first guess for a user turn. The router can still disagree. */
 export function classifyUserTurn(text: string): TaskClass {
     const t = text.trim()
-    if (CREATE.test(t)) return 'create'
+    if (CREATE.test(t) && !KNOWN_COMP.test(t)) return 'create'
     if (RESEARCH.test(t) || t.length > 400) return 'research'
     if (LOOKUP.test(t) || /\?\s*$/.test(t)) return 'lookup'
     return 'chat'
