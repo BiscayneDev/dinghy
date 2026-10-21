@@ -15,6 +15,7 @@
     "@anthropic-ai/sdk": "^0.80.0",
     "@octokit/rest": "^22.0.1",
     "@paybox-sh/sdk": "^1.0.0",
+    "@shipyard/memory": "file:vendor/shipyard-memory-0.1.0.tgz",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "@spectrum-ts/imessage": "^12.8.0",
