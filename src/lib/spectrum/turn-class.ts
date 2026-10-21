@@ -5,30 +5,36 @@
  * read them, so this is safe to ship ahead of router support. It never names
  * or pins a model and never touches the provider allowlist.
  */
-export type TaskClass = 'chat' | 'lookup' | 'research' | 'synthesize' | 'background'
+export type TaskClass = 'chat' | 'lookup' | 'research' | 'synthesize' | 'create' | 'background'
 
 export const LATENCY_BUDGET_MS: Record<TaskClass, number | null> = {
     chat: 4_000,
     lookup: 12_000,
     research: 40_000,
     synthesize: 12_000,
+    create: 60_000,
     background: null,
 }
 
 const RESEARCH = /\b(research|compare|comparison|versus|vs\.?|best|pros and cons|deep dive|analy[sz]e|analysis|report|investigate|in[- ]depth|summari[sz]e (the|this|these)|news|latest on)\b/i
 const LOOKUP = /\b(near(by| me)?|where|open( now)?|hours|address|phone|directions?|weather|forecast|price of|how much|what time|when does|restaurants?|food|eat|coffee|find|search|look up|who is|what is)\b/i
+// Generative-UI signal: the user asks for something to be BUILT — a page,
+// component, widget, chart, dashboard... When no exact comp exists the model
+// has to author it, which is code generation and deserves the frontier rung.
+const CREATE = /\b(build|create|make|generate|design|code|write)\b[^.?!]*\b(page|component|widget|view|dashboard|chart|graph|visuali[sz]|card|tracker|tool|interface|ui|website|site|app|landing|form|calculator|planner)\b/i
 
 /** Deterministic first guess for a user turn. The router can still disagree. */
 export function classifyUserTurn(text: string): TaskClass {
     const t = text.trim()
+    if (CREATE.test(t)) return 'create'
     if (RESEARCH.test(t) || t.length > 400) return 'research'
     if (LOOKUP.test(t) || /\?\s*$/.test(t)) return 'lookup'
     return 'chat'
 }
 
-/** After tool results are in, the model is mostly writing the answer: that is synthesis unless the turn is research. */
+/** After tool results are in, the model is mostly writing the answer: that is synthesis unless the turn is research or creation. */
 export function classForIteration(base: TaskClass, iteration: number): TaskClass {
-    if (base === 'background' || base === 'research') return base
+    if (base === 'background' || base === 'research' || base === 'create') return base
     return iteration > 1 ? 'synthesize' : base
 }
 
