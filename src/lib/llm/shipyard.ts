@@ -9,6 +9,7 @@ import {
   type UsageRecord,
 } from 'shipyard-inference'
 import type { LLMProvider, LLMChatParams, LLMResponse } from './types'
+import { classifyTier } from './tier'
 import { createServerClient } from '@/lib/supabase/server'
 import { logger } from '@/lib/logger'
 
@@ -140,12 +141,18 @@ export function createShipyardProvider(
     defaultModel: DEFAULT_MODEL,
     async chat(params: LLMChatParams): Promise<LLMResponse> {
       const intended = params.model ?? DEFAULT_MODEL
+      // Quality-aware routing: classify the request to a minimum tier and let
+      // the Router pick the cheapest model AT-OR-ABOVE that tier, instead of
+      // the cheapest model period. This is the "quality oracle" floor — a
+      // frontier-reasoning request never lands on an economy model.
+      const tier = classifyTier(params.messages)
       // The Router returns a superset response (adds `usage`); structurally an
       // LLMResponse. `metadata.userId` tags the savings for this user.
       return router.chat({
         ...params,
         model: intended,
-        metadata: { userId: opts.userId },
+        routingHints: { tier },
+        metadata: { userId: opts.userId, tier },
       })
     },
   }
