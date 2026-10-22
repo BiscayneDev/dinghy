@@ -41,7 +41,8 @@ import {
     type HistoryMessage,
 } from '@/spectrum/store'
 import { toPlainText } from '@/lib/spectrum/plain-text'
-
+import { drainDockQueue } from '@/lib/dock/service'
+import { dockDepsViaOutbox } from '@/lib/dock/runtime'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -286,5 +287,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         }
     }
 
+    // Dock connector: replay queued Dock requests (oldest first per chat). Failures never fail the sweep.
+    const dockSent = await drainDockQueue(dockDepsViaOutbox()).catch((err) => {
+        console.error('dock queue drain failed:', err instanceof Error ? err.message : String(err))
+        return 0
+    })
+    if (dockSent > 0) console.log(`dock queue: sent ${dockSent}`)
     return NextResponse.json(results)
 }

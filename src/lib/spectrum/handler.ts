@@ -3,6 +3,8 @@ import { fileReply } from '@/lib/files/reply'
 import { assertAccountActive, erasureEnabled, isEraseIntent } from '@/lib/data-portability/erasure-state'
 import { withinTurn, TURN_WORK_MS, TURN_DEADLINE_REPLY, TurnDeadlineExceeded } from './turn-budget'
 import { runStageRecorder } from './run-stage'
+import { handleDockInbound } from '@/lib/dock/service'
+import { dockDepsWithSend } from '@/lib/dock/runtime'
 
 /**
  * Inbound message handling for the webhook route, ported from
@@ -467,6 +469,20 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     if (!role) {
         await handleGatedMessage(space, chatGuid, text)
         return
+    }
+
+    // Dock connector: pair/unlink, @<chief> routing, and yes/no on Dock approvals. Chats with no Dock
+    // link fall through to the normal path below. A failure here also falls through, never drops a message.
+    if (text) {
+        const dockHandled = await handleDockInbound(
+            dockDepsWithSend((c, t) => sendText(space, c, 'reply', t).then(() => undefined)),
+            chatGuid,
+            text
+        ).catch((err) => {
+            logErr('dock inbound failed', err)
+            return false
+        })
+        if (dockHandled) return
     }
 
     // Erasure is confirmed in a signed-in, same-origin flow, never by a
