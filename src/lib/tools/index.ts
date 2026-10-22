@@ -62,7 +62,9 @@ import {
   payboxGetPortfolio,
   payboxOnramp,
   payboxGetRequest,
+  payboxManageAccess,
 } from './paybox'
+import { payboxCompleteCheckout } from './paybox-checkout'
 import { switchLLMProvider } from './llm-control'
 import { getInferenceSpend } from './inference-spend'
 import { memorySearch, memoryForget } from './memory'
@@ -143,6 +145,8 @@ export const integrationTools: Tool[] = [
   payboxGetPortfolio,
   payboxOnramp,
   payboxGetRequest,
+  payboxManageAccess,
+  payboxCompleteCheckout,
   // LLM runtime control (self-aware provider swap)
   switchLLMProvider,
   // Self-aware AI spend + savings (billed to the user's Paybox wallet)

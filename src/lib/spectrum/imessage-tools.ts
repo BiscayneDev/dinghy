@@ -16,7 +16,8 @@ import type { DecryptedTokens, Tool, UserContext } from '@/lib/llm/types'
 import { gmailSearch, gmailRead, gmailSummarizeInbox } from '@/lib/tools/gmail'
 import { gcalListEvents, gcalTodayBriefing } from '@/lib/tools/gcal'
 import { WALLET_READ_TOOLS } from '@/lib/tools/wallet-read'
-import { payboxOnramp } from '@/lib/tools/paybox'
+import { payboxListCredentials, payboxManageAccess, payboxOnramp, payboxRequestPayment, payboxGetRequest } from '@/lib/tools/paybox'
+import { payboxCompleteCheckout } from '@/lib/tools/paybox-checkout'
 import { webSearch, webFetch } from '@/lib/tools/web'
 import { weather } from '@/lib/tools/weather'
 import { twitterSearch, twitterTimeline, twitterUserTweets } from '@/lib/tools/twitter'
@@ -114,6 +115,10 @@ export function toolsFor(ctx: UserContext): Tool[] {
         ...(caps.google ? IMESSAGE_READ_TOOLS : []),
         ...(caps.wallet ? WALLET_READ_TOOLS : []),
         ...(caps.wallet ? [payboxOnramp] : []),
+        // The buy flow: pick a credential, request the card, approve, pay in
+        // the sandbox. gateTools holds these behind the wallet group until
+        // the message is actually about paying.
+        ...(caps.wallet ? [payboxListCredentials, payboxRequestPayment, payboxGetRequest, payboxCompleteCheckout, payboxManageAccess] : []),
         ...(caps.x ? IMESSAGE_X_TOOLS : []),
         ...(caps.github ? IMESSAGE_GITHUB_TOOLS : []),
         ...(caps.health ? IMESSAGE_HEALTH_TOOLS : []),

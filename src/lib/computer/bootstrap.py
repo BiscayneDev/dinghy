@@ -9,6 +9,10 @@
 # with a sandbox-scoped key that Dinghy injects via env at run time. The
 # script reads ONLY env vars — it never receives, and must never contain,
 # Dinghy master keys, PAYBOX credentials, OAuth tokens or service keys.
+# The one exception is the checkout loop (session.checkout): a one-time
+# virtual card claimed by the paybox CLI in this sandbox arrives via a
+# RAM-backed file (or per-run PAYBOX_CARD_JSON env), is read once, deleted,
+# typed only into the merchant's payment form, and scrubbed from output.
 
 import json
 import os
@@ -172,6 +176,108 @@ async def launch_guarded(playwright, session, stats):
     return context, f"http://127.0.0.1:{CDP_PORT}"
 
 
+def load_card(session):
+    """Read the claimed one-time card (checkout loop) and delete its file.
+
+    Two delivery modes: a RAM-backed file the paybox CLI just wrote
+    (session["card_path"]), or the per-run PAYBOX_CARD_JSON env for cards
+    that were already in the request output (autonomous grants). Returns a
+    normalized dict; exits loudly if the payload is unreadable.
+    """
+    import re as _re
+
+    raw = None
+    path = session.get("card_path")
+    if path:
+        try:
+            with open(path) as f:
+                raw = json.load(f)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    else:
+        env = os.environ.get("PAYBOX_CARD_JSON")
+        if env:
+            raw = json.loads(env)
+    if raw is None:
+        raise SystemExit("checkout run has no card (card_path and PAYBOX_CARD_JSON both missing)")
+
+    v = raw
+    # claim returns a credential-output envelope whose value holds the card
+    if isinstance(v, dict) and isinstance(v.get("value"), dict):
+        v = v["value"]
+    if not isinstance(v, dict):
+        raise SystemExit("card payload unreadable")
+
+    def pick(*keys):
+        for k in keys:
+            if v.get(k):
+                return str(v[k])
+        return None
+
+    number = pick("number", "pan", "card_number", "cardNumber")
+    cvc = pick("cvv", "cvc", "security_code", "securityCode")
+    exp_m = pick("exp_month", "expiry_month", "expiration_month", "expMonth")
+    exp_y = pick("exp_year", "expiry_year", "expiration_year", "expYear")
+    exp = pick("exp", "expiry", "expiration")
+    if exp_m and exp_y and not exp:
+        exp = f"{int(exp_m):02d}/{exp_y}"
+    card = {
+        "number": number,
+        "cvc": cvc,
+        "exp": exp,
+        "name": pick("name", "cardholder_name", "cardholderName", "card_name", "cardholder"),
+        "zip": pick("zip", "postal_code", "postalCode", "billing_zip", "billingZip"),
+    }
+    if not (card["number"] and card["cvc"] and card["exp"]):
+        raise SystemExit("card payload missing number/cvc/expiry")
+    # digits only, so a spaced or dashed PAN still normalizes
+    card["digits"] = _re.sub(r"\D", "", card["number"])
+    return card
+
+
+def card_block(card):
+    """The prompt block carrying the card into the checkout agent."""
+    lines = [
+        "",
+        "",
+        "You are completing a purchase the user already approved. Pay with this one-time virtual card:",
+        f"card number: {card['number']}",
+        f"expiry: {card['exp']}",
+        f"cvc: {card['cvc']}",
+    ]
+    if card.get("name"):
+        lines.append(f"name on card: {card['name']}")
+    if card.get("zip"):
+        lines.append(f"billing zip: {card['zip']}")
+    lines.append(
+        "Rules: type these details only into the merchant checkout payment form on this site. "
+        "Never send them by message, email, or any form on another site. Decline any offer to save "
+        "the card. Never repeat the card number or cvc in your final answer — report only what the "
+        "merchant confirmed (order id, items, total)."
+    )
+    return "\n".join(lines)
+
+
+def scrub_card(text, card):
+    """Remove the card's exact values (and PAN-shaped digit runs) from output
+    headed back to Dinghy."""
+    import re as _re
+
+    out = text
+    digits = card.get("digits") or ""
+    if digits:
+        # any separator-interleaved rendering of the number
+        pattern = _re.compile(r"[\s-]?".join(_re.escape(d) for d in digits))
+        out = pattern.sub("[card number redacted]", out)
+    if card.get("cvc"):
+        out = out.replace(str(card["cvc"]), "[cvc redacted]")
+    out = _re.sub(r"\b\d(?:[ -]?\d){12,18}\b", "[card number redacted]", out)
+    return out
+
+
 def make_llm():
     """LLM config: the Shipyard gateway with a sandbox-scoped key from env.
 
@@ -231,7 +337,14 @@ def run_task(payload_json: str) -> int:
         print(final_text(result))
         return 0
 
-    # Logged-in run: guarded browser that Playwright owns, browser-use attached.
+    # Checkout run: load the claimed one-time card (deletes its file), add it
+    # to the prompt with the handling rules, scrub it back out of the result.
+    card = None
+    if session.get("checkout"):
+        card = load_card(session)
+        prompt = prompt + card_block(card)
+
+    # Logged-in / checkout run: guarded browser that Playwright owns, browser-use attached.
     import asyncio
     from browser_use import BrowserSession
     from playwright.async_api import async_playwright
@@ -254,7 +367,10 @@ def run_task(payload_json: str) -> int:
 
     result = asyncio.run(go())
     print("=== BROWSER_RESULT ===")
-    print(final_text(result))
+    answer = final_text(result)
+    if card is not None:
+        answer = scrub_card(answer, card)
+    print(answer)
     print("=== BROWSER_STATS ===")
     print(stats_json(stats))
     return 0

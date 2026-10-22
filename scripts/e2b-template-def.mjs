@@ -23,6 +23,11 @@ export function buildTemplateDefinition() {
         'HOME=/home/user python3 /tmp/dinghy-bootstrap.py --setup',
         'cp /tmp/dinghy-bootstrap.py /home/user/.dinghy-bootstrap.py',
         '/home/user/.browser-use-venv/bin/playwright install-deps chromium',
+        // The paybox CLI is the sandbox's hands for the checkout loop
+        // (paybox claim); bake it in so the first checkout skips the install.
+        'apt-get update -qq && apt-get install -y -qq nodejs npm',
+        'HOME=/home/user npm install -g --silent "@paybox-sh/sdk@^2"',
+        'touch /home/user/.paybox-cli-ready',
         'chown -R user:user /home/user',
       ],
       { user: 'root' }
