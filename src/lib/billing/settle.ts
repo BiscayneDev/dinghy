@@ -6,7 +6,6 @@ import {
 } from 'shipyard-inference'
 import { getPayboxTokensForUser, getPayboxSdk } from '@/lib/integrations/paybox'
 import { createServerClient } from '@/lib/supabase/server'
-import { sendMessage } from '@/lib/telegram/client'
 import { logger } from '@/lib/logger'
 
 // Autonomous meter-then-settle billing. Each request accrues
@@ -19,6 +18,11 @@ import { logger } from '@/lib/logger'
 // settlement is hands-off. (True keyless wallet-sign isn't possible: without the
 // key the request dead-ends at pending_signature.)
 //
+// Channel-agnostic: settle.ts knows nothing about Telegram or iMessage. The
+// caller passes a `notify` for user-facing heads-ups; notification failures are
+// swallowed so a chat hiccup can never misclassify a settlement as ambiguous
+// (frozen) or lost.
+//
 // Safety (migration 008): claim -> settle -> finalize. claim_settlement stamps the
 // billed rows under a per-user advisory lock. On a pre-broadcast failure we void
 // (rows re-accrue, retry next turn). On an ambiguous post-broadcast failure we
@@ -27,12 +31,15 @@ import { logger } from '@/lib/logger'
 // The signer poll is bounded to keep us well inside Solana's ~90s blockhash
 // validity (in-process signing returns immediately; the bound only guards a
 // pathological stall). We run inside the webhook's after(), so this never delays
-// the Telegram response.
+// the reply.
 
 const APPROVAL_WINDOW_MS = 55_000
 
-function settleNetwork(): 'devnet' | 'mainnet' {
-  return process.env.SHIPYARD_SETTLE_NETWORK === 'mainnet' ? 'mainnet' : 'devnet'
+// No silent default: unset means "not configured", never "devnet". A quiet
+// devnet fallback would book real usage as settled in worthless tokens.
+function settleNetwork(): 'devnet' | 'mainnet' | null {
+  const n = process.env.SHIPYARD_SETTLE_NETWORK
+  return n === 'mainnet' || n === 'devnet' ? n : null
 }
 function thresholdUsd(): number {
   return Number(process.env.SHIPYARD_SETTLE_THRESHOLD_USD ?? '1.00')
@@ -41,8 +48,11 @@ function fmtUsd(n: number): string {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: n < 0.01 ? 4 : 2 })}`
 }
 
+/** User-facing heads-up for the channel the caller serves (iMessage, Telegram, …). */
+export type SettleNotifier = (text: string) => Promise<void>
+
 export type SettleOutcome =
-  | { status: 'skipped'; reason: 'no_treasury' | 'not_connected' | 'no_wallet' }
+  | { status: 'skipped'; reason: 'no_treasury' | 'network_not_configured' | 'not_connected' | 'no_wallet' }
   | { status: 'below_threshold' }
   | { status: 'settled'; settlementId: string; signature: string; owedUsd: number; atomicUsdc: string }
   | { status: 'voided'; settlementId: string; reason: string }
@@ -92,11 +102,23 @@ async function freezeSettlement(
  * call every turn — the claim returns null below threshold before any Paybox call.
  * Idempotent/safe to repeat: only ever picks up unclaimed rows.
  */
-export async function settleUser(userId: string, chatId: number): Promise<SettleOutcome> {
+export async function settleUser(userId: string, notify?: SettleNotifier): Promise<SettleOutcome> {
   const treasury = process.env.SHIPYARD_TREASURY_WALLET
   if (!treasury) return { status: 'skipped', reason: 'no_treasury' }
 
   const network = settleNetwork()
+  if (!network) return { status: 'skipped', reason: 'network_not_configured' }
+
+  // Notifications are cosmetic: a failed send must never reach settlement
+  // classification (a pre-broadcast notify throw used to FREEZE the claim).
+  const note = async (text: string): Promise<void> => {
+    try {
+      await notify?.(text)
+    } catch {
+      // swallowed on purpose
+    }
+  }
+
   const supabase = createServerClient()
 
   // Claim first — cheap, and returns null (no stamping) when below threshold, so
@@ -143,10 +165,7 @@ export async function settleUser(userId: string, chatId: number): Promise<Settle
 
     // Heads-up, then sign + broadcast. With an autonomous grant + the user's
     // scoped signing key, Paybox signs in-process — no passkey tap needed.
-    await sendMessage({
-      chatId,
-      text: `💸 settling ${fmtUsd(owedUsd)} of inference from your Paybox wallet…`,
-    })
+    await note(`💸 settling ${fmtUsd(owedUsd)} of inference from your Paybox wallet…`)
 
     const signer = await payboxSigner({
       client,
@@ -169,10 +188,7 @@ export async function settleUser(userId: string, chatId: number): Promise<Settle
       p_signature: res.signature,
       p_payer: res.payer,
     })
-    await sendMessage({
-      chatId,
-      text: `✅ settled ${fmtUsd(owedUsd)} from your Paybox wallet — still cheaper than calling the model direct.\ntx: ${res.signature}`,
-    })
+    await note(`✅ settled ${fmtUsd(owedUsd)} from your Paybox wallet — still cheaper than calling the model direct.\ntx: ${res.signature}`)
     logger.info('inference settlement settled', {
       userId,
       settlementId: settlement_id,
@@ -196,10 +212,7 @@ export async function settleUser(userId: string, chatId: number): Promise<Settle
         settlementId: settlement_id,
         reason,
       })
-      await sendMessage({
-        chatId,
-        text: `⌛ couldn't settle that just now — no worries, i'll retry next time.`,
-      }).catch(() => {})
+      await note(`⌛ couldn't settle that just now — no worries, i'll retry next time.`)
       return { status: 'voided', settlementId: settlement_id, reason }
     }
     // Ambiguous: the transfer may have landed. Freeze for review — never double-charge.
