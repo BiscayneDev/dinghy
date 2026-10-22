@@ -8,9 +8,13 @@
  * (source='sandbox') exactly like shell time.
  *
  * Security invariants:
- * - The sandbox gets ONLY its own scoped Shipyard key (SHIPYARD_SANDBOX_KEY),
- *   injected via env at run time. No PAYBOX, OAuth or service secrets are
- *   ever placed in a command or the sandbox.
+ * - The sandbox's standing env is ONLY its own scoped Shipyard key
+ *   (SHIPYARD_SANDBOX_KEY), injected at run time. The one exception is the
+ *   checkout loop: a PayBox access token passed as per-run env so the
+ *   paybox CLI can claim a one-time card inside the sandbox, and the
+ *   claimed card itself in a RAM-backed file bootstrap.py reads and
+ *   deletes. Neither ever appears in a command string, a tool result, or
+ *   Dinghy's model context.
  * - Page text is untrusted DATA. Both the agent prompt (framing below) and
  *   the result scrubber make sure page-authored "instructions" never act
  *   as instructions.
@@ -100,5 +104,104 @@ export async function ensureBrowserUse(
   // prebuilt template (E2B_TEMPLATE) already have the marker and skip this.
   const setup = await run(browserSetupCommand(), { timeoutMs: BROWSER_SETUP_TIMEOUT_MS })
   if (setup.exitCode !== 0) return { ready: false, error: setup.stderr || 'browser-use setup failed' }
+  return { ready: true }
+}
+
+// ---------------------------------------------------------------------------
+// PayBox checkout (the second half of the checkout loop): the sandbox claims
+// the approved one-time card with the paybox CLI and pays at the merchant in
+// the guarded browser. Card details stay inside the sandbox.
+// ---------------------------------------------------------------------------
+
+/**
+ * The card-handling rule every checkout agent gets. Kept as an exported
+ * constant so tests can assert bootstrap.py mirrors it verbatim.
+ */
+export const CHECKOUT_GUARD =
+  'type these details only into the merchant checkout payment form on this site'
+
+/**
+ * Payment processors a merchant checkout legitimately embeds (hosted fields,
+ * fraud beacons, wallet sheets). The card is origin-bound to the merchant, so
+ * these are reachability allowances, not card targets — the prompt rules
+ * above still restrict where card details may be typed.
+ */
+export const CHECKOUT_INFRA_HOSTS = [
+  '*.stripe.com',
+  '*.stripe.network',
+  '*.paypal.com',
+  '*.paypalobjects.com',
+  '*.braintreegateway.com',
+  '*.braintree-api.com',
+  '*.adyen.com',
+  '*.checkout.com',
+  '*.squareup.com',
+  '*.square.site',
+  '*.paddle.com',
+  '*.recurly.com',
+  '*.chargebee.com',
+]
+
+/** The host allowlist for a checkout run: the bound merchant (apex +
+ * subdomains) plus payment infrastructure. */
+export function checkoutAllowedHosts(merchantHost: string): string[] {
+  const host = merchantHost.toLowerCase().replace(/\.+$/, '')
+  return [host, `*.${host}`, ...CHECKOUT_INFRA_HOSTS]
+}
+
+/** Redact PAN-shaped digit runs from text headed for Dinghy's model.
+ * bootstrap.py additionally scrubs the exact card values it handled; this is
+ * the server-side belt-and-braces pass. (Order numbers are usually shorter
+ * or alphanumeric; a 13+ digit run is far more likely a card.) */
+export function scrubCardLike(text: string): string {
+  return text.replace(/\b(?:\d[ -]?){13,19}\b/g, '[card number redacted]')
+}
+
+export interface CheckoutSessionSpec {
+  /** RAM-backed file holding the claimed card JSON; bootstrap.py reads and deletes it. */
+  card_path?: string
+  allowed_hosts: string[]
+}
+
+/** The command that runs one guarded checkout task (read-write browser locked
+ * to the merchant origin + payment infra). */
+export function checkoutRunCommand(task: string, urls: string[], session: CheckoutSessionSpec): string {
+  const payload = JSON.stringify({
+    task,
+    urls,
+    session: { ...session, read_only: false, checkout: true },
+  })
+  // Same refresh-on-every-run rule as browserRunCommand: a bootstrap.py fix
+  // must reach sandboxes whose template baked an older copy.
+  const refresh = `cat > "$HOME/.dinghy-bootstrap.py" <<'DINGHY_BOOTSTRAP_EOF'\n${BROWSER_BOOTSTRAP}DINGHY_BOOTSTRAP_EOF\n`
+  return `${refresh}$HOME/.browser-use-venv/bin/python $HOME/.dinghy-bootstrap.py --run '${payload.replace(/'/g, `'\\''`)}'`
+}
+
+/** The command that installs the paybox CLI once per sandbox. */
+export function payboxCliSetupCommand(): string {
+  return [
+    'set -e',
+    'if ! command -v paybox >/dev/null 2>&1; then',
+    '  if ! command -v npm >/dev/null 2>&1; then',
+    '    if command -v sudo >/dev/null 2>&1; then sudo -n apt-get update -qq && sudo -n apt-get install -y -qq nodejs npm;',
+    '    else apt-get update -qq && apt-get install -y -qq nodejs npm; fi',
+    '  fi',
+    '  npm install -g --silent "@paybox-sh/sdk@^2"',
+    'fi',
+    'touch "$HOME/.paybox-cli-ready"',
+  ].join('\n')
+}
+
+/** True when the sandbox already has the paybox CLI (marker file), else
+ * install it. Mirrors ensureBrowserUse: the prebuilt template carries the
+ * marker, fresh default-image sandboxes install here (slow, once). */
+export async function ensurePayboxCli(
+  run: (command: string, opts?: { timeoutMs?: number }) => Promise<{ stdout: string; stderr: string; exitCode: number }>
+): Promise<{ ready: boolean; error?: string }> {
+  const check = await run('test -f "$HOME/.paybox-cli-ready" && echo ready || echo missing')
+  if (check.exitCode !== 0) return { ready: false, error: check.stderr || 'paybox CLI check failed' }
+  if (check.stdout.includes('ready')) return { ready: true }
+  const setup = await run(payboxCliSetupCommand(), { timeoutMs: BROWSER_SETUP_TIMEOUT_MS })
+  if (setup.exitCode !== 0) return { ready: false, error: setup.stderr || 'paybox CLI setup failed' }
   return { ready: true }
 }

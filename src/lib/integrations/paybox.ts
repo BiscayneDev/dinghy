@@ -445,6 +445,7 @@ interface AgentResponseLike {
   request_id: string
   status:
     | 'pending_approval'
+    | 'pending_funding'
     | 'pending_signature'
     | 'pending_settlement'
     | 'pending_confirmation'
@@ -483,6 +484,18 @@ export function agentResultToTool(resp: AgentResponseLike): ToolResult {
             `Cleared to sign but no in-process signing key is configured (or the signing ` +
             `window must finish). Get setup links with paybox_signing_setup (in chat) or ` +
             `send them to The Harbor, then poll paybox_get_request with this request_id.`,
+        },
+      }
+    case 'pending_funding':
+      return {
+        success: true,
+        data: {
+          status: 'pending_funding',
+          request_id: resp.request_id,
+          instruction:
+            `The wallet needs funds before this can settle. Offer a top-up with paybox_onramp ` +
+            `(one link, the user completes it with their passkey), then poll paybox_get_request. ` +
+            `Do NOT re-issue the original request.`,
         },
       }
     case 'pending_settlement':

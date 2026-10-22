@@ -36,7 +36,7 @@ const COMMAND_CHAR_CAP = 4000
  * server-side kill switch, daily allowance (blocked → error, allowance
  * spent → point the model at the confirm-gated computer_overage).
  */
-async function guardComputerUse(
+export async function guardComputerUse(
   userId: string,
   supabase: ReturnType<typeof createServerClient>
 ): Promise<{ ok: true; settings: Awaited<ReturnType<typeof getComputerSettings>> } | { ok: false; error: string }> {

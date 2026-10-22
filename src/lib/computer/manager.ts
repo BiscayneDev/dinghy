@@ -6,8 +6,12 @@ import { assertAccountActive } from '@/lib/data-portability/erasure-state'
  * test suite runs with no E2B key.
  *
  * Security invariants (docs/plans/2026-09-24-dinghy-computer.md):
- * - Never place secrets (PAYBOX, OAuth tokens, SUPABASE_SERVICE_ROLE) inside
- *   the sandbox. Commands come from the model, credentials never do.
+ * - The only env baked into a sandbox is the sandbox-scoped Shipyard key.
+ *   A run may additionally carry one scoped secret in RunOpts.envs — the
+ *   checkout loop's PayBox access token — which lives for that single
+ *   command, is never written into the command text, and is never
+ *   persisted in the sandbox. Everything else (SUPABASE_SERVICE_ROLE,
+ *   Dinghy master keys) still never enters the sandbox.
  * - The kill switch is server-side: allowance exhaustion stops the sandbox
  *   from Dinghy's side, never from inside it.
  *
@@ -65,6 +69,13 @@ export interface ComputerProvider {
 
 export interface RunOpts {
   timeoutMs?: number
+  /**
+   * Per-run env, merged over the sandbox envs for this one command. The
+   * checkout loop passes the user's PayBox access token here so the paybox
+   * CLI can claim a card inside the sandbox — scoped to the run, never in
+   * the command text, never stored.
+   */
+  envs?: Record<string, string>
 }
 
 /**
@@ -101,7 +112,11 @@ export class MockManager implements ComputerProvider {
     this.sandboxes.set(sandboxId, false)
   }
 
+  /** Test hook: the most recent command + opts the mock was asked to run. */
+  lastRun: { sandboxId: string; command: string; opts?: RunOpts } | null = null
+
   async run(sandboxId: string, command: string, _opts?: RunOpts): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    this.lastRun = { sandboxId, command, opts: _opts }
     if (this.gone.has(sandboxId)) throw new SandboxGoneError(sandboxId)
     // Like E2B connect: running a paused sandbox resumes it.
     this.paused.delete(sandboxId)
@@ -198,7 +213,9 @@ export class E2BManager implements ComputerProvider {
     }
     try {
       const result = await sandbox.commands.run(command, {
-        envs: this.sandboxEnvs(),
+        // Per-run envs (e.g. the checkout loop's PayBox token) overlay the
+        // sandbox envs for this command only.
+        envs: { ...this.sandboxEnvs(), ...opts.envs },
         timeoutMs: opts.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
       })
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }

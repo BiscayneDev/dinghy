@@ -6,6 +6,8 @@ import {
   agentResultToTool,
 } from '@/lib/integrations/paybox'
 import { assertWithinCap, recordSpend } from '@/lib/payments/spend-caps'
+import { recordPaymentRequest } from '@/lib/payments/payment-requests'
+import { logger } from '@/lib/logger'
 import type { Tool, ToolResult, UserContext } from '@/lib/llm/types'
 
 // Paybox — passkey-gated payments, secrets, and non-custodial wallet ops, driven
@@ -81,6 +83,29 @@ export const payboxRequestPayment: Tool = {
         amountCents: p.amountCents,
         currency: p.currency,
       })
+      // Record the issued request so paybox_complete_checkout can verify it
+      // later (request id is ours; merchant origin the card is bound to). A
+      // record failure must not fail the payment, but it disables checkout
+      // for this request — log loudly.
+      if (resp?.request_id) {
+        try {
+          await recordPaymentRequest({
+            request_id: resp.request_id,
+            user_id: ctx.userId,
+            credential_id: p.credentialId,
+            merchant: p.merchant,
+            merchant_url: p.merchantUrl,
+            amount_cents: p.amountCents,
+            currency: p.currency,
+            status: resp.status === 'success' ? 'approved' : 'issued',
+          })
+        } catch (err) {
+          logger.error('payment request record failed; checkout will refuse this request_id', {
+            requestId: resp.request_id,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
       const result = agentResultToTool(resp)
       if (result.success) {
         // Card issued and charged amount is fixed — record it in the shared
@@ -429,6 +454,50 @@ export const payboxGetRequest: Tool = {
       const p = GetRequestInput.parse(input)
       const resp = await (await sdkFor(ctx)).getRequest(p.requestId)
       return agentResultToTool(resp)
+    } catch (err) {
+      return toError(err)
+    }
+  },
+}
+
+// --- paybox_manage_access ---
+
+const ManageAccessInput = z.object({
+  note: z
+    .string()
+    .optional()
+    .describe('Why the change is needed, shown to the user in the PayBox app (e.g. "add a card so Dinghy can check out")'),
+})
+
+export const payboxManageAccess: Tool = {
+  name: 'paybox_manage_access',
+  description:
+    'Get ONE link that opens the PayBox app so the user can add a card, grant a wallet, or change what ' +
+    'Dinghy may access. Use when paybox_list_credentials shows no credential for what the user wants ' +
+    '(e.g. no card to check out with, no wallet to fund). Send the link as-is with one sentence, then ' +
+    'STOP and wait — when the user says they finished, call paybox_list_credentials again and resume. ' +
+    'Never send multi-step setup instructions; the link is the whole step.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      note: { type: 'string', description: 'Why the change is needed, shown in the PayBox app' },
+    },
+  },
+  async execute(input: unknown, ctx: UserContext): Promise<ToolResult> {
+    if (!isPayboxConnected(ctx)) return payboxRequired('changing PayBox access')
+    try {
+      const p = ManageAccessInput.parse(input)
+      const change = await (await sdkFor(ctx)).requestAccountChange(p.note)
+      return {
+        success: true,
+        data: {
+          manage_url: change.manage_url,
+          instruction:
+            'Send this one link as-is with a single sentence about what to add in the PayBox app, ' +
+            'then wait. When the user says they finished, call paybox_list_credentials and resume. ' +
+            'Do NOT list steps — the app walks them through it.',
+        },
+      }
     } catch (err) {
       return toError(err)
     }
