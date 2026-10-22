@@ -221,7 +221,9 @@ async function handleMessageInner(chatId: number, telegramId: number, initialTex
   // never delays this reply. Never let a billing hiccup break the chat.
   try {
     const { settleUser } = await import('@/lib/billing/settle')
-    await settleUser(user.id, chatId)
+    await settleUser(user.id, async (text) => {
+      await sendMessage({ chatId, text })
+    })
   } catch (err) {
     logger.error('post-turn settlement failed', {
       error: err instanceof Error ? err.message : String(err),
