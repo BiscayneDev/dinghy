@@ -154,7 +154,7 @@ export function checkoutAllowedHosts(merchantHost: string): string[] {
  * the server-side belt-and-braces pass. (Order numbers are usually shorter
  * or alphanumeric; a 13+ digit run is far more likely a card.) */
 export function scrubCardLike(text: string): string {
-  return text.replace(/\b(?:\d[ -]?){13,19}\b/g, '[card number redacted]')
+  return text.replace(/\b\d(?:[ -]?\d){12,18}\b/g, '[card number redacted]')
 }
 
 export interface CheckoutSessionSpec {

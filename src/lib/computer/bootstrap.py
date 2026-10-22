@@ -274,7 +274,7 @@ def scrub_card(text, card):
         out = pattern.sub("[card number redacted]", out)
     if card.get("cvc"):
         out = out.replace(str(card["cvc"]), "[cvc redacted]")
-    out = _re.sub(r"\b(?:\d[ -]?){13,19}\b", "[card number redacted]", out)
+    out = _re.sub(r"\b\d(?:[ -]?\d){12,18}\b", "[card number redacted]", out)
     return out
 
 
