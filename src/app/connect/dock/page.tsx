@@ -44,8 +44,8 @@ export default async function ConnectDockPage({
         return (
             <PaperPage
                 label="dinghy · connect"
-                title="connect"
-                accent="dock"
+                title="Connect"
+                accent="Dock"
                 body="This connect link is missing its pairing code."
                 missing="Make a fresh connect link in Dock settings, or text pair followed by your code to Dinghy."
             />
@@ -60,8 +60,8 @@ export default async function ConnectDockPage({
         return (
             <PaperPage
                 label="dinghy · connect"
-                title="connect"
-                accent="dock"
+                title="Connect"
+                accent="Dock"
                 body="This Dinghy account has no iMessage thread yet, so there is nowhere for Dock to reach you."
                 missing="Text Dinghy first, sign in again, then reopen this link."
             />
@@ -74,7 +74,7 @@ export default async function ConnectDockPage({
         return (
             <PaperPage
                 label="dinghy · connect"
-                title="already"
+                title="Already"
                 accent="connected"
                 body={`Dock is already linked to this Dinghy thread. Your Chief of Staff is ${existing.chief_name}.`}
                 fine="To connect a different Dock workspace, unlink first - in Dock settings or by texting &quot;unlink dock&quot; to Dinghy."
@@ -98,7 +98,7 @@ export default async function ConnectDockPage({
     }
 
     return (
-        <PaperPage label="dinghy · connect" title="connect" accent="dock" body={null}>
+        <PaperPage label="dinghy · connect" title="Connect" accent="Dock" body={null}>
             <DockConnectClient
                 pair={code}
                 nonce={consentNonce(session.userId, code)}
