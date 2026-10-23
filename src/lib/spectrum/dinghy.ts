@@ -716,7 +716,7 @@ export async function chatWithTools(
             uiDecision=await withinTurn(opts.deadlineAt,signal=>decideUi({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,request:currentRequest,context:JSON.stringify(history.slice(-4).map(m=>({role:m.role,content:m.content}))).slice(0,10000),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000),onUsage:opts.onUsage}))
             messages.push({role:'system',content:uiDecisionNote(uiDecision)})
             await opts.onStage?.('context',`ui:jev:${uiDecision.route}${uiDecision.route==='catalogue'?':'+uiDecision.component:''}`)
-            if(uiDecision.route==='generate')tools=[...tools,generationTool({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,modelFields:()=>modelFields(opts.model,routingNow()),request:currentRequest,onUsage:opts.onUsage,publicationFacts:()=>generationSourceFacts,onGenerated:block=>{generatedBlock=block}})]
+            if(uiDecision.route==='generate')tools=[...tools,generationTool({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,modelFields:()=>modelFields(opts.model,routingNow()),request:currentRequest,onUsage:opts.onUsage,onDiagnostic:d=>{void opts.onStage?.('tool',`generate_ui:failed:${d.reason}:http_${d.status??'none'}:elapsed_${d.elapsedMs}:limit_${d.attemptLimit??'unknown'}`)},publicationFacts:()=>generationSourceFacts,onGenerated:block=>{generatedBlock=block}})]
         }catch{return finish({reply:'The UI decision service did not return a reliable choice. No page was created.',toolCalls:0,iterations:0,tainted})}
     }
     const loopCtx = (iteration: number, toolsOffered: number): CallContext => ({
