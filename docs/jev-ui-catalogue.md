@@ -20,7 +20,7 @@ This supports novel local calculators and visualizations, not arbitrary web apps
 
 ## Failure and privacy
 
-Unknown, low-confidence, malformed, stub or unavailable decision results do not fall back to keyword selection or secretly invoke the coding step. No UI is published; the turn reports the decision problem. If enforced private routing is needed, the new decision route fails closed because the current typed decision endpoint has no private-provider allowlist. Google data must not be sent to a public decision backend under that requirement. Generation uses the normal inference routing/privacy path and is also blocked for enforced-private turns.
+Unknown, low-confidence, malformed, stub or unavailable decision results do not fall back to keyword selection or secretly invoke the coding step. No UI is published; the turn reports the decision problem. Enforced-private turns keep the existing private catalogue behavior unchanged and skip the public Jev UI decision endpoint, which has no private-provider allowlist. Novel generation is unavailable there. Google data is not sent to a public decision backend under that requirement. If a turn becomes private after selection, novel generation is blocked.
 
 ## Rollout checks not covered by mocks
 

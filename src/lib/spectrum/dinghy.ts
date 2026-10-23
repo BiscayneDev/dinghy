@@ -710,9 +710,8 @@ export async function chatWithTools(
     let uiDecision:UiDecision|undefined
     let generatedBlock:string|undefined
     let generationSourceFacts=''
-    if(jevUiEnabled()&&tools.some(t=>t.name==='create_file')){
-        // Typed decision endpoint has no private-provider allowlist. Never send Google history to it.
-        if(tainted&&privateRouteEnforced())return finish({reply:'The private UI decision route is unavailable. No page was created.',toolCalls:0,iterations:0,tainted})
+    if(jevUiEnabled()&&tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())){
+        // Enforced-private turns keep their existing catalogue path unchanged; no public Jev decision or novel generation.
         try{
             uiDecision=await withinTurn(opts.deadlineAt,signal=>decideUi({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,request:currentRequest,context:JSON.stringify(history.slice(-4).map(m=>({role:m.role,content:m.content}))).slice(0,10000),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000),onUsage:opts.onUsage}))
             messages.push({role:'system',content:uiDecisionNote(uiDecision)})
