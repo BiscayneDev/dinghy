@@ -1,3 +1,4 @@
+import { LINK_VIDEO } from '@/lib/brand/link-video'
 import type { Metadata, Viewport } from "next"
 import { dmMono, fraunces, schibsted } from "./fonts"
 import "./globals.css"
@@ -59,6 +60,7 @@ export const metadata: Metadata = {
         type: "image/png",
       },
     ],
+    videos: [{ ...LINK_VIDEO, secureUrl: LINK_VIDEO.url }],
     locale: "en_US",
   },
 

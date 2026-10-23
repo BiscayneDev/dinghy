@@ -1,3 +1,4 @@
+import { LINK_VIDEO } from '@/lib/brand/link-video'
 import {ITINERARY_CANDIDATE_NOTE} from './itinerary-candidates'
 import {ITINERARY_DAY_HEADING_NOTE} from './itinerary-contract'
 import {parsePageSpec} from '@/lib/pages/runtime'
@@ -140,13 +141,13 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
     // Clean turns can use the existing deterministic branded fallback. Private
     // turns carry no title/subtitle in a remote image URL.
     const fallbackImage = photosOk ? fileCardUrl(input, format === 'pdf' ? 'pdf' : 'page') : null
-    const opts = {...(replyLine ? {replyLine} : {}), ...(pdf ? {download:{href:pdf.filename,label:'download pdf'}} : {})}
+    const opts = {...(photosOk ? {ogVideo:LINK_VIDEO} : {}), ...(replyLine ? {replyLine} : {}), ...(pdf ? {download:{href:pdf.filename,label:'download pdf'}} : {})}
     const html = renderHtml(input, {imageryState:'fallback',...opts,...(fallbackImage ? {ogImage:fallbackImage} : {})})
     const files: SiteFile[] = [{path:'index.html',bytes:Buffer.from(html),contentType:'text/html; charset=utf-8'}]
     if(pdf) files.push({path:pdf.filename,bytes:pdf.bytes,contentType:pdf.mimeType})
     signal?.throwIfAborted()
     const hosted = await publishSite(files,{title:input.title,userId})
-    const imagery: ImageryState = {page:'fallback',chat:'fallback',share:'fallback',metadata:await optionalWithin(verifyShareMetadata(hosted,fallbackImage,input.title),2700,false)?'verified':'unverified',reason:photosOk?'decoration_pending':'privacy_gate'}
+    const imagery: ImageryState = {page:'fallback',chat:'fallback',share:'fallback',metadata:await optionalWithin(verifyShareMetadata(hosted,fallbackImage,input.title,photosOk?LINK_VIDEO.url:null),2700,false)?'verified':'unverified',reason:photosOk?'decoration_pending':'privacy_gate'}
     if(imagery.metadata==='unverified'&&photosOk)imagery.reason='metadata_unverified'
     const previews: {og:Omit<PreviewResult,'bytes'>;chat:Omit<PreviewResult,'bytes'>} = {og:{route:'static_link',...(photosOk?{}:{reason:'privacy_gate' as const})},chat:{route:'static_link',...(photosOk?{}:{reason:'privacy_gate' as const})}}
     // The content is already published. Chat rendering uses only bundled fonts
@@ -172,7 +173,7 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
             if(og.bytes)next.push({path:'og.png',bytes:og.bytes,contentType:'image/png'})
             // Await the real write; never race an uncancelled mutation.
             await updateSite(hosted.slug,next,{title:input.title,userId,baseVersionId:hosted.versionId})
-            const checked=await optionalWithin(verifyShareMetadata(hosted,image,input.title),2700,false)
+            const checked=await optionalWithin(verifyShareMetadata(hosted,image,input.title,photosOk?LINK_VIDEO.url:null),2700,false)
             previews.og={route:og.route,...(og.reason?{reason:og.reason}:{})};imagery.page=found.photos.length?'ready':'fallback';imagery.share=og.bytes?'ready':'fallback';imagery.metadata=checked?'verified':'unverified';imagery.reason=checked?(found.photos.length?'vetted_photos':'no_vetted_photo'):'metadata_unverified'
         }catch{imagery.reason='enrichment_failed'}
     }
