@@ -1,12 +1,11 @@
 # Dinghy <-> Dock connector
 
-Status: built on `feat/dock-connector`. Not merged. Dock's side of the contract below does not exist on Dock's `origin/main` yet.
-
 ## Flows
 
 | Flow | Entry | Code |
 |---|---|---|
-| Pair | iMessage `pair <CODE>` (not linked) | `src/lib/dock/service.ts` `pairChat` |
+| Pair (chat) | iMessage `pair <CODE>` (not linked) | `src/lib/dock/service.ts` `pairChat` |
+| Pair (web consent) | signed-in `/connect/dock?pair=<CODE>` | `src/app/connect/dock`, `src/app/api/connect/dock/decide`, `redeemPairing` |
 | Unlink | iMessage `unlink dock`, or Dock event `link.revoked` | `unlinkChat`, `applyDockEvent` |
 | Dock to Dinghy | `POST /api/dock/webhook` (HMAC) | `applyDockEvent` |
 | Approval reply | `yes`/`no`/`approve`/`reject` (+ optional label) | `handleReply`, `planReply` in `logic.ts` |
@@ -38,6 +37,29 @@ Status mapping in `client.ts`: 401/403 unauthorized, 404 not_found, 409 conflict
 Headers: `x-dinghy-timestamp` (unix seconds), `x-dinghy-signature` (hex HMAC-SHA256 of `"<timestamp>.<raw body>"` with the shared secret). Window is 300 seconds. Replays are deduped by `event_id`.
 
 Event types: `approval.requested` (data: approval_id, label, action, amount_text, destination, details_hash, expires_at, card_url), `approval.closed`, `run.update` (agent_name, text), `chief.renamed` (old_name, new_name), `link.revoked`.
+
+## Web consent (Vault-style)
+
+Dock settings shows a connect link (`https://getdinghy.sh/connect/dock?pair=<CODE>&w=<workspace>&sig=<hmac>`)
+next to the text-a-code fallback. The page requires Dinghy web sign-in (phone code, redirecting back
+via `?next=`), then offers **Always allow** / **Connect once** / **Don't allow**. Both allow options
+create the same standing link until unlink; they differ only on reconnects. "Always allow" records a
+`dock_connect_grants` row keyed by (chat, workspace) taken from Dock's redemption response - never
+from the URL - and later visits with a valid signed hint reconnect without asking. Grants are deleted
+on every unlink path (`unlink dock`, `unlinkChat`, Dock's `link.revoked`), so auto-reconnect can never
+undo a revocation.
+
+Security rules:
+
+- The link always binds the session owner's own bound thread (`resolveConnectIdentity`); no request
+  parameter can pick another chat.
+- `sig` = HMAC-SHA256 of `"<code>.<workspace>"` under the shared webhook secret. Only a signed hint
+  unlocks auto-reconnect; an unsigned or forged hint just renders the consent page.
+- The decide POST needs the same-origin Origin header plus a nonce = HMAC(ENCRYPTION_KEY,
+  `userId:sha256(code)`) that is rendered only into the consent page.
+- The pair code stays one-time on both sides; the web redemption reserves it in `dock_pair_codes`
+  exactly like the chat flow.
+- `?switch=1` on /login signs out first so "not you?" reaches the phone form.
 
 ## Env
 

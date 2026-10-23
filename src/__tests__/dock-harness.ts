@@ -11,6 +11,7 @@ export function memStore(clock: { t: number }) {
     const codes = new Map<string, string>()
     const events = new Set<string>()
     const approvals = new Map<string, DockApprovalRow>()
+    const grants = new Map<string, string>()
     const queue: DockQueueRow[] = []
     let seq = 0
     const iso = (ms: number) => new Date(ms).toISOString()
@@ -48,6 +49,16 @@ export function memStore(clock: { t: number }) {
             if (events.has(id)) return false
             events.add(id)
             return true
+        },
+        async getGrant(chat, ws) {
+            const at = grants.get(`${chat}${ws}`)
+            return at ? { granted_at: at } : null
+        },
+        async saveGrant(chat, ws) {
+            grants.set(`${chat}${ws}`, iso(clock.t))
+        },
+        async deleteGrants(chat) {
+            for (const k of [...grants.keys()]) if (k.startsWith(chat + '')) grants.delete(k)
         },
         async listApprovals(c) {
             return [...approvals.values()].filter((a) => a.chat_guid === c && (a.status === 'pending' || a.status === 'decision_queued'))
@@ -114,7 +125,7 @@ export function memStore(clock: { t: number }) {
         },
     } as DockStore & { _last?: never }
 
-    return { store, links, approvals, queue, codes, events }
+    return { store, links, approvals, queue, codes, events, grants }
 }
 
 export type Route = (body: Record<string, unknown>, auth: string | null) => { status: number; json?: unknown } | 'unreachable'
