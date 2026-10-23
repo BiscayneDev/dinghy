@@ -30,6 +30,7 @@ export function generationTool(opts:{gatewayUrl:string;apiKey:string;modelFields
   const budget=generationBudgetMs(opts.deadlineAt)
   if(budget<=0||ctx.signal?.aborted)return {success:false,error:'Not enough turn time remains to generate and publish a UI'}
   attempted=true
+  const facts=i.facts
   const fields=opts.modelFields() as {model?:string;shipyard?:object}
   const start=Date.now()
   const controller=new AbortController()
@@ -54,7 +55,7 @@ export function generationTool(opts:{gatewayUrl:string;apiKey:string;modelFields
   const raw=d.choices?.[0]?.message?.content;if(typeof raw!=='string')return {success:false,error:'Coding model returned no UI'}
   const p=parseGenerated(raw);if('error'in p)return {success:false,error:'Generated UI failed validation: '+p.error}
   controller.signal.throwIfAborted()
-  const block=':::pages\n'+JSON.stringify({version:1,generated:p.spec})+'\n:::'+((opts.publicationFacts?.()??i.facts).trim()?'\n\n## Supplied data and sources\n'+(opts.publicationFacts?.()??i.facts):'');opts.onGenerated(block)
+  const block=':::pages\n'+JSON.stringify({version:1,generated:p.spec})+'\n:::'+((opts.publicationFacts?.()??facts).trim()?'\n\n## Supplied data and sources\n'+(opts.publicationFacts?.()??facts):'');opts.onGenerated(block)
   return {success:true,data:{body:block,note:'Use this exact block in create_file with supporting sources. Generated local UI, not a shared catalogue addition or account action.'}}
  })(),stopped])
   }catch{
