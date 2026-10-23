@@ -1,3 +1,4 @@
+import {parsePageSpec} from '@/lib/pages/runtime'
 import {itineraryPageError,ITINERARY_NOTE,ITINERARY_DAY_HEADING,ITINERARY_DAY_HEADING_NOTE} from './itinerary-contract'
 import { mapArtifactTurn, mapPageError } from './map-artifact'
 import { weeklyListRequest, weeklyPageError } from './weekly-standard'
@@ -45,6 +46,9 @@ function blockRows(body: string, kinds: string): number {
     const block = body.match(new RegExp(`(?:^|\\n)\\s*:::(?:${kinds})\\s*\\n([\\s\\S]*?)\\n\\s*:::`, 'i'))?.[1] ?? ''
     return block.split('\n').filter(line => line.split('|').filter(cell => cell.trim()).length >= 2).length
 }
+function componentRows(body:string,types:string[]):number {
+ const raw=body.match(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/m)?.[1];if(!raw)return 0;const p=parsePageSpec(raw);return 'error'in p?0:p.spec.components.filter(c=>types.includes(c.type)).reduce((n,c)=>n+c.rows.length,0)
+}
 function listRows(body: string): boolean {
     return /(?:^|\n)\s*(?:[-*] |\d+[.)] )\S/.test(body)
 }
@@ -58,15 +62,15 @@ export function deliverablePageError(c: DeliverableContract | null, input: unkno
         if (evidenceError) return evidenceError
         // Structure only, not verification of names or factual accuracy.
         const locatorBody = body.replace(/:::sources\s*\n[\s\S]*?\n\s*:::/gi, '')
-        if (!listRows(locatorBody) && !blockRows(locatorBody, 'places|options') && !/\|[^|\n]+\|[^|\n]+\|/.test(locatorBody)) return 'Map contract: include named venue/location rows in a list, table or :::places/:::options block. Sources and disclaimers alone are not a locator. Keep unsupported positions unknown.'
+        if (!componentRows(locatorBody,['map']) && !listRows(locatorBody) && !blockRows(locatorBody, 'places|options') && !/\|[^|\n]+\|[^|\n]+\|/.test(locatorBody)) return 'Map contract: include named venue/location rows in a list, table or :::places/:::options block. Sources and disclaimers alone are not a locator. Keep unsupported positions unknown.'
         return null
     }
     if (c.kind === 'comparison') {
         const optionRows = blockRows(body, 'options')
         const tableRows = body.split('\n').filter(l => /^\s*\|/.test(l) && !/^\s*\|[\s:|-]+\|\s*$/.test(l)).length - 1
-        if (Math.max(optionRows, tableRows) < 2) return 'Comparison contract: supply at least two named options in a markdown table or :::options block. Show differences and catches; never invent missing values.'
+        if (Math.max(optionRows, tableRows, componentRows(body,['comparison'])) < 2) return 'Comparison contract: supply at least two named options in a markdown table or :::options block. Show differences and catches; never invent missing values.'
     }
-    if (c.kind === 'list' && !listRows(body) && !blockRows(body, 'media|options|places|briefing')) return 'List contract: supply actual list/checklist items or structured rows, not a generic paragraph.'
+    if (c.kind === 'list' && !listRows(body) && !blockRows(body, 'media|options|places|briefing') && !componentRows(body,['checklist','filter','comparison'])) return 'List contract: supply actual list/checklist items or structured rows, not a generic paragraph.'
     if (c.kind === 'itinerary' && !blockRows(body, 'route') && !ITINERARY_DAY_HEADING.test(body)) return 'Itinerary contract: '+ITINERARY_DAY_HEADING_NOTE+' Unknown timings stay unknown.'
     if(c.kind==='itinerary'){const error=itineraryPageError(body,c.request,urls);if(error)return error}
     return weeklyPageError(input, c.request, urls)

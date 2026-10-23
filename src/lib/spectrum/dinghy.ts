@@ -1,3 +1,7 @@
+import {decideUi} from '@/lib/pages/jev'
+import {jevUiEnabled,uiDecisionNote,catalogueOutputError,type UiDecision} from '@/lib/pages/catalogue'
+import {generationTool} from '@/lib/pages/generate-tool'
+import {generatedPage} from '@/lib/pages/runtime'
 import {chooseItineraryVenues,parseChosenVenues} from '@/lib/files/itinerary-choose'
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,namedLookupMatch,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence,diverseResearchSources} from '@/lib/files/itinerary-research'
@@ -651,7 +655,7 @@ export async function chatWithTools(
     const searchInput=(name:string,i:unknown):unknown=>{const q=(i as {query?:unknown}|null)?.query;if(!itineraryResearch||name!=='web_search'||typeof q!=='string')return i;const destination=resolveDestination(currentRequest)?.query||destinationTokens(currentRequest).join(' ');const kind=/restaurant|dining|food|eat/i.test(q)?'restaurant':/hotel|lodging|stay/i.test(q)?'hotel':/things to do|activities|attraction|weekend/i.test(q)?'activity':null;return kind&&destination?{...(i as Record<string,unknown>),query:widenQuery(kind,destination),recentDays:undefined}:{...(i as Record<string,unknown>),recentDays:undefined}}
     let bypassCandidates:Record<string,unknown>[]|undefined
     const defsNow = () => {
-        const defs=tools.map((t) => ({type:'function' as const,function:{name:t.name,description:t.description,parameters:t.inputSchema as Record<string,unknown>}}))
+        const defs=tools.filter(t=>!(uiDecision&&uiDecision.route!=='text'&&t.name==='computer_run')).map((t) => ({type:'function' as const,function:{name:t.name,description:t.description,parameters:t.inputSchema as Record<string,unknown>}}))
         const ids=sourceRecords.pageIds()
         return itineraryResearch&&ids.length&&!selectedCandidates&&viewReady ? [...defs,quoteToolDef(viewEntries.length)] : defs
     }
@@ -702,6 +706,18 @@ export async function chatWithTools(
             console.info('[private-route shadow] tainted turn would route private')
         }
         return opts.routing
+    }
+    let uiDecision:UiDecision|undefined
+    let generatedBlock:string|undefined
+    let generationSourceFacts=''
+    if(jevUiEnabled()&&tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())){
+        // Enforced-private turns keep their existing catalogue path unchanged; no public Jev decision or novel generation.
+        try{
+            uiDecision=await withinTurn(opts.deadlineAt,signal=>decideUi({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,request:currentRequest,context:JSON.stringify(history.slice(-4).map(m=>({role:m.role,content:m.content}))).slice(0,10000),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000),onUsage:opts.onUsage}))
+            messages.push({role:'system',content:uiDecisionNote(uiDecision)})
+            await opts.onStage?.('context',`ui:jev:${uiDecision.route}${uiDecision.route==='catalogue'?':'+uiDecision.component:''}`)
+            if(uiDecision.route==='generate')tools=[...tools,generationTool({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,modelFields:()=>modelFields(opts.model,routingNow()),request:currentRequest,onUsage:opts.onUsage,publicationFacts:()=>generationSourceFacts,onGenerated:block=>{generatedBlock=block}})]
+        }catch{return finish({reply:'The UI decision service did not return a reliable choice. No page was created.',toolCalls:0,iterations:0,tainted})}
     }
     const loopCtx = (iteration: number, toolsOffered: number): CallContext => ({
         chatGuid: ctx.chatGuid, source: 'tool_loop', iteration, requestedModel: requestedLabel(opts.model, routingNow()), toolsOffered,
@@ -1118,6 +1134,25 @@ export async function chatWithTools(
                             };
                         }
                     }
+                    if(uiDecision&&uiDecision.route!=='text'&&call.function.name==='computer_run')throw new Error('UI coding must use the Jev-gated generate_ui step, not shell execution')
+                    if(call.function.name==='generate_ui'){
+                        if(uiDecision?.route!=='generate')throw new Error('Jev did not select generation')
+                        if(tainted&&privateRouteEnforced())throw new Error('Private UI generation is unavailable')
+                        const v=input as Record<string,unknown>
+                        generationSourceFacts=typeof v.facts==='string'?v.facts:''
+                        const bound=bindFileSources({title:'Generation inputs',body:typeof v.facts==='string'?v.facts:''},sourceRecords,sourceRecords.size()>0)
+                        if('error'in bound)throw new Error(bound.error)
+                        input={...v,facts:(bound.input as {body:string}).body}
+                    }
+                    if(call.function.name==='create_file'&&!uiDecision){const b=(input as {body?:unknown}).body;const raw=typeof b==='string'?b.match(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/m)?.[1]:undefined;if(raw&&generatedPage(raw)!==null)throw new Error('Generated UI requires a Jev decision and coding step')}
+                    if(uiDecision&&call.function.name==='create_file'){
+                        if(uiDecision.route==='text')throw new Error('Jev selected no UI for this request')
+                        const b=(input as {body?:unknown}).body
+                        const raw=typeof b==='string'?b.match(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/m)?.[1]:undefined
+                        if(uiDecision.route==='catalogue'&&typeof b==='string'){const mismatch=catalogueOutputError(uiDecision,b);if(mismatch)throw new Error(mismatch)}
+                        if(uiDecision.route==='catalogue'&&raw&&generatedPage(raw)!==null)throw new Error('Jev selected an existing catalogue component; generation is not allowed')
+                        if(uiDecision.route==='generate'&&(!generatedBlock||typeof b!=='string'||!b.includes(generatedBlock)))throw new Error('Generate the novel UI first, then publish its exact returned Pages block')
+                    }
                     const schemaError=inputSchemaError(input,tool.inputSchema)
                     if(schemaError){validationFailures++;if(call.function.name==='create_file')fileValidationPending=true;await opts.onStage?.('tool',`invalid:${schemaError}`);throw new Error('Tool arguments do not match the required schema; return one corrected call.')}
                     if (call.function.name === 'create_file') {
@@ -1150,7 +1185,7 @@ export async function chatWithTools(
                     if (call.function.name === 'create_file') {pageAttempted = true;fileValidationPending=false}
                     if (!['web_search', 'web_fetch'].includes(call.function.name)) sourceOnly = false
                     const result = await withinTurn(opts.deadlineAt, async (signal) => {
-                        const work = tool.execute(searchInput(call.function.name,input), { ...ctx, signal, ...(call.function.name === 'create_file' ? { photosOk: !tainted } : {}) })
+                        const work = tool.execute(searchInput(call.function.name,input), { ...ctx, signal, ...(call.function.name === 'create_file' ? { photosOk: !tainted,generatedUiAuthorized:uiDecision?.route==='generate'&&Boolean(generatedBlock) } : {}) })
                         // A publish is an effect, not a disposable read. Its settlement belongs to
                         // the turn deadline, never the generic 15s race.
                         if (call.function.name === 'create_file') return work

@@ -1,7 +1,7 @@
 import { LINK_VIDEO } from '@/lib/brand/link-video'
 import {ITINERARY_CANDIDATE_NOTE} from './itinerary-candidates'
 import {ITINERARY_DAY_HEADING_NOTE} from './itinerary-contract'
-import {parsePageSpec} from '@/lib/pages/runtime'
+import {generatedPage,validatePage} from '@/lib/pages/runtime'
 import { optionalWithin, verifyShareMetadata, type ImageryState } from './imagery'
 import { renderSurfacePreview, type PreviewResult } from '@/lib/brand/surface-preview'
 import { surfacePlan } from './surface-contract'
@@ -96,7 +96,7 @@ export function parseFileInput(input: unknown): { doc: DinghyDoc; format: FileFo
     const pages=[...body.matchAll(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/gm)]
     if(pages.length>1)return {error:'Use one Pages block per file, with distinct stable component IDs.'}
     // Rendering still handles stored invalid components as visible static text.
-    for(const page of pages){const validated=parsePageSpec(page[1]);if('error'in validated)return {error:'Invalid Pages block: '+validated.error+'. Correct the component or use plain document text.'}}
+    for(const page of pages){const error=validatePage(page[1]);if(error)return {error:'Invalid Pages block: '+error+'. Correct the component or use plain document text.'}}
     const raw = str(i.format).toLowerCase() || 'pdf'
     const format = (raw === 'word' ? 'docx' : raw === 'markdown' ? 'md' : raw) as FileFormat
     if (!FORMATS.includes(format)) return { error: `format must be one of ${FORMATS.join(', ')}` }
@@ -208,6 +208,7 @@ export function fileToolsFor(): FileToolset {
             required: ['title', 'body'],
         },
         async execute(input: unknown, ctx: UserContext): Promise<ToolResult> {
+            if(typeof (input as {body?:unknown})?.body==='string'&&[...(input as {body:string}).body.matchAll(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/gm)].some(m=>generatedPage(m[1])!==null)&&!ctx.generatedUiAuthorized)return {success:false,error:'Generated UI requires a successful Jev-gated coding step'}
             const parsed = parseFileInput(input)
             if ('error' in parsed) return { success: false, error: parsed.error }
             if (made.length >= 3) return { success: false, error: 'at most 3 files per reply' }
