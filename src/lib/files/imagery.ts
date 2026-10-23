@@ -7,7 +7,7 @@ export async function optionalWithin<T>(work:Promise<T>,ms:number,fallback:T):Pr
  try{return await Promise.race([work.catch(()=>fallback),new Promise<T>(r=>{timer=setTimeout(()=>r(fallback),ms)})])}finally{if(timer)clearTimeout(timer)}
 }
 /** Read only the assigned hosted site. No remote title-bearing image request. */
-export async function verifyShareMetadata(site:PublishedSite,expectedImage:string|null,expectedTitle?:string):Promise<boolean>{
+export async function verifyShareMetadata(site:PublishedSite,expectedImage:string|null,expectedTitle?:string,expectedVideo:string|null=null):Promise<boolean>{
  try{
   const u=new URL(site.url)
   if(u.protocol!=='https:'||u.hostname!==`${site.slug}.here.now`||u.username||u.password)return false
@@ -15,6 +15,8 @@ export async function verifyShareMetadata(site:PublishedSite,expectedImage:strin
   if(!res.ok)return false
   const html=await res.text()
   const image=html.match(/<meta\s+property="og:image"\s+content="([^"]*)"/i)?.[1]?.replace(/&amp;/g,'&')??null
+  const video=html.match(/<meta\s+property="og:video"\s+content="([^"]*)"/i)?.[1]?.replace(/&amp;/g,'&')??null
+  if(video!==expectedVideo)return false
   const title=html.match(/<meta\s+property="og:title"\s+content="([^"]*)"/i)?.[1]?.replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')
   if(image!==expectedImage||!title||(expectedTitle!==undefined&&title!==expectedTitle))return false
   // Local enriched image must actually exist. Do not contact a remote image URL

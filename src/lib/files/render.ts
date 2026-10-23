@@ -335,6 +335,8 @@ export interface HtmlOptions {
     /** Dinghy's number for this user. Lets ":::reply" blocks open Messages to it. Omit and they show as plain text. */
     replyLine?: string
     ogImage?: string
+    /** Direct downloadable MP4, never an embed/player page. Image remains fallback. */
+    ogVideo?: { url: string; type: 'video/mp4'; width: number; height: number }
     description?: string
     imageryState?: 'ready' | 'fallback'
     /** Relative link to a downloadable copy (e.g. the PDF next to the page). */
@@ -398,6 +400,9 @@ export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const og = opts.ogImage
         ? `<meta property="og:image" content="${esc(opts.ogImage)}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image">`
         : ''
+    const video = opts.ogVideo
+        ? `<meta property="og:video" content="${esc(opts.ogVideo.url)}"><meta property="og:video:secure_url" content="${esc(opts.ogVideo.url)}"><meta property="og:video:type" content="${opts.ogVideo.type}"><meta property="og:video:width" content="${opts.ogVideo.width}"><meta property="og:video:height" content="${opts.ogVideo.height}">`
+        : ''
     const face = (family: string, b64: string, weight: number, style = 'normal') =>
         `@font-face{font-family:'${family}';src:url(data:font/woff;base64,${b64}) format('woff');font-weight:${weight};font-style:${style};font-display:swap}`
     return `<!doctype html>
@@ -406,7 +411,7 @@ export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
 <title>${esc(doc.title)} · Dinghy</title>
 <meta name="description" content="${esc(desc)}">
 <meta property="og:title" content="${esc(doc.title)}"><meta property="og:description" content="${esc(desc)}">
-<meta property="og:site_name" content="Dinghy"><meta property="og:type" content="article">${og}
+<meta property="og:site_name" content="Dinghy"><meta property="og:type" content="article">${og}${video}
 <meta name="robots" content="noindex"><meta name="theme-color" content="${BRAND.paper}" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#0C1528" media="(prefers-color-scheme: dark)"><meta name="color-scheme" content="light dark">
 <style>
 ${face('Fraunces', frauncesDisplay, 500)}${face('Fraunces', frauncesItalic, 400, 'italic')}${face('Schibsted', schibsted400, 400)}${face('Schibsted', schibsted600, 600)}${face('DM Mono', dmMono500, 500)}

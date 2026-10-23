@@ -48,6 +48,7 @@ describe('create_file og phase 2', () => {
     await run('weather', true)
     const first = (publishSite.mock.calls[0][0] as { path: string }[]).map((f) => f.path)
     expect(first).not.toContain('og.png')
+    expect((publishSite.mock.calls[0][0] as unknown as {path:string;bytes:Buffer}[])[0].bytes.toString()).toContain('property="og:video" content="https://www.getdinghy.sh/dinghy-link-preview-v1.mp4"')
     expect(updateSite).toHaveBeenCalledTimes(1)
     const [slug, files] = updateSite.mock.calls[0] as unknown as [string, { path: string; bytes: Buffer }[]]
     expect(slug).toBe('harbor-test')
@@ -55,6 +56,7 @@ describe('create_file og phase 2', () => {
     const html = files.find((f) => f.path === 'index.html')!.bytes.toString('utf8')
     expect(html).toContain('<meta property="og:image" content="https://harbor-test.here.now/og.png">')
     expect(html).not.toContain('getdinghy.sh/api/og/file')
+    expect(html).toContain('property="og:video"')
   }, 60000)
 
   it('a failed or throwing update never fails the page', async () => {
@@ -68,7 +70,10 @@ describe('create_file og phase 2', () => {
     await run('weather', false)
     await run('weather')
     expect(updateSite).not.toHaveBeenCalled()
-    for (const c of publishSite.mock.calls) expect((c[0] as { path: string }[]).map((f) => f.path)).not.toContain('og.png')
+    for (const c of publishSite.mock.calls) {
+      expect((c[0] as { path: string }[]).map((f) => f.path)).not.toContain('og.png')
+      expect((c[0] as unknown as {bytes:Buffer}[])[0].bytes.toString()).not.toContain('property="og:video"')
+    }
     publishSite.mockClear()
     const set=fileToolsFor();await set.tools[0].execute({title:'Notes',format:'pdf',body:'## Decisions\nplain'},ctx(true));await set.files()[0].enrichImagery?.()
     expect(updateSite).toHaveBeenCalledTimes(1)
