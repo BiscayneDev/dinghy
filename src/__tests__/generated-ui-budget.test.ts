@@ -9,6 +9,7 @@ afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs()})
 it('budget reserves finish time, caps generation, never alters ordinary modelFields',()=>{
  vi.useFakeTimers();vi.setSystemTime(0)
  expect(generationBudgetMs()).toBe(45000);expect(generationBudgetMs(30000)).toBe(20000);expect(generationBudgetMs(9000)).toBe(0)
+ vi.setSystemTime(15000);expect(generationBudgetMs(30000)).toBe(5000)
  expect(modelFields('unused',{providers:['hopscotch']})).toMatchObject({model:'auto',shipyard:{attempt_timeout_ms:15000}})
 })
 it('generation gets bounded remaining time, preserving routing and no retry, and aborts at its deadline',async()=>{
@@ -61,4 +62,14 @@ it('normal tools still stop at15s, generation-specific exception does not change
  const execute=vi.fn(()=>new Promise<never>(()=>{}))
  const pending=chatWithTools([{role:'user',content:'fictional wait'}],{gatewayUrl:'https://fictional.invalid',apiKey:'fake',model:'unused',deadlineAt:85000},[{name:'fictional_wait',description:'wait',inputSchema:{type:'object'},execute}],ctx)
  await vi.advanceTimersByTimeAsync(15001);expect((await pending).reply).toBe('Stopped');expect(execute).toHaveBeenCalledOnce()
+})
+
+it('deadline covers stalled response-body read and prevents late result publication',async()=>{
+ vi.useFakeTimers();vi.setSystemTime(0)
+ let resolve!:(d:unknown)=>void,signal:AbortSignal|undefined
+ vi.stubGlobal('fetch',vi.fn(async(_url:RequestInfo|URL,init?:RequestInit)=>{signal=init?.signal??undefined;return {ok:true,status:200,json:()=>new Promise(r=>{resolve=r})} as Response}))
+ const onGenerated=vi.fn(),tool=generationTool({gatewayUrl:'https://fictional.invalid',apiKey:'fake',request:'fictional',deadlineAt:12000,modelFields:()=>({model:'auto'}),onGenerated})
+ const pending=tool.execute({brief:'example',facts:''},ctx);await vi.advanceTimersByTimeAsync(2000)
+ expect((await pending).success).toBe(false);expect(signal?.aborted).toBe(true)
+ resolve({choices:[{message:{content:JSON.stringify(gen)}}]});await vi.advanceTimersByTimeAsync(1);expect(onGenerated).not.toHaveBeenCalled()
 })
