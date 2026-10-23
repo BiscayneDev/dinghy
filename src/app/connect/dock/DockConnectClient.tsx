@@ -6,7 +6,7 @@ import styles from './dock-connect.module.css'
 type Outcome =
     | { kind: 'idle' }
     | { kind: 'busy' }
-    | { kind: 'connected'; chief: string; automatic: boolean }
+    | { kind: 'connected'; chief: string; automatic: boolean; grantFailed: boolean }
     | { kind: 'already' }
     | { kind: 'denied' }
     | { kind: 'error'; message: string }
@@ -45,12 +45,13 @@ export function DockConnectClient({
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ pair, decision, nonce }),
             })
-            const data = (await res.json().catch(() => ({}))) as { status?: string; chief?: string; error?: string }
+            const data = (await res.json().catch(() => ({}))) as { status?: string; chief?: string; error?: string; grant?: string }
             if (!res.ok) {
                 setOutcome({ kind: 'error', message: data.error ?? 'Something went wrong. Try again in a moment.' })
                 return
             }
-            if (data.status === 'connected') setOutcome({ kind: 'connected', chief: data.chief ?? 'your Chief of Staff', automatic: auto })
+            if (data.status === 'connected')
+                setOutcome({ kind: 'connected', chief: data.chief ?? 'your Chief of Staff', automatic: auto, grantFailed: data.grant === 'failed' })
             else if (data.status === 'already') setOutcome({ kind: 'already' })
             else if (data.status === 'denied') setOutcome({ kind: 'denied' })
             else setOutcome({ kind: 'error', message: 'Something went wrong. Try again in a moment.' })
@@ -76,6 +77,12 @@ export function DockConnectClient({
                     connected.
                     {outcome.automatic ? ' This reconnected automatically because you chose Always allow for this workspace.' : ''}
                 </p>
+                {outcome.grantFailed ? (
+                    <p className={styles.error}>
+                        Connected, but Always allow could not be saved - if this link is ever lost, you&apos;ll be
+                        asked again.
+                    </p>
+                ) : null}
                 <p className={styles.fine}>
                     Unlink any time in Dock settings or by texting &quot;unlink dock&quot; to Dinghy.
                 </p>

@@ -165,3 +165,18 @@ describe('post-login redirect target', () => {
         expect(safeNextPath('/' + 'a'.repeat(300))).toBeNull()
     })
 })
+
+describe('grant recording failure (migration absent)', () => {
+    it('reports failed instead of throwing, so the connect result stays honest', async () => {
+        const s = setup()
+        const { recordGrantIfAlways } = await import('@/lib/dock/service')
+        // a store whose saveGrant rejects (table missing)
+        const deps: DockDeps = {
+            ...s.deps,
+            store: { ...s.mem.store, saveGrant: async () => { throw new Error('relation dock_connect_grants does not exist') } },
+        }
+        expect(await recordGrantIfAlways(deps, { decision: 'always', chatGuid: 'chatA', workspaceRef: 'ws1' })).toBe('failed')
+        expect(await recordGrantIfAlways(s.deps, { decision: 'always', chatGuid: 'chatA', workspaceRef: 'ws1' })).toBe('saved')
+        expect(await recordGrantIfAlways(s.deps, { decision: 'once', chatGuid: 'chatA', workspaceRef: 'ws1' })).toBe('not_requested')
+    })
+})

@@ -88,8 +88,13 @@ export default async function ConnectDockPage({
     const secret = dockWebhookSecret()
     const hintWorkspace = (sp.w ?? '').trim()
     if (secret && hintWorkspace && sp.sig && verifyConnectHint(secret, code, hintWorkspace, sp.sig)) {
-        const grant = await store.getGrant(identity.chatGuid, hintWorkspace)
-        auto = Boolean(grant)
+        try {
+            const grant = await store.getGrant(identity.chatGuid, hintWorkspace)
+            auto = Boolean(grant)
+        } catch {
+            // Grant store unavailable (e.g. migration not applied): fall back to asking, never to auto.
+            auto = false
+        }
     }
 
     return (

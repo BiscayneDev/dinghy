@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
-import { redeemPairing } from '@/lib/dock/service'
+import { recordGrantIfAlways, redeemPairing } from '@/lib/dock/service'
 import { dockDepsViaOutbox } from '@/lib/dock/runtime'
 import { resolveConnectIdentity, sameOriginRequest, verifyConsentNonce } from '@/lib/dock/connect'
 
@@ -62,8 +62,8 @@ export async function POST(request: Request): Promise<NextResponse> {
             const status = out.reason === 'expired' ? 410 : out.reason === 'unreachable' ? 502 : 400
             return NextResponse.json({ ok: false, status: 'failed', error: msg }, { status })
         }
-        if (decision === 'always') await deps.store.saveGrant(identity.chatGuid, out.workspaceRef)
-        return NextResponse.json({ ok: true, status: 'connected', chief: out.chief })
+        const grant = await recordGrantIfAlways(deps, { decision, chatGuid: identity.chatGuid, workspaceRef: out.workspaceRef })
+        return NextResponse.json({ ok: true, status: 'connected', chief: out.chief, grant })
     } catch (err) {
         console.error('dock connect decide failed:', err instanceof Error ? err.message : String(err))
         return NextResponse.json({ ok: false, status: 'failed', error: 'Something went wrong. Try again in a moment.' }, { status: 500 })

@@ -119,6 +119,25 @@ export async function redeemPairing(
     return { ok: true, chief, workspaceRef: res.data.workspace_id }
 }
 
+/**
+ * Records an "Always allow" grant after a successful web redemption. Failure (for example migration
+ * 076 not yet applied) is reported, not thrown: the connection itself is already durable, so the
+ * caller must say "connected, but Always allow was not saved" rather than either erroring the whole
+ * connect or silently dropping the preference.
+ */
+export async function recordGrantIfAlways(
+    deps: DockDeps,
+    input: { decision: 'once' | 'always'; chatGuid: string; workspaceRef: string }
+): Promise<'not_requested' | 'saved' | 'failed'> {
+    if (input.decision !== 'always') return 'not_requested'
+    try {
+        await deps.store.saveGrant(input.chatGuid, input.workspaceRef)
+        return 'saved'
+    } catch {
+        return 'failed'
+    }
+}
+
 /** iMessage wrapper around redeemPairing: maps the structured outcome to chat copy. */
 export async function pairChat(deps: DockDeps, chatGuid: string, code: string): Promise<string> {
     const out = await redeemPairing(deps, { chatGuid, code })
