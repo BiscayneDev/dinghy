@@ -1,3 +1,4 @@
+import {parseGenerated,generatedText,generatedHtml} from './generated'
 import {createHash} from 'crypto'
 export type PageRow={id:string;label:string;detail:string;lat?:number;lon?:number}
 export type PageComponent={id:string;type:'comparison'|'filter'|'checklist'|'map';title:string;rows:PageRow[];code?:string}
@@ -24,8 +25,11 @@ export function parsePageSpec(raw:string):{spec:PageSpec}|{error:string}{
  return {spec:{version:1,components:s.components.map(c=>({id:c.id,type:c.type,title:c.title,rows:c.rows.map(r=>({id:r.id,label:r.label,detail:r.detail,...(c.type==='map'?{lat:r.lat,lon:r.lon}:{})})),...(c.code?{code:c.code}:{})}))}}
 }
 const esc=(s:string)=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
-export function staticPageText(raw:string):string{const p=parsePageSpec(raw);if('error'in p)return 'Interactive view unavailable. Unparsed source content:\n'+raw;return p.spec.components.map(c=>`## ${c.title}\n${c.rows.map(r=>`- ${r.label}: ${r.detail}${c.type==='map'?` (${r.lat}, ${r.lon}; coordinates only, route unverified)`:''}`).join('\n')}`).join('\n\n')}
+export function generatedPage(raw:string):string|null{try{const v=JSON.parse(raw);return v?.version===1&&v.generated?JSON.stringify(v.generated):null}catch{return null}}
+export function validatePage(raw:string):string|null{const g=generatedPage(raw);if(g!==null){const p=parseGenerated(g);return 'error'in p?p.error:null}const p=parsePageSpec(raw);return 'error'in p?p.error:null}
+export function staticPageText(raw:string):string{const g=generatedPage(raw);if(g!==null)return generatedText(g);const p=parsePageSpec(raw);if('error'in p)return 'Interactive view unavailable. Unparsed source content:\n'+raw;return p.spec.components.map(c=>`## ${c.title}\n${c.rows.map(r=>`- ${r.label}: ${r.detail}${c.type==='map'?` (${r.lat}, ${r.lon}; coordinates only, route unverified)`:''}`).join('\n')}`).join('\n\n')}
 export function pageRuntimeHtml(raw:string):string{
+ const g=generatedPage(raw);if(g!==null)return generatedHtml(g)
  const p=parsePageSpec(raw)
  if('error'in p)return `<aside class="heads">Interactive view unavailable (${p.error}). Unparsed source content:</aside><pre>${esc(raw)}</pre>`
  const stateKey=createHash('sha256').update('pages-runtime-v1').digest('hex').slice(0,24)
