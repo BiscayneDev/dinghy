@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { normalizePhone, verifyLogin } from '@/lib/auth/dinghy-login'
+import { safeNextPath } from '@/lib/auth/redirect'
 import { bindSpectrumIdentity } from '@/lib/connect-token'
 import { setSession } from '@/lib/auth/session'
 
 /** POST { phone, code } -> signed session for the Dinghy account behind that thread. */
 export async function POST(request: NextRequest): Promise<NextResponse> {
-    let body: { phone?: unknown; code?: unknown } = {}
+    let body: { phone?: unknown; code?: unknown; next?: unknown } = {}
     try {
         body = (await request.json()) as typeof body
     } catch {
@@ -25,5 +26,5 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         console.error('login verify failed:', err instanceof Error ? err.message : String(err))
         return NextResponse.json({ error: 'Something went wrong. Try again in a moment.' }, { status: 500 })
     }
-    return NextResponse.json({ ok: true, redirect: '/profile' })
+    return NextResponse.json({ ok: true, redirect: safeNextPath(body.next) ?? '/profile' })
 }

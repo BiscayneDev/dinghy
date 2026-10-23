@@ -1,0 +1,43 @@
+.body {
+  margin: 0 0 10px;
+  font-size: 15px; line-height: 1.55; color: rgba(14, 26, 51, 0.78);
+}
+.body strong { color: #0E1A33; font-weight: 600; }
+.primary {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 52px; margin-top: 18px; border: 0; border-radius: 999px;
+  background: #0E1A33; color: #FBF6EE; cursor: pointer;
+  font-family: inherit; font-weight: 500; font-size: 15px;
+  transition: background 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+}
+.primary:hover:not(:disabled) { background: #1B2A4A; transform: translateY(-1px); }
+.primary:disabled { opacity: 0.55; cursor: default; }
+.secondary {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 52px; margin-top: 10px; border-radius: 999px;
+  background: #FFFFFF; box-shadow: inset 0 0 0 1px rgba(14, 26, 51, 0.22);
+  color: #0E1A33; cursor: pointer;
+  font-family: inherit; font-weight: 500; font-size: 15px;
+  transition: box-shadow 0.15s ease, opacity 0.2s ease;
+}
+.secondary:hover:not(:disabled) { box-shadow: inset 0 0 0 2px #0E1A33; }
+.secondary:disabled { opacity: 0.55; cursor: default; }
+.deny {
+  display: block; margin: 14px auto 0; padding: 0;
+  background: none; border: 0; cursor: pointer;
+  font-family: inherit; font-size: 14px; color: #C8583A;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.deny:disabled { opacity: 0.55; cursor: default; }
+.hint { margin: 14px 0 0; font-size: 12.5px; line-height: 1.55; color: rgba(14, 26, 51, 0.55); }
+.signedIn {
+  margin: 22px 0 0; padding-top: 16px; border-top: 1px solid rgba(14, 26, 51, 0.12);
+  font-size: 12.5px; color: rgba(14, 26, 51, 0.55); text-align: center;
+}
+.signedIn a { color: #C8583A; text-decoration: underline; text-underline-offset: 3px; }
+.note { margin: 14px 0 0; padding: 11px 14px; border-radius: 12px; background: #F1E8DA; color: rgba(14, 26, 51, 0.78); font-size: 14px; line-height: 1.45; }
+.error { margin: 14px 0 0; padding: 11px 14px; border-radius: 12px; background: #F8E3DA; color: #9A3B22; font-size: 14px; line-height: 1.45; }
+.result { margin-top: 4px; }
+.resultTitle { margin: 0 0 8px; font-family: var(--font-fraunces), Georgia, serif; font-size: 22px; color: #0E1A33; }
+.resultBody { margin: 0 0 10px; font-size: 15px; line-height: 1.55; color: rgba(14, 26, 51, 0.78); }
+.fine { margin: 10px 0 0; font-size: 12.5px; line-height: 1.55; color: rgba(14, 26, 51, 0.55); }

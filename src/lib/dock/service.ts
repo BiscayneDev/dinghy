@@ -62,18 +62,27 @@ function errorLine(kind: string): string {
 
 // ---------------------------------------------------------------- pairing
 
+export type PairFailure = 'already_linked' | 'used' | 'unreachable' | 'expired' | 'invalid' | 'bad_response'
+export type PairOutcome = { ok: true; chief: string; workspaceRef: string } | { ok: false; reason: PairFailure }
+
 /**
- * Exchanges a one-time code for a connector token. The code is reserved here before the call (single
- * use on Dinghy's side as well) and released only when Dock was unreachable, so the user can retry.
- * Dock enforces the 10-minute expiry and the single use on its side (410 and 409).
+ * Exchanges a one-time code for a connector token and stores the link. Shared by the iMessage
+ * "pair <code>" command and the signed-in web consent page. The code is reserved here before the
+ * call (single use on Dinghy's side as well) and released only when Dock was unreachable, so the
+ * user can retry. Dock enforces the 10-minute expiry and the single use on its side (410 and 409).
+ * `userId` is the authenticated web session owner when the redemption came from the consent page.
  */
-export async function pairChat(deps: DockDeps, chatGuid: string, code: string): Promise<string> {
+export async function redeemPairing(
+    deps: DockDeps,
+    input: { chatGuid: string; code: string; userId?: string | null }
+): Promise<PairOutcome> {
+    const { chatGuid, code } = input
     const existing = await deps.store.getLinkByChat(chatGuid)
-    if (existing) return 'This chat is already linked to Dock. Text "unlink dock" first.'
+    if (existing) return { ok: false, reason: 'already_linked' }
 
     const codeHash = sha256Hex(code)
     const reserved = await deps.store.reserveCode(codeHash, chatGuid)
-    if (!reserved) return 'That code was already used. Make a new one in Dock settings.'
+    if (!reserved) return { ok: false, reason: 'used' }
 
     const linkRef = deps.newLinkRef ? deps.newLinkRef() : randomBytes(16).toString('hex')
     const res: DockResult<{ connector_token: string; workspace_id: string; chief_name: string }> = await dockApi.pair(
@@ -85,19 +94,19 @@ export async function pairChat(deps: DockDeps, chatGuid: string, code: string): 
     if (!res.ok) {
         if (res.kind === 'unreachable') {
             await deps.store.releaseCode(codeHash)
-            return "Dock didn't answer. Send the code again in a minute."
+            return { ok: false, reason: 'unreachable' }
         }
-        if (res.kind === 'expired') return 'That code expired. Make a new one in Dock settings.'
-        return "That code didn't work. Make a new one in Dock settings."
+        if (res.kind === 'expired') return { ok: false, reason: 'expired' }
+        return { ok: false, reason: 'invalid' }
     }
 
     const chief = res.data.chief_name?.trim()
     if (!chief || !res.data.connector_token || !res.data.workspace_id) {
-        return "Dock sent back something I couldn't read. Try again in a minute."
+        return { ok: false, reason: 'bad_response' }
     }
     const link: DockLinkRow = {
         chat_guid: chatGuid,
-        user_id: null,
+        user_id: input.userId ?? null,
         link_ref: linkRef,
         dock_base_url: deps.baseUrl,
         workspace_ref: res.data.workspace_id,
@@ -107,7 +116,27 @@ export async function pairChat(deps: DockDeps, chatGuid: string, code: string): 
         status: 'linked',
     }
     await deps.store.saveLink(link)
-    return `Dock is linked. Your Chief of Staff is ${chief}. Text @${chief} to send it a request.`
+    return { ok: true, chief, workspaceRef: res.data.workspace_id }
+}
+
+/** iMessage wrapper around redeemPairing: maps the structured outcome to chat copy. */
+export async function pairChat(deps: DockDeps, chatGuid: string, code: string): Promise<string> {
+    const out = await redeemPairing(deps, { chatGuid, code })
+    if (out.ok) return `Dock is linked. Your Chief of Staff is ${out.chief}. Text @${out.chief} to send it a request.`
+    switch (out.reason) {
+        case 'already_linked':
+            return 'This chat is already linked to Dock. Text "unlink dock" first.'
+        case 'used':
+            return 'That code was already used. Make a new one in Dock settings.'
+        case 'unreachable':
+            return "Dock didn't answer. Send the code again in a minute."
+        case 'expired':
+            return 'That code expired. Make a new one in Dock settings.'
+        case 'invalid':
+            return "That code didn't work. Make a new one in Dock settings."
+        default:
+            return "Dock sent back something I couldn't read. Try again in a minute."
+    }
 }
 
 /** Removes the link. Dock is told best-effort; the local link is removed either way. */
@@ -121,6 +150,8 @@ export async function unlinkChat(deps: DockDeps, chatGuid: string): Promise<stri
         // Dock unreachable or token unreadable: the local unlink still happens.
     }
     await deps.store.markUnlinked(chatGuid)
+    // An "Always allow" memory must never survive an explicit unlink.
+    await deps.store.deleteGrants(chatGuid)
     return 'Unlinked from Dock. Dinghy stays as it was.'
 }
 
@@ -391,6 +422,8 @@ export async function applyDockEvent(deps: DockDeps, event: DockEvent): Promise<
         }
         case 'link.revoked': {
             await deps.store.markUnlinked(chat)
+            // Dock severed the link: drop any "Always allow" memory with it.
+            await deps.store.deleteGrants(chat)
             await deps.send(chat, 'Dock unlinked this chat. Dinghy stays as it was.')
             return 'applied'
         }

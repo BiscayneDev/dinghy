@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
-import { getSession } from '@/lib/auth/session'
+import { clearSession, getSession } from '@/lib/auth/session'
+import { safeNextPath } from '@/lib/auth/redirect'
 import { CoastShell } from '@/components/brand/CoastShell'
 import { LoginForm } from './LoginForm'
 
@@ -15,10 +16,15 @@ export const dynamic = 'force-dynamic'
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; connected?: string }>
+  searchParams: Promise<{ error?: string; connected?: string; next?: string; switch?: string }>
 }): Promise<React.JSX.Element> {
   const sp = await searchParams
-  if (await getSession()) {
+  // ?switch=1 signs the current account out first, so a "not you?" link from a consent page lands
+  // on the phone form instead of bouncing back to the signed-in profile.
+  if (sp.switch === '1') await clearSession()
+  const next = safeNextPath(sp.next)
+  if (!sp.switch && (await getSession())) {
+    if (next) redirect(next)
     redirect(sp.connected ? `/profile?connected=${encodeURIComponent(sp.connected)}` : '/profile')
   }
   const notice = sp.error
@@ -28,7 +34,7 @@ export default async function LoginPage({
     : null
   return (
     <CoastShell>
-      <LoginForm notice={notice} />
+      <LoginForm notice={notice} next={next} />
     </CoastShell>
   )
 }

@@ -59,6 +59,12 @@ export interface DockStore {
     /** Records an event id. Returns false when it was seen before (replay). */
     recordEvent(eventId: string): Promise<boolean>
 
+    /** The owner's "Always allow" memory for one Dock workspace, if they chose it. */
+    getGrant(chatGuid: string, workspaceRef: string): Promise<{ granted_at: string } | null>
+    saveGrant(chatGuid: string, workspaceRef: string): Promise<void>
+    /** Every unlink path drops the workspace grants so auto-reconnect can never undo a revocation. */
+    deleteGrants(chatGuid: string): Promise<void>
+
     listApprovals(chatGuid: string): Promise<DockApprovalRow[]>
     getApproval(id: string): Promise<DockApprovalRow | null>
     upsertApproval(row: Omit<DockApprovalRow, 'status' | 'decision' | 'shown_hash'> & { status?: string }): Promise<void>
@@ -125,6 +131,26 @@ export function supabaseDockStore(): DockStore {
                 throw new Error(`dock event record failed: ${error.message}`)
             }
             return true
+        },
+        async getGrant(chatGuid, workspaceRef) {
+            const { data, error } = await db()
+                .from('dock_connect_grants')
+                .select('granted_at')
+                .eq('chat_guid', chatGuid)
+                .eq('workspace_ref', workspaceRef)
+                .maybeSingle()
+            if (error) throw new Error(`dock grant read failed: ${error.message}`)
+            return (data as { granted_at: string } | null) ?? null
+        },
+        async saveGrant(chatGuid, workspaceRef) {
+            const { error } = await db()
+                .from('dock_connect_grants')
+                .upsert({ chat_guid: chatGuid, workspace_ref: workspaceRef }, { onConflict: 'chat_guid,workspace_ref' })
+            if (error) throw new Error(`dock grant save failed: ${error.message}`)
+        },
+        async deleteGrants(chatGuid) {
+            const { error } = await db().from('dock_connect_grants').delete().eq('chat_guid', chatGuid)
+            if (error) throw new Error(`dock grant delete failed: ${error.message}`)
         },
         async listApprovals(chatGuid) {
             const { data, error } = await db()

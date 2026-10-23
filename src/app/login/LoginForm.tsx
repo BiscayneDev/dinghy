@@ -12,7 +12,7 @@ function formatUs(v: string): string {
   return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
 }
 
-export function LoginForm({ notice }: { notice?: string | null }): React.JSX.Element {
+export function LoginForm({ notice, next }: { notice?: string | null; next?: string | null }): React.JSX.Element {
   const [step, setStep] = useState<'phone' | 'code'>('phone')
   const [phone, setPhone] = useState('')
   const [e164, setE164] = useState('')
@@ -37,7 +37,7 @@ export function LoginForm({ notice }: { notice?: string | null }): React.JSX.Ele
     e.preventDefault()
     setBusy(true); setError(null)
     try {
-      const res = await fetch('/api/auth/dinghy/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: e164, code }) })
+      const res = await fetch('/api/auth/dinghy/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: e164, code, next: next ?? undefined }) })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) { setError(data.error ?? 'That code didn\u2019t work.'); return }
       window.location.assign(data.redirect ?? '/profile')
