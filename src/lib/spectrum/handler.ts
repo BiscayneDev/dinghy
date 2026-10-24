@@ -39,8 +39,8 @@ import { recordUsage, spendToolFor, type GatewayUsage } from './metering'
 import { allowanceUsedUpMessage, claimLimitNotice, isOverDailyAllowance } from '@/lib/allowance'
 import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
-import { selectDeliverable } from '@/lib/files/deliverable-contract'
-import { decideDeliverable, deliverableIntentEnabled } from '@/lib/files/deliverable-intent'
+import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
+import { deliverableIntentEnabled, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -1015,11 +1015,14 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         await saveMessage(chatGuid, 'user', text).catch((err) => logErr('message save failed', err))
     }
 
-    let deliverable = selectDeliverable(full)
-    if (!deliverable && deliverableIntentEnabled()) {
-        // Model-owned intent: one bounded Jev judgment when the keyword contract selects
-        // nothing. An unavailable/uncertain decision leaves the turn exactly as before.
-        deliverable = await decideDeliverable({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000) }).catch(() => null)
+    // Model-owned deliverable intent: with the flag on, one bounded Jev judgment decides
+    // what (if any) deliverable every turn asks for. The keyword matcher is only the outage
+    // fallback when the decision is unavailable or uncertain; with the flag off it stays the selector.
+    let deliverable: DeliverableContract | null
+    if (deliverableIntentEnabled()) {
+        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full) })
+    } else {
+        deliverable = selectDeliverable(full)
     }
     const itineraryJob = deliverable?.kind === 'itinerary'
     if(itineraryJob){

@@ -1,8 +1,9 @@
 import type { DeliverableContract, DeliverableKind } from './deliverable-contract'
 import type { GatewayUsage } from '@/lib/spectrum/metering'
 
-/** Model-owned deliverable intent: Jev decides what work a message asks for when the
- * legacy keyword contract selects nothing. Flag-gated; default keeps legacy behavior. */
+/** Model-owned deliverable intent: with the flag on, Jev decides what work every message
+ * asks for (including none). The legacy keyword matcher is only the outage fallback when
+ * the decision call is unavailable or uncertain. Flag-gated; default keeps legacy behavior. */
 export const DELIVERABLE_INTENT_FLAG = 'DINGHY_JEV_DELIVERABLE'
 export function deliverableIntentEnabled(): boolean { return process.env[DELIVERABLE_INTENT_FLAG] === 'on' }
 
@@ -36,4 +37,13 @@ export async function decideDeliverable(opts: {gatewayUrl:string;apiKey:string;r
     if (a.choice === 'none') return null
     if ((KINDS as string[]).includes(a.choice)) return { kind: a.choice as DeliverableKind, request: opts.request }
     throw new Error('Jev selected an unknown deliverable kind')
+}
+
+/** The ownership policy: Jev decides on every turn when the flag is on. The legacy matcher
+ * runs only as the outage fallback when the decision is unavailable or uncertain — a model
+ * answer of "none" or a different kind overrides it. */
+export async function selectDeliverableModelOwned(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;legacy:()=>DeliverableContract|null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<DeliverableContract | null> {
+    const { legacy, ...decisionOpts } = opts
+    const decided: DeliverableContract | null | undefined = await decideDeliverable(decisionOpts).catch(() => undefined)
+    return decided === undefined ? legacy() : decided
 }

@@ -112,7 +112,7 @@ export function compileApiPlaces(input:unknown,places:ApiPlace[],records:SourceR
 }
 
 /** API mode owns the agenda too: freehand model cuisine, aliases and recommendation scaffolding never reach the body. */
-export function apiItineraryBody(request:string,picks:{kind:string;name:string}[]):string{
+export function apiItineraryBody(request:string,picks:{kind:string;name:string;hours?:string}[]):string{
  const days=[...new Set((request.match(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi)||[]).map(d=>d[0].toUpperCase()+d.slice(1).toLowerCase()))]
  let body=(days.length?days:['Day 1']).map(d=>'## '+d+'\n- Timing to confirm.').join('\n\n')
  if(/\bweekend\b/i.test(request)&&!days.some(d=>d==='Saturday'||d==='Sunday'))body+='\n\n## Weekend\n- Timing to confirm.'
