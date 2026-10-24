@@ -3,7 +3,7 @@ export const ITINERARY_CANDIDATE_NOTE='For researched recommendation itineraries
 const escapeCell=(s:string)=>s.replace(/&/g,'&amp;').replace(/[<>\\`*_{}\[\]()!#|:]/g,c=>`&#${c.charCodeAt(0)};`).replace(/[\r\n]/g,' ')
 /** No prose parsing or semantic guessing. Typed model selections stay selections,
  * page-bound facts stay literal source text, renderer columns are server-owned. */
-export function compileItineraryCandidates(input:unknown,records:SourceRecords):{input:unknown;compiled:boolean}|{error:string} {
+export function compileItineraryCandidates(input:unknown,records:SourceRecords,opts?:{appendCards?:boolean}):{input:unknown;compiled:boolean}|{error:string} {
  if(!input||typeof input!=='object')return {error:'File input required.'}
  const i=input as Record<string,unknown>
  if(i.itinerary_candidates===undefined)return {input,compiled:false}
@@ -44,6 +44,8 @@ export function compileItineraryCandidates(input:unknown,records:SourceRecords):
  }
  if(groups.hotel.length>6||groups.restaurant.length>5||groups.activity.length>5)return {error:'Candidate groups exceed renderer limits:6hotels,5restaurants,5activities.'}
  let body=i.body.trimEnd()
+ // Provider-picks path: consolidated venue cards (why + hours + actions + source) are built from the validated provider records; appending a second set of option cards would duplicate the same venues.
+ if(opts?.appendCards===false){const {itinerary_candidates:_c2,...rest2}=i;return {input:{...rest2,body},compiled:true}}
  if(groups.hotel.length){body+='\n\n## Hotels\n:::stay\n'+groups.hotel.join('')+':::';const reasons=i.itinerary_candidates.filter((c:any)=>c.kind==='hotel').map((c:any)=>typeof c.reason==='string'&&c.reason.trim()?escapeCell(c.reason):'unknown');body+='\n\nSelection reasons:\n'+reasons.map((r:string)=>'- '+r).join('\n')}
  for(const kind of ['restaurant','activity'] as const)if(groups[kind].length)body+='\n\n## '+(kind==='restaurant'?'Dining':'Activities')+'\n:::options\n'+groups[kind].join('')+':::'
  const {itinerary_candidates:_c,...rest}=i

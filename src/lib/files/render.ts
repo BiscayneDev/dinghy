@@ -197,13 +197,14 @@ function pair(line: string): { k: string; v: string } {
 }
 
 /**
- * Place cards: "Name | state | status text | distance/walk | address | hours | lat,lon | website | phone".
+ * Place cards: "Name | state | status text | distance/walk | address | hours | lat,lon | website | phone", with an
+ * optional "why | source link" pair at the end for picked venues.
  * state is open, closed or unknown and drives the badge colour. Map links come from
  * the coordinates (or the address); website must be plain http(s).
  */
 function renderPlaces(lines: string[]): string {
     const cards = lines.slice(0, 8).map((l) => {
-        const [name, state, status, dist, address, hours, ll, site, phone] = cells(l)
+        const [name, state, status, dist, address, hours, ll, site, phone, why, sourceUrl] = cells(l)
         if (!name) return ''
         const st = state === 'open' || state === 'closed' ? state : 'unknown'
         const m = (ll ?? '').match(/^(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$/)
@@ -211,8 +212,9 @@ function renderPlaces(lines: string[]): string {
         const google = m ? `https://www.google.com/maps/search/?api=1&query=${m[1]},${m[2]}` : ''
         const { tel } = placeLinks('', phone ?? '')
         const web = site && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(site) ? site : ''
-        const acts = [apple && `<a href="${esc(apple)}" target="_blank" rel="noopener noreferrer">Apple Maps</a>`, google && `<a href="${esc(google)}" target="_blank" rel="noopener noreferrer">Google Maps</a>`, tel && `<a href="${esc(tel)}">Call</a>`, web && `<a href="${esc(web)}" target="_blank" rel="noopener noreferrer">Website</a>`].filter(Boolean).join('')
-        return `<div class="plc"><div class="plc-top"><span class="plc-name">${esc(name)}</span>${dist ? `<span class="plc-dist">${esc(dist)}</span>` : ''}</div><div class="plc-badge plc-${st}">${esc(status || 'Hours not listed')}</div>${address ? `<div class="pm">${esc(address)}</div>` : ''}${hours ? `<div class="pm plc-hours">${esc(hours)}</div>` : ''}${acts ? `<div class="pa">${acts}</div>` : ''}</div>`
+        const src = sourceUrl && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(sourceUrl) ? sourceUrl : ''
+        const acts = [apple && `<a href="${esc(apple)}" target="_blank" rel="noopener noreferrer">Apple Maps</a>`, google && `<a href="${esc(google)}" target="_blank" rel="noopener noreferrer">Google Maps</a>`, tel && `<a href="${esc(tel)}">Call</a>`, web && `<a href="${esc(web)}" target="_blank" rel="noopener noreferrer">Website</a>`, src && `<a href="${esc(src)}" target="_blank" rel="noopener noreferrer">Source</a>`].filter(Boolean).join('')
+        return `<div class="plc"><div class="plc-top"><span class="plc-name">${esc(name)}</span>${dist ? `<span class="plc-dist">${esc(dist)}</span>` : ''}</div><div class="plc-badge plc-${st}">${esc(status || 'Hours not listed')}</div>${why ? `<div class="pm plc-why">${esc(why)}</div>` : ''}${address ? `<div class="pm">${esc(address)}</div>` : ''}${hours ? `<div class="pm plc-hours">${esc(hours)}</div>` : ''}${acts ? `<div class="pa">${acts}</div>` : ''}</div>`
     })
     return `<div class="plcs">${cards.join('')}</div>`
 }
@@ -358,14 +360,21 @@ export function renderTable(t: Tokens.Table): string {
 
 /** Trip identity owns the itinerary cover, never its first recommendation. */
 export function itineraryCover(doc:DinghyDoc):{name:string;destination:string;researched:boolean}|null{
+ const name=decodeEntities(doc.title).replace(/,\s*us$/i,'')
+ if(!name)return null
+ // Provider-picks path: venue cards under a Stops heading. The hero carries day/place identity, never an incidental route count.
+ if(/^## Stops\s*$/m.test(doc.body)){
+  const days=(doc.body.match(/^#{2,3}\s+(?:Day \d|Mon|Tue|Wed|Thu|Fri|Sat|Sun)/gmi)||[]).length
+  const stops=(splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='places') as {lines?:string[]}|undefined)?.lines?.length??0
+  return {name,destination:[days?days+(days===1?' day':' days'):'',stops?stops+(stops===1?' stop':' stops'):''].filter(Boolean).join(' · '),researched:true}
+ }
  if(!/Selection reasons:/i.test(doc.body))return null
  const stay=splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='stay')
  if(!stay||stay.kind!=='block')return null
- const name=decodeEntities(doc.title).replace(/,\s*us$/i,'')
- return name?{name,destination:'Hotels, dining and activities',researched:/^## Recommendation evidence\s*$/m.test(doc.body)}:null
+ return {name,destination:'Hotels, dining and activities',researched:/^## Recommendation evidence\s*$/m.test(doc.body)}
 }
 function coverHtml(cover:{name:string;destination:string;researched:boolean}):string{
- return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">${cover.researched?'Researched itinerary':'Itinerary · unverified picks'}</span><span class="hero-n hero-title">${esc(cover.name)}</span><span class="hero-s">${esc(cover.destination)}</span></div></div>`
+ return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">${cover.researched?'Researched itinerary':'Itinerary · unverified picks'}</span><span class="hero-n hero-title">${esc(cover.name)}</span>${cover.destination?`<span class="hero-s">${esc(cover.destination)}</span>`:''}</div></div>`
 }
 export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const body: string[] = []
@@ -377,6 +386,20 @@ export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
             body.push(h.depth <= 2 ? `<section class="sec"><h2>${safe.parseInline(h.text)}</h2></section>` : `<h3${DAY_HEAD.test(h.text.trim()) ? ' class="day"' : ''}>${safe.parseInline(h.text)}</h3>`)
         } else if (t.type === 'list') {
             const l = t as Tokens.List
+            // A timed plan (estimated stops plus fixed anchors) renders as a timeline, not a plain table:
+            // rail, stop dots, emphasized fixed anchor, muted buffer. Honesty notes stay, set quietly.
+            const planRows = l.items.map((it) => {
+                const tr = splitTimeRow(it.text)
+                if (!tr) return null
+                const est = /^\(est\)\s*:?\s*/i.exec(tr.rest)?.[0]
+                const rest = est ? tr.rest.slice(est.length) : tr.rest
+                const dash = rest.indexOf(' — ')
+                const name = dash >= 0 ? rest.slice(0, dash) : rest
+                const meta = dash >= 0 ? rest.slice(dash + 3).replace(/\(([^)]*)\)/g, (_m, inner: string) => '· ' + inner.replace(/;\s*/g, ' · ')) : ''
+                const cls = /^reserved buffer/i.test(name) ? ' tl-buffer' : est ? '' : ' tl-anchor'
+                return { time: tr.time, name, meta, cls }
+            })
+            const isPlan = !l.items.some((it) => it.task) && planRows.length >= 2 && planRows.every(Boolean) && planRows.some((r) => r!.cls === '' || r!.cls === ' tl-buffer') && l.items.some((it) => { const tr = splitTimeRow(it.text); return tr ? /^\(est\)/.test(tr.rest) : false })
             const items = l.items.map((it) => {
                 if (it.task) return `<li class="chk"><label><input type="checkbox"${it.checked ? ' checked' : ''}> <span>${safe.parseInline(it.text)}</span></label></li>`
                 const tr = splitTimeRow(it.text)
@@ -386,7 +409,7 @@ export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
             })
             const allRows = items.every((i) => i.startsWith('<div'))
             const isChecklist = l.items.length > 0 && l.items.every((it) => it.task)
-            body.push(isChecklist ? `<ul class="checklist">${items.join('')}</ul>` : allRows ? `<div class="rows">${items.join('')}</div>` : `<${l.ordered ? 'ol' : 'ul'}>${items.join('')}</${l.ordered ? 'ol' : 'ul'}>`)
+            body.push(isChecklist ? `<ul class="checklist">${items.join('')}</ul>` : isPlan ? `<div class="tl">${(planRows as NonNullable<(typeof planRows)[number]>[]).map((r) => `<div class="tl-stop${r.cls}"><span class="tl-t">${esc(r.time)}</span><div class="tl-b"><span class="tl-n">${esc(r.name)}</span>${r.meta ? `<span class="tl-m">${esc(r.meta)}</span>` : ''}</div></div>`).join('')}</div>` : allRows ? `<div class="rows">${items.join('')}</div>` : `<${l.ordered ? 'ol' : 'ul'}>${items.join('')}</${l.ordered ? 'ol' : 'ul'}>`)
         } else if (t.type === 'hr') body.push('<hr>')
         else if (t.type === 'space') continue
         else if (t.type === 'table') body.push(renderTable(t as Tokens.Table))
@@ -429,6 +452,17 @@ p{margin:10px 0}a{color:var(--accent);text-underline-offset:3px}strong{font-weig
 ul,ol{padding-left:22px}li{margin:6px 0}li::marker{color:var(--accent)}
 .rows{margin:6px 0}.row{display:grid;grid-template-columns:104px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}.row:last-child{border-bottom:0}
 .t{font:500 13px/1.75 'DM Mono',monospace;color:var(--accent)}
+.tl{margin:18px 0 12px}
+.tl-stop{position:relative;display:grid;grid-template-columns:92px 1fr;gap:14px;padding:13px 0 13px 22px;border-left:2px solid var(--line)}
+.tl-stop::before{content:'';position:absolute;left:-7px;top:21px;width:12px;height:12px;border-radius:50%;background:var(--paper);border:2px solid var(--accent)}
+.tl-anchor::before{background:var(--accent)}
+.tl-buffer::before{border-color:var(--mute)}
+.tl-stop:last-child{border-left-color:transparent}
+.tl-t{font:500 13px/1.5 'DM Mono',monospace;color:var(--accent);padding-top:2px}
+.tl-n{display:block;font-weight:600;color:var(--ink);font-size:17px;line-height:1.35}
+.tl-anchor .tl-n{font-family:Fraunces,Georgia,serif;font-size:20px}
+.tl-m{display:block;font-size:14px;line-height:1.45;color:var(--mute);margin-top:2px}
+.tl-buffer .tl-t,.tl-buffer .tl-n{color:var(--mute);font-weight:400}
 table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15px}
 th{font:500 11px 'DM Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--ink);text-align:left;padding:10px 12px;background:var(--sand)}
 th:first-child{border-radius:8px 0 0 8px}th:last-child{border-radius:0 8px 8px 0}
@@ -504,7 +538,7 @@ th{background:var(--sand);color:var(--ink)}
 ${itineraryCover(doc)?coverHtml(itineraryCover(doc)!):pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? `<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`}
 <main class="card">
 <div class="brand">${anchorSvg(BRAND.ink, 18)}<span>dinghy</span></div>
-<h1>${esc(doc.title)}</h1>
+${itineraryCover(doc)?'':`<h1>${esc(doc.title)}</h1>`}
 ${doc.subtitle ? `<p class="sub">${esc(doc.subtitle)}</p>` : ''}
 ${opts.download ? `<p class="dl"><a href="${esc(opts.download.href)}" download>${esc(opts.download.label)}</a></p>` : ''}
 ${body.join('\n')}
