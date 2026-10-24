@@ -207,14 +207,17 @@ function renderPlaces(lines: string[]): string {
         const [name, state, status, dist, address, hours, ll, site, phone, why, sourceUrl] = cells(l)
         if (!name) return ''
         const st = state === 'open' || state === 'closed' ? state : 'unknown'
+        // Truth semantics: a card that prints hours must never badge "Hours not listed". Empty or
+        // contradicting status with hours present derives the provider-reported badge instead.
+        const badge = hours ? (status && !/not listed/i.test(status) ? status : 'Provider-reported hours') : (status || 'Hours not listed')
         const m = (ll ?? '').match(/^(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$/)
         const apple = m ? `https://maps.apple.com/?ll=${m[1]},${m[2]}&q=${encodeURIComponent(name)}` : address ? `https://maps.apple.com/?q=${encodeURIComponent(address)}` : ''
-        const google = m ? `https://www.google.com/maps/search/?api=1&query=${m[1]},${m[2]}` : ''
+        const google = m ? `https://www.google.com/maps/search/?api=1&query=${m[1]},${m[2]}` : address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : ''
         const { tel } = placeLinks('', phone ?? '')
         const web = site && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(site) ? site : ''
         const src = sourceUrl && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(sourceUrl) ? sourceUrl : ''
         const acts = [apple && `<a href="${esc(apple)}" target="_blank" rel="noopener noreferrer">Apple Maps</a>`, google && `<a href="${esc(google)}" target="_blank" rel="noopener noreferrer">Google Maps</a>`, tel && `<a href="${esc(tel)}">Call</a>`, web && `<a href="${esc(web)}" target="_blank" rel="noopener noreferrer">Website</a>`, src && `<a href="${esc(src)}" target="_blank" rel="noopener noreferrer">Source</a>`].filter(Boolean).join('')
-        return `<div class="plc"><div class="plc-top"><span class="plc-name">${esc(name)}</span>${dist ? `<span class="plc-dist">${esc(dist)}</span>` : ''}</div><div class="plc-badge plc-${st}">${esc(status || 'Hours not listed')}</div>${why ? `<div class="pm plc-why">${esc(why)}</div>` : ''}${address ? `<div class="pm">${esc(address)}</div>` : ''}${hours ? `<div class="pm plc-hours">${esc(hours)}</div>` : ''}${acts ? `<div class="pa">${acts}</div>` : ''}</div>`
+        return `<div class="plc"><div class="plc-top"><span class="plc-name">${esc(name)}</span>${dist ? `<span class="plc-dist">${esc(dist)}</span>` : ''}</div><div class="plc-badge plc-${st}">${esc(badge)}</div>${why ? `<div class="pm plc-why">${esc(why)}</div>` : ''}${address ? `<div class="pm">${esc(address)}</div>` : ''}${hours ? `<div class="pm plc-hours">${esc(hours)}</div>` : ''}${acts ? `<div class="pa">${acts}</div>` : ''}</div>`
     })
     return `<div class="plcs">${cards.join('')}</div>`
 }
@@ -376,6 +379,27 @@ export function itineraryCover(doc:DinghyDoc):{name:string;destination:string;re
 function coverHtml(cover:{name:string;destination:string;researched:boolean}):string{
  return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">${cover.researched?'Researched itinerary':'Itinerary · unverified picks'}</span><span class="hero-n hero-title">${esc(cover.name)}</span>${cover.destination?`<span class="hero-s">${esc(cover.destination)}</span>`:''}</div></div>`
 }
+
+/** Identity cover for structured docs whose blocks yield no richer hero: the title plus only
+ * unambiguous, body-derived facts. Eyebrow when exactly one recognized block kind is present;
+ * counts for every recognized block. Docs without recognized blocks keep the sunrise band. */
+const IDENTITY_BLOCKS:Record<string,{label:string;one:string;many:string}>={
+ options:{label:'Comparison',one:'option',many:'options'},
+ places:{label:'Places',one:'place',many:'places'},
+ briefing:{label:'Briefing',one:'headline',many:'headlines'},
+}
+export function identityCover(doc:DinghyDoc):{eyebrow:string;title:string;sub:string}|null{
+ const blocks=splitBlocks(doc.body).flatMap(s=>s.kind==='block'?[{name:s.name,lines:s.lines}]:[])
+ const present=[...new Set(blocks.map(b=>b.name).filter(n=>Object.hasOwn(IDENTITY_BLOCKS,n)))]
+ if(!present.length)return null
+ const counts=present.map(n=>{const c=blocks.filter(b=>b.name===n).reduce((a,b)=>a+b.lines.length,0),b=IDENTITY_BLOCKS[n];return c?`${c} ${c===1?b.one:b.many}`:''}).filter(Boolean)
+ const eyebrow=present.length===1?IDENTITY_BLOCKS[present[0]].label:''
+ const sub=[doc.subtitle||'',...counts].filter(Boolean).join(' · ')
+ return {eyebrow,title:decodeEntities(doc.title),sub}
+}
+function identityCoverHtml(cover:{eyebrow:string;title:string;sub:string}):string{
+ return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in">${cover.eyebrow?`<span class="hero-k">${esc(cover.eyebrow)}</span>`:''}<span class="hero-n hero-title">${esc(cover.title)}</span>${cover.sub?`<span class="hero-s">${esc(cover.sub)}</span>`:''}</div></div>`
+}
 export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const body: string[] = []
     for (const seg of splitBlocks(doc.body)) {
@@ -535,11 +559,11 @@ th{background:var(--sand);color:var(--ink)}
 @media print{.band{display:none}.card{margin:0;box-shadow:none;width:100%;max-width:none}.card>*,.band svg{animation:none}.reply,.pa,.dl{display:none}}
 </style></head>
 <body${opts.imageryState ? ` data-imagery="${opts.imageryState}"` : ''}>
-${itineraryCover(doc)?coverHtml(itineraryCover(doc)!):pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? `<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`}
+${itineraryCover(doc)?coverHtml(itineraryCover(doc)!):pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? (identityCover(doc)?identityCoverHtml(identityCover(doc)!):`<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`)}
 <main class="card">
 <div class="brand">${anchorSvg(BRAND.ink, 18)}<span>dinghy</span></div>
-${itineraryCover(doc)?'':`<h1>${esc(doc.title)}</h1>`}
-${doc.subtitle ? `<p class="sub">${esc(doc.subtitle)}</p>` : ''}
+${itineraryCover(doc)||identityCover(doc)?'':`<h1>${esc(doc.title)}</h1>`}
+${doc.subtitle && !identityCover(doc) ? `<p class="sub">${esc(doc.subtitle)}</p>` : ''}
 ${opts.download ? `<p class="dl"><a href="${esc(opts.download.href)}" download>${esc(opts.download.label)}</a></p>` : ''}
 ${body.join('\n')}
 </main>
