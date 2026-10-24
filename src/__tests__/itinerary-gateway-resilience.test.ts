@@ -28,7 +28,7 @@ describe('itinerary contract gateway resilience',()=>{
   expect(stages).toContain('itinerary:gateway_retry')
   expect(stages).toContain('itinerary:agenda_only_fallback')
   expect(f.execute).toHaveBeenCalledTimes(1)
-  const input=f.execute.mock.calls[0][0] as {body:string,kind:string}
+  const input=(f.execute.mock.calls[0] as unknown[])[0] as {body:string,kind:string}
   expect(input.kind).toBe('itinerary')
   expect(input.body).toContain('Recommendations not verified')
   expect(input.body).not.toMatch(/Venue names, categories and addresses/)
