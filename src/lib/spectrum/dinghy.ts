@@ -12,7 +12,7 @@ import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt,d
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
-import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
+import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply, type DeliverableContract } from '@/lib/files/deliverable-contract'
 import { mapSourceUrls, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
 import { weeklyPageError } from '@/lib/files/weekly-standard'
@@ -587,6 +587,8 @@ export async function chatWithTools(
         startTainted?: boolean
         /** Force this tool on the first model call (deterministic triggers). */
         forceTool?: string
+        /** Deliverable intent already decided by the caller (legacy contract or bounded Jev judgment); unset selects the legacy contract here. */
+        deliverable?: DeliverableContract | null
         /** Per-turn context that changes every call (clock, background): sent as a late system note so the prompt prefix stays cacheable. */
         volatile?: string
     },
@@ -594,7 +596,7 @@ export async function chatWithTools(
     ctx: UserContext
 ): Promise<ToolChatResult> {
     const currentRetailRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
-    const contract = selectDeliverable(history)
+    const contract = opts.deliverable !== undefined ? opts.deliverable : selectDeliverable(history)
     const sourceRecords = new SourceRecords()
     const itineraryResearch=contract?.kind==='itinerary'&&itineraryNeedsResearch(contract.request)
     const mapArtifact = contract?.kind === 'map'

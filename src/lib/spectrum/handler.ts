@@ -40,6 +40,7 @@ import { allowanceUsedUpMessage, claimLimitNotice, isOverDailyAllowance } from '
 import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable } from '@/lib/files/deliverable-contract'
+import { decideDeliverable, deliverableIntentEnabled } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -1014,7 +1015,13 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         await saveMessage(chatGuid, 'user', text).catch((err) => logErr('message save failed', err))
     }
 
-    const itineraryJob = selectDeliverable(full)?.kind === 'itinerary'
+    let deliverable = selectDeliverable(full)
+    if (!deliverable && deliverableIntentEnabled()) {
+        // Model-owned intent: one bounded Jev judgment when the keyword contract selects
+        // nothing. An unavailable/uncertain decision leaves the turn exactly as before.
+        deliverable = await decideDeliverable({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000) }).catch(() => null)
+    }
+    const itineraryJob = deliverable?.kind === 'itinerary'
     if(itineraryJob){
         const acknowledgement = 'I am putting the itinerary together. I will send it here when it is ready.'
         const delivered = await sendText(space, chatGuid, 'reply', acknowledgement)
@@ -1103,6 +1110,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
                 apiKey: SHIPYARD_API_KEY,
                 model: SHIPYARD_MODEL,
                 routing,
+                deliverable,
                 facts,
                 includeOpener,
                 knownFirstName: knownFirstName ?? undefined,
