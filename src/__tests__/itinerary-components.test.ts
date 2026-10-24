@@ -35,7 +35,7 @@ it('appends places cards, same-day route legs with directions links, and gallery
  expect(route[1]).toMatch(/^Salt Fig Kitchen \| Beacon Toy Museum \|/)
  // Gallery subjects go through the existing photo step, one per venue.
  const gal=out.match(/:::gallery\n([\s\S]*?)\n:::/)![1].split('\n')
- expect(gal).toEqual(['photo: Beacon Toy Museum | Beacon Toy Museum','photo: Salt Fig Kitchen | Salt Fig Kitchen','photo: The Fictional Gull | The Fictional Gull'])
+ expect(gal).toEqual(['photo: The Fictional Gull | The Fictional Gull','photo: Salt Fig Kitchen | Salt Fig Kitchen','photo: Beacon Toy Museum | Beacon Toy Museum']) // plan order: Stay then Eat then Do
 })
 
 it('omits every component block when picks carry no provider record',()=>{
@@ -77,6 +77,40 @@ it('renderRoute draws a Directions link for the optional link cell and no empty 
 it('places card lines carry coordinates the renderer turns into map links',()=>{
  const body=apiItineraryComponents('## Saturday\n- Do: Beacon Toy Museum\n- Eat: Salt Fig Kitchen',picks.slice(0,2))
  const lines=body.match(/:::places\n([\s\S]*?)\n:::/)![1].split('\n')
- expect(lines[0]).toContain('41.10000,-70.90000')
+ expect(lines[0]).toContain('41.10000,-70.90000') // plan order: Do before Eat here
  expect(lines[1]).toContain('41.10050,-70.90100')
+})
+
+/** Fictional photo resolution: the emitted gallery subjects flow through the existing photo step into a rendered, credited figure; a miss drops the line cleanly. */
+const jpeg=()=>Buffer.concat([
+ Buffer.from([0xff,0xd8,0xff,0xe0,0x00,0x10]),Buffer.from('JFIF\0'),Buffer.alloc(9,0),
+ Buffer.from([0xff,0xc0,0x00,0x11,0x08,0x01,0x90,0x02,0x58,0x03,1,0x22,0,2,0x11,1,3,0x11,1]),
+ Buffer.from([0xff,0xda,0x00,0x08,1,1,0,0,0x3f,0,1,2,3]),
+ Buffer.from([0xff,0xd9]),
+])
+const commonsHit=(subject:string)=>new Response(JSON.stringify({query:{pages:{1:{title:'File:'+subject+' exhibit.jpg',imageinfo:[{thumburl:'https://upload.wikimedia.org/x/fictional.jpg',descriptionurl:'https://commons.wikimedia.org/wiki/File:Fictional.jpg',width:900,extmetadata:{LicenseShortName:{value:'CC BY-SA 4.0'},LicenseUrl:{value:'https://creativecommons.org/licenses/by-sa/4.0'},Artist:{value:'Fictional Photographer'},ObjectName:{value:subject}}}]}}}}),{status:200})
+
+it('gallery subjects resolve to credited local photos and render as figures; misses drop out',async()=>{
+ const {attachPhotos}=await import('@/lib/files/photos')
+ const body=apiItineraryComponents('## Saturday\n- Do: Beacon Toy Museum\n- Eat: Salt Fig Kitchen',picks.slice(0,2))
+ // Success: the museum subject resolves through a legitimate fictional Commons response.
+ const hit=async (url:string)=>url.includes('commons.wikimedia.org')&&url.includes('Beacon')?commonsHit('Beacon Toy Museum'):url.includes('commons.wikimedia.org')?new Response(JSON.stringify({query:{pages:{}}}),{status:200}):new Response(new Uint8Array(jpeg()),{status:200})
+ const resolved=await attachPhotos(body,{allowed:true,fetcher:hit})
+ const gal=resolved.body.match(/:::gallery\n([\s\S]*?)\n:::/)![1].split('\n').filter(Boolean)
+ expect(gal).toHaveLength(1) // the cafe miss dropped its line
+ expect(gal[0]).toMatch(/^img\/p-[0-9a-f]{12}\.jpg \| Beacon Toy Museum \| Fictional Photographer \| CC BY-SA 4\.0 \| https:\/\/commons\.wikimedia\.org\/wiki\/File:Fictional\.jpg \| https:\/\/creativecommons\.org\/licenses\/by-sa\/4\.0$/)
+ expect(resolved.photos).toHaveLength(1)
+ expect(Array.from(resolved.photos[0].bytes.subarray(0,3)).join(',')).toBe('255,216,255')
+ const html=renderKind('gallery',gal)
+ expect(html).toContain('<figure>')
+ expect(html).toContain('Fictional Photographer')
+ expect(html).toContain('https://creativecommons.org/licenses/by-sa/4.0')
+ expect(html).toContain('https://commons.wikimedia.org/wiki/File:Fictional.jpg')
+ expect(html).not.toContain('upload.wikimedia.org') // the page never hotlinks; only the local copy renders
+ // Failure: nothing found anywhere, the whole block renders empty rather than broken figures.
+ const miss=async (url:string)=>url.includes('commons.wikimedia.org')?new Response(JSON.stringify({query:{pages:{}}}),{status:200}):new Response(new Uint8Array(jpeg()),{status:200})
+ const unresolved=await attachPhotos(body,{allowed:true,fetcher:miss})
+ const empty=unresolved.body.match(/:::gallery\n([\s\S]*?)\n:::/)![1].split('\n').filter(Boolean)
+ expect(empty).toHaveLength(0)
+ expect(renderKind('gallery',empty)).toBe('')
 })

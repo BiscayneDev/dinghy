@@ -197,13 +197,14 @@ function pair(line: string): { k: string; v: string } {
 }
 
 /**
- * Place cards: "Name | state | status text | distance/walk | address | hours | lat,lon | website | phone".
+ * Place cards: "Name | state | status text | distance/walk | address | hours | lat,lon | website | phone", with an
+ * optional "why | source link" pair at the end for picked venues.
  * state is open, closed or unknown and drives the badge colour. Map links come from
  * the coordinates (or the address); website must be plain http(s).
  */
 function renderPlaces(lines: string[]): string {
     const cards = lines.slice(0, 8).map((l) => {
-        const [name, state, status, dist, address, hours, ll, site, phone] = cells(l)
+        const [name, state, status, dist, address, hours, ll, site, phone, why, sourceUrl] = cells(l)
         if (!name) return ''
         const st = state === 'open' || state === 'closed' ? state : 'unknown'
         const m = (ll ?? '').match(/^(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$/)
@@ -211,8 +212,9 @@ function renderPlaces(lines: string[]): string {
         const google = m ? `https://www.google.com/maps/search/?api=1&query=${m[1]},${m[2]}` : ''
         const { tel } = placeLinks('', phone ?? '')
         const web = site && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(site) ? site : ''
-        const acts = [apple && `<a href="${esc(apple)}" target="_blank" rel="noopener noreferrer">Apple Maps</a>`, google && `<a href="${esc(google)}" target="_blank" rel="noopener noreferrer">Google Maps</a>`, tel && `<a href="${esc(tel)}">Call</a>`, web && `<a href="${esc(web)}" target="_blank" rel="noopener noreferrer">Website</a>`].filter(Boolean).join('')
-        return `<div class="plc"><div class="plc-top"><span class="plc-name">${esc(name)}</span>${dist ? `<span class="plc-dist">${esc(dist)}</span>` : ''}</div><div class="plc-badge plc-${st}">${esc(status || 'Hours not listed')}</div>${address ? `<div class="pm">${esc(address)}</div>` : ''}${hours ? `<div class="pm plc-hours">${esc(hours)}</div>` : ''}${acts ? `<div class="pa">${acts}</div>` : ''}</div>`
+        const src = sourceUrl && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(sourceUrl) ? sourceUrl : ''
+        const acts = [apple && `<a href="${esc(apple)}" target="_blank" rel="noopener noreferrer">Apple Maps</a>`, google && `<a href="${esc(google)}" target="_blank" rel="noopener noreferrer">Google Maps</a>`, tel && `<a href="${esc(tel)}">Call</a>`, web && `<a href="${esc(web)}" target="_blank" rel="noopener noreferrer">Website</a>`, src && `<a href="${esc(src)}" target="_blank" rel="noopener noreferrer">Source</a>`].filter(Boolean).join('')
+        return `<div class="plc"><div class="plc-top"><span class="plc-name">${esc(name)}</span>${dist ? `<span class="plc-dist">${esc(dist)}</span>` : ''}</div><div class="plc-badge plc-${st}">${esc(status || 'Hours not listed')}</div>${why ? `<div class="pm plc-why">${esc(why)}</div>` : ''}${address ? `<div class="pm">${esc(address)}</div>` : ''}${hours ? `<div class="pm plc-hours">${esc(hours)}</div>` : ''}${acts ? `<div class="pa">${acts}</div>` : ''}</div>`
     })
     return `<div class="plcs">${cards.join('')}</div>`
 }
@@ -358,11 +360,19 @@ export function renderTable(t: Tokens.Table): string {
 
 /** Trip identity owns the itinerary cover, never its first recommendation. */
 export function itineraryCover(doc:DinghyDoc):{name:string;destination:string;researched:boolean}|null{
+ const name=decodeEntities(doc.title).replace(/,\s*us$/i,'')
+ if(!name)return null
+ // Provider-picks path: venue cards under a Stops heading. The hero carries day/place identity, never an incidental route count.
+ if(/^## Stops\s*$/m.test(doc.body)){
+  const days=(doc.body.match(/^#{2,3}\s+(?:Day \d|Mon|Tue|Wed|Thu|Fri|Sat|Sun)/gmi)||[]).length
+  const stops=(splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='places') as {lines?:string[]}|undefined)?.lines?.length??0
+  const dest=name.replace(/^Itinerary for\s+/i,'')
+  return {name,destination:[dest,days?days+(days===1?' day':' days'):'',stops?stops+(stops===1?' stop':' stops'):''].filter(Boolean).join(' · '),researched:true}
+ }
  if(!/Selection reasons:/i.test(doc.body))return null
  const stay=splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='stay')
  if(!stay||stay.kind!=='block')return null
- const name=decodeEntities(doc.title).replace(/,\s*us$/i,'')
- return name?{name,destination:'Hotels, dining and activities',researched:/^## Recommendation evidence\s*$/m.test(doc.body)}:null
+ return {name,destination:'Hotels, dining and activities',researched:/^## Recommendation evidence\s*$/m.test(doc.body)}
 }
 function coverHtml(cover:{name:string;destination:string;researched:boolean}):string{
  return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">${cover.researched?'Researched itinerary':'Itinerary · unverified picks'}</span><span class="hero-n hero-title">${esc(cover.name)}</span><span class="hero-s">${esc(cover.destination)}</span></div></div>`

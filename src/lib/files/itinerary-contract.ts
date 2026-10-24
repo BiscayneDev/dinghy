@@ -20,8 +20,9 @@ export function itineraryPageError(body:string,request:string,urls:string[]):str
  const sources=body.match(/(?:^|\n)\s*:::sources\s*\n([\s\S]*?)\n\s*:::/i)?.[1]??''
  const links=sources.match(/https?:\/\/[^\s<>"|)\]]+/g)??[]
  if(!links.length||links.some(u=>!urls.includes(u)))return 'Itinerary recommendations require observed source links in :::sources. Research first; no remembered hotel ratings, prices, hours or activities.'
- if(/\b(?:hotels?|places? to stay)\b/i.test(request)&&!rows(body,'stay',4))return 'Use a supported :::stay hotel row with area/catch/source link. Leave unverified price and rating unknown, never invent them.'
- if(/\b(?:restaurants?|activities|things to do|fun things)\b/i.test(request)&&!rows(body,'options',4))return 'Use :::options rows for requested dining/activities, with reasons, source links and catches. Do not replace these sections with plain bullets.'
+ // Consolidated :::places venue cards (reason, source link, catch on the card) satisfy the same structured-rows requirement as :::stay/:::options.
+ if(/\b(?:hotels?|places? to stay)\b/i.test(request)&&!rows(body,'stay',4)&&!rows(body,'places',4))return 'Use a supported :::stay hotel row with area/catch/source link. Leave unverified price and rating unknown, never invent them.'
+ if(/\b(?:restaurants?|activities|things to do|fun things)\b/i.test(request)&&!rows(body,'options',4)&&!rows(body,'places',4))return 'Use :::options rows for requested dining/activities, with reasons, source links and catches. Do not replace these sections with plain bullets.'
  if(/\bworking sessions?\b/i.test(request)&&!/working sessions?/i.test(body))return 'Preserve the requested working sessions in the itinerary. Unspecified duration and venue remain to confirm.'
  return null
 }

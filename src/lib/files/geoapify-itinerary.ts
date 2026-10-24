@@ -125,13 +125,17 @@ export function apiItineraryBody(request:string,picks:ApiComponentPick[],now?:Lo
 
 
 /** Picks that carry their full provider record let the server draw real components: venue cards with map/website links, route legs mirroring the written plan order with working directions links (mode/time stay empty when unknown), and gallery subjects for the existing free-photo step. Never invents a field; a block with nothing grounded is omitted, not drawn empty. */
-export type ApiComponentPick={kind:string;name:string;hours?:string;place?:ApiPlace}
+export type ApiComponentPick={kind:string;name:string;hours?:string;place?:ApiPlace;reason?:string;catch?:string;link?:string}
 const compCell=(s:string|undefined)=>(s||'').replace(/[|\n\r]/g,' ').trim()
 export function apiItineraryComponents(body:string,picks:ApiComponentPick[]):string{
- const withPlace=picks.filter(p=>p.name&&p.place&&Number.isFinite(p.place.lat)&&Number.isFinite(p.place.lon))
- if(!withPlace.length)return body
+ const found=picks.filter(p=>p.name&&p.place&&Number.isFinite(p.place.lat)&&Number.isFinite(p.place.lon))
+ if(!found.length)return body
+ // Cards follow the schedule order (first appearance in the written plan), not selection order; unmentioned picks keep their relative order at the end.
+ const lc=body.toLowerCase()
+ const withPlace=[...found].sort((a,b)=>{const ia=lc.indexOf(a.name.toLowerCase()),ib=lc.indexOf(b.name.toLowerCase());return (ia<0?Infinity:ia)-(ib<0?Infinity:ib)})
  const cards=withPlace.slice(0,8).map(p=>{const v=p.place as ApiPlace
-  return [compCell(p.name),'unknown',v.hours?'Provider-reported hours':'','',compCell(v.address),compCell(v.hours),v.lat.toFixed(5)+','+v.lon.toFixed(5),v.website||'',''].join(' | ')})
+  const why=[compCell(p.reason),p.catch&&p.catch!=='unknown'?compCell(p.catch):''].filter(Boolean).join(' — ')
+  return [compCell(p.name),'unknown',v.hours?'Provider-reported hours':'','',compCell(v.address),compCell(v.hours),v.lat.toFixed(5)+','+v.lon.toFixed(5),v.website||'','',why,p.link||''].join(' | ')})
  let out=body.trimEnd()+'\n\n## Stops\n:::places\n'+cards.join('\n')+'\n:::'
  // Route legs mirror the order stops appear under each day heading in the plan itself; legs cross no day boundary. Mode and time stay empty unless a source stated them; the directions link makes an unknown leg useful instead of ornamental.
  const sections=body.split(/(?=^#{2,3}\s)/m)
