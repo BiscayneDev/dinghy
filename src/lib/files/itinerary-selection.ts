@@ -279,12 +279,24 @@ export function ensurePlanFromPicks(body:string,request:string,picks:PlanPick[],
  if(eat.length)rows.push(`- Eat: ${eat.join(', ')}`)
  if(do_.length)rows.push(`- Do: ${do_.join(', ')}`)
  if(!rows.length)return {body,added:0}
+ // A fixed obligation in the request stays visible: never claim no times were given when one was.
+ const anchorCount=[...request.matchAll(new RegExp(TIME_RE.source,'gi'))].length
+ const sole=anchorCount===1?requestAnchor(request):undefined
+ // Grounded only by the clock: when the anchor is today and its remaining window (minus the
+ // reserve) cannot hold even the shortest stop, say exactly that and keep the anchor visible.
+ // The picks stay on the recommendation cards; they are not restated as an undated pre-event plan.
+ const windowLeft=sole&&now&&(!sole.day||sole.day.toLowerCase()===now.weekday.toLowerCase())?sole.mins-30-now.mins:Infinity
+ if(sole&&windowLeft<60){
+  const stayOnly=rows.filter(r=>r.startsWith('- Stay:'))
+  insertUnderDay(lines,first,[...stayOnly,`- Nothing recommended fits the remaining estimated window before ${sole.label} with the travel/get-ready reserve; the fixed time above is unchanged and the recommendations below remain options for another time.`],false)
+  return {body:lines.join('\n'),added:stayOnly.length+1}
+ }
  // Stay and Eat go under the first requested day; Do goes under a weekend/activities/Sat/Sun heading when the body has one.
  const doRows=rows.filter(r=>r.startsWith('- Do:')),mainRows=rows.filter(r=>!r.startsWith('- Do:'))
  let weekendIdx=lines.findIndex(l=>/^\s*#{2,3}\s+(?:.*\b(?:weekend|activit\w*|things to do)\b|sat|sun)/i.test(l)&&!(first&&new RegExp('^\\s*#{2,3}\\s+'+first.slice(0,3),'i').test(l)))
  if(doRows.length&&weekendIdx<0&&/\bweekend\b/i.test(request)){lines.push('', '## Weekend');weekendIdx=lines.length-1}
  if(doRows.length&&weekendIdx>=0){lines.splice(weekendIdx+1,0,...doRows)}else mainRows.push(...doRows)
- insertUnderDay(lines,first,[...mainRows,`- ${days.length?days.join(' / ')+' t':'T'}iming is open: no fixed times were given in the request; venue hours are not verified.`],false)
+ insertUnderDay(lines,first,[...mainRows,anchorCount?`- ${days.length?days.join(' / ')+' t':'T'}iming is open around the fixed times above; venue hours are not verified.`:`- ${days.length?days.join(' / ')+' t':'T'}iming is open: no fixed times were given in the request; venue hours are not verified.`],false)
  return {body:lines.join('\n'),added:rows.length+1}
 }
 /** Repeated untimed recommendation bullets are redundant, not distinct visits. Timed agenda rows stay. */

@@ -358,9 +358,14 @@ describe('phrases, category headings, plan from picks',()=>{
   const a=epp('## Day 1\n- 4pm: wedding','The wedding is at 4pm.',picks,{mins:14*60+30,weekday:'Saturday'})
   expect(a.body).not.toContain('Tide Museum');expect(a.body).not.toContain('Harbor Gallery')
   expect(a.body).toContain('2:30pm (est): lunch at Lantern Table')
-  // 3:45pm now: even one stop ends past the buffer, so the plan stays honestly untimed.
+  // 3:45pm now: even one stop ends past the buffer. The fixed obligation stays visible and the fallback
+  // says nothing fits the remaining window; it never claims no times were given.
   const b=epp('## Day 1\n- 4pm: wedding','The wedding is at 4pm.',[{kind:'activity',name:'Tide Museum'}],{mins:15*60+45,weekday:'Saturday'})
-  expect(b.body).not.toContain('(est):');expect(b.body).toContain('Timing is open')
+  expect(b.body).not.toContain('(est):')
+  expect(b.body).toContain('- 4pm: wedding')
+  expect(b.body).toContain('Nothing recommended fits the remaining estimated window before 4pm wedding')
+  expect(b.body).not.toContain('no fixed times were given')
+  expect(b.body).not.toContain('Do: Tide Museum')
   // A named future weekday is not constrained by today's clock.
   const c=epp('## Sunday\n- 4pm: wedding','On Sunday the wedding is at 4pm.',[{kind:'activity',name:'Tide Museum'}],{mins:22*60,weekday:'Saturday'})
   expect(c.body).toContain('(est): Tide Museum')
