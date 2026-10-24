@@ -207,6 +207,9 @@ function renderPlaces(lines: string[]): string {
         const [name, state, status, dist, address, hours, ll, site, phone, why, sourceUrl] = cells(l)
         if (!name) return ''
         const st = state === 'open' || state === 'closed' ? state : 'unknown'
+        // Truth semantics: a card that prints hours must never badge "Hours not listed". Empty or
+        // contradicting status with hours present derives the provider-reported badge instead.
+        const badge = hours ? (status && !/not listed/i.test(status) ? status : 'Provider-reported hours') : (status || 'Hours not listed')
         const m = (ll ?? '').match(/^(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$/)
         const apple = m ? `https://maps.apple.com/?ll=${m[1]},${m[2]}&q=${encodeURIComponent(name)}` : address ? `https://maps.apple.com/?q=${encodeURIComponent(address)}` : ''
         const google = m ? `https://www.google.com/maps/search/?api=1&query=${m[1]},${m[2]}` : address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : ''
@@ -214,7 +217,7 @@ function renderPlaces(lines: string[]): string {
         const web = site && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(site) ? site : ''
         const src = sourceUrl && /^https?:\/\/[^\s\u0000-\u001f]+$/i.test(sourceUrl) ? sourceUrl : ''
         const acts = [apple && `<a href="${esc(apple)}" target="_blank" rel="noopener noreferrer">Apple Maps</a>`, google && `<a href="${esc(google)}" target="_blank" rel="noopener noreferrer">Google Maps</a>`, tel && `<a href="${esc(tel)}">Call</a>`, web && `<a href="${esc(web)}" target="_blank" rel="noopener noreferrer">Website</a>`, src && `<a href="${esc(src)}" target="_blank" rel="noopener noreferrer">Source</a>`].filter(Boolean).join('')
-        return `<div class="plc"><div class="plc-top"><span class="plc-name">${esc(name)}</span>${dist ? `<span class="plc-dist">${esc(dist)}</span>` : ''}</div><div class="plc-badge plc-${st}">${esc(status || 'Hours not listed')}</div>${why ? `<div class="pm plc-why">${esc(why)}</div>` : ''}${address ? `<div class="pm">${esc(address)}</div>` : ''}${hours ? `<div class="pm plc-hours">${esc(hours)}</div>` : ''}${acts ? `<div class="pa">${acts}</div>` : ''}</div>`
+        return `<div class="plc"><div class="plc-top"><span class="plc-name">${esc(name)}</span>${dist ? `<span class="plc-dist">${esc(dist)}</span>` : ''}</div><div class="plc-badge plc-${st}">${esc(badge)}</div>${why ? `<div class="pm plc-why">${esc(why)}</div>` : ''}${address ? `<div class="pm">${esc(address)}</div>` : ''}${hours ? `<div class="pm plc-hours">${esc(hours)}</div>` : ''}${acts ? `<div class="pa">${acts}</div>` : ''}</div>`
     })
     return `<div class="plcs">${cards.join('')}</div>`
 }

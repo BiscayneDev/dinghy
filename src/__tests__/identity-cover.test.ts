@@ -3,7 +3,7 @@ import {writeFile,mkdir} from 'node:fs/promises'
 import {renderHtml,identityCover} from '@/lib/files/render'
 
 const optionsDoc={title:'Weekender bags, compared',body:'## Picks\n:::options\nDuffle One | $120 | Tough canvas, lifetime repair. | No laptop sleeve\nCargo Tote | $85 | Light, packs flat. | Thin straps\nTrail Case | $150 | Weatherproof, stiff frame. | Heavy\n:::\n\n:::sources\ncanvas review | https://fictional.test/review | checked 2026-10-24\n:::'}
-const placesDoc={title:'Coffee near the quay',body:':::places\nLantern Cafe | unknown | Hours not listed | | 42 Quay St, Harbor | | | | |\nPier Coffee | unknown | Hours not listed | | 9 Dock Rd, Harbor | 07:00-14:00 | | | |\n:::','subtitle':'Saturday morning'}
+const placesDoc={title:'Coffee near the quay',body:':::places\nLantern Cafe | unknown | Hours not listed | | 42 Quay St, Harbor | | | | |\nPier Coffee | unknown | | | 9 Dock Rd, Harbor | 07:00-14:00 | | | |\n:::','subtitle':'Saturday morning'}
 const briefingDoc={title:'Harbor news this week',body:':::briefing\nFerry refit starts Monday | Harbor Gazette | 2026-10-23 | Two boats out for six weeks | https://fictional.test/ferry\n:::'}
 
 it('a comparison doc gets an identity cover with eyebrow, title and count, and no duplicate h1',()=>{
@@ -34,6 +34,15 @@ it('richer block heroes still win over the identity cover',()=>{
  expect(stay).not.toContain('band hero itinerary-cover');expect(stay).toContain('hero-stay')
  const itin=renderHtml({title:'Itinerary for Harbor, FL',body:'## Day 1\n- 10am Harbor Museum\n\n## Stops\n:::places\nHarbor Museum | unknown | Hours not listed | | 42 Quay St, Harbor | | 25.0,-80.0 | | |\n:::'})
  expect(itin).toContain('Researched itinerary');expect(itin).not.toContain('>Places</span>')
+})
+it('a card that prints hours never badges Hours not listed',()=>{
+ const html=renderHtml(placesDoc)
+ expect(html).toContain('07:00-14:00')
+ expect(html).toContain('>Provider-reported hours</div>')
+ const m=html.match(/plc-badge[^>]*>[^<]*not listed[^<]*</gi)||[]
+ expect(m.length).toBe(1) // only Lantern Cafe, which genuinely has no hours
+ const contra=renderHtml({title:'x',body:':::places\nOdd Spot | unknown | Hours not listed | | 1 Pier Rd, Harbor | 09:00-17:00 | | | |\n:::'})
+ expect(contra).toContain('>Provider-reported hours</div>');expect(contra).not.toMatch(/plc-badge[^>]*>[^<]*not listed/i)
 })
 it('place cards fall back to an address-encoded Google Maps link when no coordinates exist',()=>{
  const html=renderHtml(placesDoc)
