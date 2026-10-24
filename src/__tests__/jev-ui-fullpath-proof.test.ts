@@ -17,7 +17,7 @@ const OWNER='+12035168398'
 const OUT=process.env.PROOF_DIR??'/tmp/jev-proof'
 mkdirSync(OUT,{recursive:true})
 const ctx={userId:'fictional-u',telegramId:0,telegramChatId:0,name:'Example',timezone:'UTC',tokens:{}}
-const options={gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'test'}
+const options={gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'test',deliverable:null}
 const answer=(choice:string)=>({model:'jev-latest',provider:'typesafe',answers:{ui:{type:'choice',choice,confidence:0.96,probabilities:{[choice]:0.96}}}})
 
 interface Capture{stages:string[];decisionCalls:number;chatBodies:any[];generatedUiAuthorized?:boolean;doc?:{title:string;body:string};htmlPath?:string}
