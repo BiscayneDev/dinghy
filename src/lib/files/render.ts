@@ -377,6 +377,20 @@ export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
             body.push(h.depth <= 2 ? `<section class="sec"><h2>${safe.parseInline(h.text)}</h2></section>` : `<h3${DAY_HEAD.test(h.text.trim()) ? ' class="day"' : ''}>${safe.parseInline(h.text)}</h3>`)
         } else if (t.type === 'list') {
             const l = t as Tokens.List
+            // A timed plan (estimated stops plus fixed anchors) renders as a timeline, not a plain table:
+            // rail, stop dots, emphasized fixed anchor, muted buffer. Honesty notes stay, set quietly.
+            const planRows = l.items.map((it) => {
+                const tr = splitTimeRow(it.text)
+                if (!tr) return null
+                const est = /^\(est\)\s*:?\s*/i.exec(tr.rest)?.[0]
+                const rest = est ? tr.rest.slice(est.length) : tr.rest
+                const dash = rest.indexOf(' — ')
+                const name = dash >= 0 ? rest.slice(0, dash) : rest
+                const meta = dash >= 0 ? rest.slice(dash + 3).replace(/\(([^)]*)\)/g, (_m, inner: string) => '· ' + inner.replace(/;\s*/g, ' · ')) : ''
+                const cls = /^reserved buffer/i.test(name) ? ' tl-buffer' : est ? '' : ' tl-anchor'
+                return { time: tr.time, name, meta, cls }
+            })
+            const isPlan = !l.items.some((it) => it.task) && planRows.length >= 2 && planRows.every(Boolean) && planRows.some((r) => r!.cls === '' || r!.cls === ' tl-buffer') && l.items.some((it) => { const tr = splitTimeRow(it.text); return tr ? /^\(est\)/.test(tr.rest) : false })
             const items = l.items.map((it) => {
                 if (it.task) return `<li class="chk"><label><input type="checkbox"${it.checked ? ' checked' : ''}> <span>${safe.parseInline(it.text)}</span></label></li>`
                 const tr = splitTimeRow(it.text)
@@ -386,7 +400,7 @@ export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
             })
             const allRows = items.every((i) => i.startsWith('<div'))
             const isChecklist = l.items.length > 0 && l.items.every((it) => it.task)
-            body.push(isChecklist ? `<ul class="checklist">${items.join('')}</ul>` : allRows ? `<div class="rows">${items.join('')}</div>` : `<${l.ordered ? 'ol' : 'ul'}>${items.join('')}</${l.ordered ? 'ol' : 'ul'}>`)
+            body.push(isChecklist ? `<ul class="checklist">${items.join('')}</ul>` : isPlan ? `<div class="tl">${(planRows as NonNullable<(typeof planRows)[number]>[]).map((r) => `<div class="tl-stop${r.cls}"><span class="tl-t">${esc(r.time)}</span><div class="tl-b"><span class="tl-n">${esc(r.name)}</span>${r.meta ? `<span class="tl-m">${esc(r.meta)}</span>` : ''}</div></div>`).join('')}</div>` : allRows ? `<div class="rows">${items.join('')}</div>` : `<${l.ordered ? 'ol' : 'ul'}>${items.join('')}</${l.ordered ? 'ol' : 'ul'}>`)
         } else if (t.type === 'hr') body.push('<hr>')
         else if (t.type === 'space') continue
         else if (t.type === 'table') body.push(renderTable(t as Tokens.Table))
@@ -429,6 +443,17 @@ p{margin:10px 0}a{color:var(--accent);text-underline-offset:3px}strong{font-weig
 ul,ol{padding-left:22px}li{margin:6px 0}li::marker{color:var(--accent)}
 .rows{margin:6px 0}.row{display:grid;grid-template-columns:104px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}.row:last-child{border-bottom:0}
 .t{font:500 13px/1.75 'DM Mono',monospace;color:var(--accent)}
+.tl{margin:18px 0 12px}
+.tl-stop{position:relative;display:grid;grid-template-columns:92px 1fr;gap:14px;padding:13px 0 13px 22px;border-left:2px solid var(--line)}
+.tl-stop::before{content:'';position:absolute;left:-7px;top:21px;width:12px;height:12px;border-radius:50%;background:var(--paper);border:2px solid var(--accent)}
+.tl-anchor::before{background:var(--accent)}
+.tl-buffer::before{border-color:var(--mute)}
+.tl-stop:last-child{border-left-color:transparent}
+.tl-t{font:500 13px/1.5 'DM Mono',monospace;color:var(--accent);padding-top:2px}
+.tl-n{display:block;font-weight:600;color:var(--ink);font-size:17px;line-height:1.35}
+.tl-anchor .tl-n{font-family:Fraunces,Georgia,serif;font-size:20px}
+.tl-m{display:block;font-size:14px;line-height:1.45;color:var(--mute);margin-top:2px}
+.tl-buffer .tl-t,.tl-buffer .tl-n{color:var(--mute);font-weight:400}
 table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15px}
 th{font:500 11px 'DM Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--ink);text-align:left;padding:10px 12px;background:var(--sand)}
 th:first-child{border-radius:8px 0 0 8px}th:last-child{border-radius:0 8px 8px 0}

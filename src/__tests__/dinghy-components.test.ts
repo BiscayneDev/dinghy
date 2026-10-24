@@ -71,3 +71,19 @@ describe('page components', () => {
         expect(pdf.subarray(0, 4).toString()).toBe('%PDF')
     })
 })
+
+it('a timed plan renders as a timeline with anchors, buffers and quiet honesty notes, while plain agendas keep rows', () => {
+    const plan = renderHtml({ title: 'Itinerary for Harbor, FL', body: '## Day 1\n- 12:30pm (est): Harbor Museum — about 120 min (stated on the venue page; hours not verified)\n- 2:30pm (est): lunch at Harbor Cafe — about 60 min (estimate; provider-reported hours Mo-Sa 09:00-17:00)\n- 3:30pm (est): reserved buffer before 4pm wedding — travel and get-ready time; travel time and the venue are not verified\n- 4pm: wedding' })
+    expect(plan).toContain('class="tl"')
+    expect(plan).toContain('class="tl-stop tl-anchor"')
+    expect(plan).toContain('class="tl-stop tl-buffer"')
+    expect(plan).toContain('<span class="tl-n">Harbor Museum</span>')
+    expect(plan).toContain('about 120 min · stated on the venue page · hours not verified')
+    expect(plan).toContain('travel time and the venue are not verified')
+    expect(plan).not.toContain('class="rows"')
+    expect(plan).not.toContain('(est):')
+    // A plain agenda without estimated stops is untouched.
+    const agenda = renderHtml({ title: 'Trip', body: '## Friday\n- 10:00 Office visit.\n- 2:00 Flight home.' })
+    expect(agenda).toContain('class="rows"')
+    expect(agenda).not.toContain('class="tl"')
+})
