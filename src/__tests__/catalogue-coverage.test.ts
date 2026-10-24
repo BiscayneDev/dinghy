@@ -15,7 +15,7 @@ const MATCH: Record<string, string> = {
     briefing: ':::briefing\nFictional vote | Fictional Gazette | today | Fictional summary\n:::',
     places: ':::places\nFictional Cafe | 4.5 | cafe | cozy | 12 Main St\n:::',
     options: ':::options\nFictional Inn | $180 | fictional why | fictional catch\n:::',
-    facts: ':::facts\nfictional key | fictional value\n:::',
+    facts: ':::facts\nfictional key: fictional value\n:::',
     gallery: ':::gallery\nimg/fictional.jpg | fictional caption\n:::',
     comparison: pages('comparison'),
     filter: pages('filter'),
