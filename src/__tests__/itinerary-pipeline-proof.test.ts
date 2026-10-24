@@ -1,8 +1,8 @@
 import * as React from 'react'
 ;(globalThis as unknown as {React:unknown}).React=React
 import {afterEach,expect,it,vi} from 'vitest'
-const {published}=vi.hoisted(()=>({published:vi.fn()}))
-vi.mock('@/lib/files/share',()=>({shareEnabled:()=>true,publishSite:published,revokeSite:vi.fn(),updateSite:vi.fn()}))
+const {published,updated}=vi.hoisted(()=>({published:vi.fn(),updated:vi.fn()}))
+vi.mock('@/lib/files/share',()=>({shareEnabled:()=>true,publishSite:published,revokeSite:vi.fn(),updateSite:updated}))
 vi.mock('@/lib/files/imagery',async orig=>({...await orig<typeof import('@/lib/files/imagery')>(),verifyShareMetadata:async()=>true}))
 vi.mock('@/lib/supabase/server',()=>({createServerClient:()=>({})}))
 vi.mock('@/lib/data-portability/erasure-state',()=>({assertAccountActive:async()=>{}}))
@@ -418,7 +418,15 @@ it('compose outage still selects from fetched page evidence through one bounded 
  const iCardMuseum=html.indexOf('plc-name">Harbor Museum'),iCardCafe=html.indexOf('plc-name">Harbor Cafe');expect(iCardMuseum).toBeGreaterThan(-1);expect(iCardCafe).toBeGreaterThan(iCardMuseum)
  // Gallery subjects are emitted for the photo step; resolution/credit/display wiring is proven with a fictional Commons response in itinerary-components.test.ts.
  const mdG=files.files()[0].markdown!;expect(mdG).toContain('photo: Harbor Museum | Harbor Museum');expect(mdG).toContain('photo: Harbor Cafe | Harbor Cafe')
- await mkdir('/tmp/direct-choose-proof',{recursive:true});await writeFile('/tmp/direct-choose-proof/page.html',html);await writeFile('/tmp/direct-choose-proof/file.pdf',files.files()[0].bytes)
+ // The production chat path enriches after sending (handler.ts): gallery subjects resolve through the fictional photo step and the site update ships local photos.
+ updated.mockResolvedValue(undefined)
+ await files.files()[0].enrichImagery?.()
+ expect(updated).toHaveBeenCalledTimes(1)
+ const enriched=updated.mock.calls[0][1] as {path:string;bytes:Buffer}[]
+ expect(enriched.some(f=>/^img\/p-[0-9a-f]{12}\.jpg$/.test(f.path))).toBe(true)
+ const ehtml=enriched.find(f=>f.path==='index.html')!.bytes.toString()
+ expect(ehtml).toContain('<figure>');expect(ehtml).toContain('Fictional Photographer');expect(ehtml).not.toContain('upload.wikimedia.org')
+ await mkdir('/tmp/direct-choose-proof',{recursive:true});await writeFile('/tmp/direct-choose-proof/page.html',html);await writeFile('/tmp/direct-choose-proof/file.pdf',files.files()[0].bytes);await writeFile('/tmp/direct-choose-proof/page-enriched.html',ehtml)
 })
 
 it('when no pick can be verified the fixed obligation survives and no provider-order stops are manufactured',async()=>{
