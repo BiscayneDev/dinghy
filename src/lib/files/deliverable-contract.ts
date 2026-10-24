@@ -7,9 +7,14 @@ export type DeliverableKind = 'map' | 'comparison' | 'list' | 'itinerary' | 'not
 export type DeliverableContract = { kind: DeliverableKind; request: string }
 export type DeliverableState = 'completed' | 'unfulfilled'
 const artifact = /\b(?:make|create|build|prepare|write|put together|send|give|show)\b/i
+const ACTIVITY_PLAN_ASK = /\b(?:what(?:'s| is| are)?[^.!?\n]{0,40}\b(?:fun|to do)\b|things to do|fun things|what to do|something to do|activities|activity ideas|places to go)\b/i
+const SCHEDULE_ANCHOR = /\b(?:wedding|flight|concert|reservation|meeting|event|ceremony|reception|check-?in|check-?out|show|game|train|tour|dinner|brunch|party)\b[^.!?\n]{0,60}\bat\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\b|\b(?:at|until|before|after|by|from)\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/i
 function classify(request: string): DeliverableContract | null {
     let kind: DeliverableKind | null = null
     if (/\b(?:itinerary|day.by.day plan)\b/i.test(request) && /\b(?:make|create|build|prepare|write|plan|put together|send|give|show)\b/i.test(request)) kind = 'itinerary'
+    // A time-anchored activity-planning ask is the same deliverable without the literal word:
+    // "What's fun to do in Petaluma CA. The wedding is at 4pm and I need some activities."
+    else if (ACTIVITY_PLAN_ASK.test(request) && SCHEDULE_ANCHOR.test(request)) kind = 'itinerary'
     else if (/\bcompare\b/i.test(request) || (artifact.test(request) && /\b(?:comparison|versus|vs\.?)\b/i.test(request))) kind = 'comparison'
     else if ((artifact.test(request) && /\b(?:list|checklist)\b/i.test(request)) || /\b(?:top|best|popular|trending)\s+\d+\b/i.test(request) || weeklyListRequest(request)) kind = 'list'
     else if (artifact.test(request) && /\b(?:note|notes|document|page|file|pdf)\b/i.test(request)) kind = 'note'
