@@ -112,7 +112,7 @@ export function compileApiPlaces(input:unknown,places:ApiPlace[],records:SourceR
 }
 
 /** API mode owns the agenda too: freehand model cuisine, aliases and recommendation scaffolding never reach the body. */
-export function apiItineraryBody(request:string,picks:{kind:string;name:string;hours?:string}[],now?:LocalNow):string{
+export function apiItineraryBody(request:string,picks:ApiComponentPick[],now?:LocalNow):string{
  const days=[...new Set((request.match(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi)||[]).map(d=>d[0].toUpperCase()+d.slice(1).toLowerCase()))]
  let body=(days.length?days:['Day 1']).map(d=>'## '+d+'\n- Timing to confirm.').join('\n\n')
  if(/\bweekend\b/i.test(request)&&!days.some(d=>d==='Saturday'||d==='Sunday'))body+='\n\n## Weekend\n- Timing to confirm.'
@@ -120,7 +120,34 @@ export function apiItineraryBody(request:string,picks:{kind:string;name:string;h
  body=ensureWorkingSessions(body,request).body
  body=ensurePlanFromPicks(body,request,picks,now).body
  body=body.replace(/^- Timing to confirm\.\n?/gm,'')
- return body+'\n\n'+GEOAPIFY_ATTRIBUTION
+ return apiItineraryComponents(body,picks)+'\n\n'+GEOAPIFY_ATTRIBUTION
+}
+
+
+/** Picks that carry their full provider record let the server draw real components: venue cards with map/website links, route legs mirroring the written plan order with working directions links (mode/time stay empty when unknown), and gallery subjects for the existing free-photo step. Never invents a field; a block with nothing grounded is omitted, not drawn empty. */
+export type ApiComponentPick={kind:string;name:string;hours?:string;place?:ApiPlace}
+const compCell=(s:string|undefined)=>(s||'').replace(/[|\n\r]/g,' ').trim()
+export function apiItineraryComponents(body:string,picks:ApiComponentPick[]):string{
+ const withPlace=picks.filter(p=>p.name&&p.place&&Number.isFinite(p.place.lat)&&Number.isFinite(p.place.lon))
+ if(!withPlace.length)return body
+ const cards=withPlace.slice(0,8).map(p=>{const v=p.place as ApiPlace
+  return [compCell(p.name),'unknown',v.hours?'Provider-reported hours':'','',compCell(v.address),compCell(v.hours),v.lat.toFixed(5)+','+v.lon.toFixed(5),v.website||'',''].join(' | ')})
+ let out=body.trimEnd()+'\n\n## Stops\n:::places\n'+cards.join('\n')+'\n:::'
+ // Route legs mirror the order stops appear under each day heading in the plan itself; legs cross no day boundary. Mode and time stay empty unless a source stated them; the directions link makes an unknown leg useful instead of ornamental.
+ const sections=body.split(/(?=^#{2,3}\s)/m)
+ const legs:string[]=[]
+ for(const section of sections){
+  if(!/^#{2,3}\s/.test(section)||/^#{2,3}\s*(?:stops|not found|recommendation evidence|optional game)\b/i.test(section))continue
+  const stops=withPlace.map(p=>({p,i:section.toLowerCase().indexOf(p.name.toLowerCase())})).filter(s=>s.i>=0).sort((a,b)=>a.i-b.i)
+  const seq= stops.filter((s,x)=>x===0||s.p.name!==stops[x-1].p.name).map(s=>s.p)
+  for(let x=1;x<seq.length;x++){
+   const a=seq[x-1].place as ApiPlace,b=seq[x].place as ApiPlace
+   legs.push([compCell(seq[x-1].name),compCell(seq[x].name),'','','','https://www.google.com/maps/dir/?api=1&origin='+a.lat.toFixed(5)+','+a.lon.toFixed(5)+'&destination='+b.lat.toFixed(5)+','+b.lon.toFixed(5)].join(' | '))
+  }
+ }
+ if(legs.length)out+='\n\n:::route\n'+legs.slice(0,10).join('\n')+'\n:::'
+ out+='\n\n:::gallery\n'+withPlace.slice(0,6).map(p=>'photo: '+compCell(p.name)+' | '+compCell(p.name)).join('\n')+'\n:::'
+ return out
 }
 
 /** Fixed fact clauses prevent model wording from silently adding quality, distance or availability claims. */

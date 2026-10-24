@@ -148,7 +148,7 @@ function renderStay(lines: string[]): string {
     return `<div class="sts">${cards.join('')}</div>`
 }
 
-/** route: "From | To | mode | time | detail" per leg. Draws a vertical line with stops. */
+/** route: "From | To | mode | time | detail | directions link" per leg. Draws a vertical line with stops. Empty cells render nothing; the optional last cell is a plain http(s) link, drawn as a Directions action, so an unknown-duration leg still does something useful. */
 function renderRoute(lines: string[]): string {
     const legs = lines.slice(0, 10).map(cells).filter((c) => c[0] && c[1])
     if (!legs.length) return ''
@@ -161,7 +161,8 @@ function renderRoute(lines: string[]): string {
     }
     for (const leg of legs) {
         stop(leg[0])
-        out.push(`<div class="rt-leg"><span class="rt-mode">${esc(leg[2] ?? '')}</span>${leg[3] ? `<span class="rt-time">${esc(leg[3])}</span>` : ''}${leg[4] ? `<span class="rt-det">${esc(leg[4])}</span>` : ''}</div>`)
+        const dir=httpUrl(leg[5])
+        out.push(`<div class="rt-leg">${leg[2] ? `<span class="rt-mode">${esc(leg[2])}</span>` : ''}${leg[3] ? `<span class="rt-time">${esc(leg[3])}</span>` : ''}${leg[4] ? `<span class="rt-det">${esc(leg[4])}</span>` : ''}${dir ? `<a class="rt-dir" href="${esc(dir)}" target="_blank" rel="noopener noreferrer">Directions</a>` : ''}</div>`)
         stop(leg[1])
     }
     return `<div class="rt">${out.join('')}</div>`
@@ -352,7 +353,7 @@ h4{margin:0;font:500 21px/1.2 Fraunces,Georgia,serif;letter-spacing:-.01em;color
 .rt{position:relative;padding-left:22px;border-left:2px solid var(--line);margin-left:7px}
 .rt-stop{position:relative;padding:4px 0}.rt-dot{position:absolute;left:-30px;top:10px;width:14px;height:14px;border-radius:50%;background:var(--paper);border:3px solid var(--accent)}
 .rt-name{font:600 17px/1.3 Schibsted,sans-serif;color:var(--ink)}
-.rt-leg{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:2px 0 14px;font-size:14px;color:var(--mute)}.rt-mode{padding:3px 10px;border-radius:999px;background:var(--sand);color:var(--ink);font:500 11px 'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase}.rt-time{color:var(--ink);font-weight:600}
+.rt-leg{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:2px 0 14px;font-size:14px;color:var(--mute)}.rt-mode{padding:3px 10px;border-radius:999px;background:var(--sand);color:var(--ink);font:500 11px 'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase}.rt-time{color:var(--ink);font-weight:600}.rt-dir{color:var(--accent);font-weight:600;text-decoration:none}.rt-dir:hover{text-decoration:underline;text-underline-offset:3px}
 .brs{display:grid;gap:0}.br{display:grid;grid-template-columns:44px 1fr;gap:12px;padding:16px 0;border-bottom:1px solid var(--line)}.br:last-child{border-bottom:0}
 .br-n{font:500 13px/1.9 'DM Mono',monospace;color:var(--accent)}.br h4{font-size:20px}.br h4 a{color:var(--ink);text-decoration:none;font-size:inherit}.br h4 a:hover{text-decoration:underline;text-underline-offset:4px}
 .br p{margin:6px 0;font-size:15px}.br-m{font:500 11px/1.5 'DM Mono',monospace;letter-spacing:.06em;color:var(--mute);text-transform:uppercase}
