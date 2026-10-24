@@ -415,8 +415,6 @@ export async function chat(
         onUsage?: (u: GatewayUsage) => void
         /** Task-aware Shipyard routing for this turn (routing.ts); unset = pinned model. */
         routing?: RoutingPrefs
-        /** Signed sender handle; scopes allowlist-gated Jev features (deliverable intent, UI routing). */
-        sender?: string
         /** Router hint (turn-class.ts): what this turn is. Sent as headers only. */
         taskClass?: TaskClass
         deadlineAt?: number
@@ -581,6 +579,8 @@ export async function chatWithTools(
         onUsage?: (u: GatewayUsage) => void
         /** Task-aware Shipyard routing for this turn (routing.ts); unset = pinned model. */
         routing?: RoutingPrefs
+        /** Signed sender handle; scopes allowlist-gated Jev features (deliverable intent, UI routing). */
+        sender?: string
         /** Router hint (turn-class.ts): what this turn is. Sent as headers only. */
         taskClass?: TaskClass
         /** The turn already holds Google data (tagged history, cron that reads Google): private route from the first call. */
