@@ -19,7 +19,18 @@ export const UI_PROOF_REQUEST='INTERNAL SYNTHETIC SELF-TEST. Build an interactiv
  * entry; the owner-number match itself is string equality covered by unit tests. */
 export const UI_PROOF_SENDER='selftest-ui-proof'
 export const UI_PROOF_BLIND_SPOTS=['owner-number allowlist match is unit-tested only, not live-proven','webhook ingress/authentication','real owner history and connected account context','handset rich-link rendering (delivery is the plain-link sweep variant)','failed upstream attempts may still be billed: an outage means no generation attempted, not zero spend']
-export async function runUiProof(onStage:(stage:RunStage,detail?:string)=>Promise<void>) {
+export type UiProofReport={
+ synthetic:true
+ verdict:'passed'|'failed'|'unavailable'
+ code?:string
+ route?:'catalogue'|'generate'|'text'|'unavailable'|'none'
+ checks?:Record<string,boolean>
+ stages?:ProofStage[]
+ delivery?:{outboxId:string}|{skipped:'no_recipient'|'no_artifact'|'enqueue_failed'}
+ file?:{title:string;url:string;expiresAt:string}
+ blindSpots:string[]
+}
+export async function runUiProof(onStage:(stage:RunStage,detail?:string)=>Promise<void>):Promise<UiProofReport> {
  if(!SHIPYARD_API_KEY||!process.env.HERENOW_API_KEY)return {synthetic:true,verdict:'unavailable',code:'missing_configuration',blindSpots:UI_PROOF_BLIND_SPOTS}
  const files=fileToolsFor(),stages:ProofStage[]=[]
  const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'America/New_York',tokens:{}}
