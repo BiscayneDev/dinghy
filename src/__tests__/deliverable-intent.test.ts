@@ -27,7 +27,7 @@ describe('model-owned deliverable intent',()=>{
   const f=vi.fn(async()=>new Response(JSON.stringify(decision('itinerary'))))
   await decideDeliverable({gatewayUrl:'https://gateway.test',apiKey:'test',request:'r',context:'[]',fetch:f})
   expect(f).toHaveBeenCalledTimes(1)
-  const body=JSON.parse(f.mock.calls[0][1]?.body as string)
+  const body=JSON.parse(((f.mock.calls[0] as unknown[])[1] as {body:string}).body)
   expect(Object.keys(body.questions)).toEqual(['deliverable'])
  })
 })
