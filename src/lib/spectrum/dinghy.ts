@@ -415,6 +415,8 @@ export async function chat(
         onUsage?: (u: GatewayUsage) => void
         /** Task-aware Shipyard routing for this turn (routing.ts); unset = pinned model. */
         routing?: RoutingPrefs
+        /** Signed sender handle; scopes allowlist-gated Jev features (deliverable intent, UI routing). */
+        sender?: string
         /** Router hint (turn-class.ts): what this turn is. Sent as headers only. */
         taskClass?: TaskClass
         deadlineAt?: number
@@ -719,14 +721,18 @@ export async function chatWithTools(
     let uiDecision:UiDecision|undefined
     let generatedBlock:string|undefined
     let generationSourceFacts=''
-    if(jevUiEnabled()&&tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())){
+    if(jevUiEnabled(opts.sender)&&tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())){
         // Enforced-private turns keep their existing catalogue path unchanged; no public Jev decision or novel generation.
         try{
             uiDecision=await withinTurn(opts.deadlineAt,signal=>decideUi({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,request:currentRequest,context:JSON.stringify(history.slice(-4).map(m=>({role:m.role,content:m.content}))).slice(0,10000),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000),onUsage:opts.onUsage}))
             messages.push({role:'system',content:uiDecisionNote(uiDecision)})
             await opts.onStage?.('context',`ui:jev:${uiDecision.route}${uiDecision.route==='catalogue'?':'+uiDecision.component:''}`)
             if(uiDecision.route==='generate')tools=[...tools,generationTool({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,modelFields:()=>modelFields(opts.model,routingNow()),request:currentRequest,deadlineAt:opts.deadlineAt,onUsage:opts.onUsage,onDiagnostic:d=>{void opts.onStage?.('tool',`generate_ui:failed:${d.reason}:http_${d.status??'none'}:elapsed_${d.elapsedMs}:limit_${d.attemptLimit??'unknown'}`)},publicationFacts:()=>generationSourceFacts,onGenerated:block=>{generatedBlock=block}})]
-        }catch{return finish({reply:'The UI decision service did not return a reliable choice. No page was created.',toolCalls:0,iterations:0,tainted})}
+        }catch{
+            // Degrade to the un-gated path (today's behavior when the flag is off): the turn continues
+            // without a Jev UI decision, catalogue enforcement or the generate tool. Never kill the reply.
+            await opts.onStage?.('context','ui:jev:unavailable')
+        }
     }
     const loopCtx = (iteration: number, toolsOffered: number): CallContext => ({
         chatGuid: ctx.chatGuid, source: 'tool_loop', iteration, requestedModel: requestedLabel(opts.model, routingNow()), toolsOffered,
