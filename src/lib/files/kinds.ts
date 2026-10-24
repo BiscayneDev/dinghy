@@ -188,7 +188,7 @@ function renderGallery(lines: string[]): string {
         if (!p) return ''
         const link = (txt: string | undefined, u: string | undefined) => txt && u && /^https:\/\/[^\s"'<>]+$/.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(txt)}</a>` : txt ? esc(txt) : ''
         const cr = [esc(credit ?? ''), link(license, licenseUrl), sourceUrl ? link('source', sourceUrl) : ''].filter(Boolean).join(' · ')
-        return `<figure><img src="${esc(p)}" alt="${esc(caption ?? '')}" loading="lazy" decoding="async"><figcaption>${esc(caption ?? '')}${cr ? `<small>${cr}</small>` : ''}</figcaption></figure>`
+        return `<figure><img src="${esc(p)}" alt="${esc(caption ?? '')}" loading="lazy" decoding="async" onerror="this.closest('figure')?.remove()"><figcaption>${esc(caption ?? '')}${cr ? `<small>${cr}</small>` : ''}</figcaption></figure>`
     }).filter(Boolean)
     if (!figs.length) return ''
     return `<div class="gal gal-${Math.min(figs.length, 3)}">${figs.join('')}</div>`

@@ -366,8 +366,7 @@ export function itineraryCover(doc:DinghyDoc):{name:string;destination:string;re
  if(/^## Stops\s*$/m.test(doc.body)){
   const days=(doc.body.match(/^#{2,3}\s+(?:Day \d|Mon|Tue|Wed|Thu|Fri|Sat|Sun)/gmi)||[]).length
   const stops=(splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='places') as {lines?:string[]}|undefined)?.lines?.length??0
-  const dest=name.replace(/^Itinerary for\s+/i,'')
-  return {name,destination:[dest,days?days+(days===1?' day':' days'):'',stops?stops+(stops===1?' stop':' stops'):''].filter(Boolean).join(' · '),researched:true}
+  return {name,destination:[days?days+(days===1?' day':' days'):'',stops?stops+(stops===1?' stop':' stops'):''].filter(Boolean).join(' · '),researched:true}
  }
  if(!/Selection reasons:/i.test(doc.body))return null
  const stay=splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='stay')
@@ -375,7 +374,7 @@ export function itineraryCover(doc:DinghyDoc):{name:string;destination:string;re
  return {name,destination:'Hotels, dining and activities',researched:/^## Recommendation evidence\s*$/m.test(doc.body)}
 }
 function coverHtml(cover:{name:string;destination:string;researched:boolean}):string{
- return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">${cover.researched?'Researched itinerary':'Itinerary · unverified picks'}</span><span class="hero-n hero-title">${esc(cover.name)}</span><span class="hero-s">${esc(cover.destination)}</span></div></div>`
+ return `<div class="band hero itinerary-cover"><svg viewBox="0 0 1200 340" aria-hidden="true"><path d="M760 -40 L1040 380 M900 -40 L1180 380 M620 -40 L900 380" stroke="#F08A68" stroke-opacity=".18" stroke-width="1"/><circle cx="990" cy="100" r="90" fill="none" stroke="#F08A68" stroke-opacity=".35"/></svg><div class="hero-in"><span class="hero-k">${cover.researched?'Researched itinerary':'Itinerary · unverified picks'}</span><span class="hero-n hero-title">${esc(cover.name)}</span>${cover.destination?`<span class="hero-s">${esc(cover.destination)}</span>`:''}</div></div>`
 }
 export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const body: string[] = []
@@ -539,7 +538,7 @@ th{background:var(--sand);color:var(--ink)}
 ${itineraryCover(doc)?coverHtml(itineraryCover(doc)!):pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? `<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`}
 <main class="card">
 <div class="brand">${anchorSvg(BRAND.ink, 18)}<span>dinghy</span></div>
-<h1>${esc(doc.title)}</h1>
+${itineraryCover(doc)?'':`<h1>${esc(doc.title)}</h1>`}
 ${doc.subtitle ? `<p class="sub">${esc(doc.subtitle)}</p>` : ''}
 ${opts.download ? `<p class="dl"><a href="${esc(opts.download.href)}" download>${esc(opts.download.label)}</a></p>` : ''}
 ${body.join('\n')}

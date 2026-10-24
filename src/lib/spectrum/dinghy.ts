@@ -1072,7 +1072,7 @@ export async function chatWithTools(
                                 if('candidates' in compiled){
                                     const pickKey=(n:{source?:string;start?:number;end?:number})=>`${n.source}:${n.start}:${n.end}`
                                     const pickBySource=new Map(outcome.picks.map(p=>[pickKey(p.place),p]))
-                                    const chosen:Record<string,unknown>[]=[...compiled.candidates].flatMap(c=>{const pick=pickBySource.get(pickKey(c.name as {source?:string;start?:number;end?:number}));if(pick?.durationMin)pickDurations.set(pick.place.name.toLowerCase(),pick.durationMin);return pick?[{...c,reason:pick.why,catch:pick.place.hours?`Provider-reported hours ${pick.place.hours}; prices and availability unverified`:'Hours, prices and availability unverified'}]:[]})
+                                    const chosen:Record<string,unknown>[]=[...compiled.candidates].flatMap(c=>{const pick=pickBySource.get(pickKey(c.name as {source?:string;start?:number;end?:number}));if(pick?.durationMin)pickDurations.set(pick.place.name.toLowerCase(),pick.durationMin);return pick?[{...c,reason:pick.why,catch:pick.place.hours?'Prices and availability unverified':'Hours, prices and availability unverified'}]:[]})
                                     apiCandidates.splice(0,apiCandidates.length,...chosen)
                                     reasonCitations=chosen.flatMap(c=>{const src=(c.name as {source?:string}).source||'',pick=pickBySource.get(pickKey(c.name as {source?:string;start?:number;end?:number}))!,url=sourceRecords.pageUrl(pick.sourceId);return url?[{line:0,source:pick.sourceId,url,claim:pick.why,venueName:pick.place.name,candidateSource:src}]:[]})
                                 }
