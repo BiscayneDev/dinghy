@@ -1108,6 +1108,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         if (tools.length > 0) {
             const toolOpts = {
                 deadlineAt, onStage,
+                sender: senderAddress(message.sender) ?? undefined,
                 taskClass: classifyUserTurn(selectDeliverable(full)?.request ?? text),
                 gatewayUrl: GATEWAY_URL,
                 apiKey: SHIPYARD_API_KEY,

@@ -18,7 +18,14 @@ export const UI_CATALOGUE = {
 export type CatalogueId = keyof typeof UI_CATALOGUE
 export type UiDecision = { route: 'text' } | { route: 'catalogue'; component: CatalogueId } | { route: 'generate' }
 export const UI_DECISION_FLAG = 'DINGHY_JEV_UI'
-export function jevUiEnabled(): boolean { return process.env[UI_DECISION_FLAG] === 'on' }
+/** 'on' enables globally; any other value is a comma-separated sender-handle allowlist
+ * (e.g. '+1203…'), so an owner-scoped rollout needs no broader flag infrastructure. */
+export function jevUiEnabled(sender?: string): boolean {
+    const raw = process.env[UI_DECISION_FLAG] ?? ''
+    if (raw === 'on') return true
+    if (!sender) return false
+    return raw.split(',').map((s) => s.trim()).filter(Boolean).includes(sender)
+}
 export function uiChoiceQuestion() {
     return {
         type: 'choice',
