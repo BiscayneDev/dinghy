@@ -597,6 +597,7 @@ export async function chatWithTools(
     const contract = selectDeliverable(history)
     const sourceRecords = new SourceRecords()
     const itineraryResearch=contract?.kind==='itinerary'&&itineraryNeedsResearch(contract.request)
+    const itineraryContract=contract?.kind==='itinerary'
     const mapArtifact = contract?.kind === 'map'
     let deliverableCompleted = false
     const finish = (r: ToolChatResult): ToolChatResult => {
@@ -644,8 +645,10 @@ export async function chatWithTools(
             if(!inputSchemaError(input,file.inputSchema)){
                 pageAttempted=true;toolCallCount++
                 await opts.onStage?.('tool','itinerary:agenda_only_fallback')
-                const result=await withinTurn(opts.deadlineAt,signal=>file.execute(input,{...ctx,signal,photosOk:!tainted}))
-                if(result.success){deliverableCompleted=true;return finish({reply:'The supplied agenda is attached. Recommendations remain unverified.',toolCalls:toolCallCount,iterations:iteration,tainted})}
+                try{
+                    const result=await withinTurn(opts.deadlineAt,signal=>file.execute(input,{...ctx,signal,photosOk:!tainted}))
+                    if(result.success){deliverableCompleted=true;return finish({reply:'The supplied agenda is attached. Recommendations remain unverified.',toolCalls:toolCallCount,iterations:iteration,tainted})}
+                }catch{await opts.onStage?.('tool','itinerary:agenda_only_failed')}
             }
         }
         return finish({reply:'The supplied agenda is preserved, but research and publication did not complete. Recommendations remain unverified.',toolCalls:toolCallCount,iterations:iteration,tainted})
@@ -692,6 +695,7 @@ export async function chatWithTools(
     let fileRepairAttempted=false
     let pageAttempted = false
     let pageRetry = false
+    let gatewayRetried = false
     let completionMode = false
     let tainted = Boolean(opts.startTainted) || history.some((m) => m.googleDerived)
     // Enforced + tainted: private allowlist only, fail closed (throws, never falls back).
@@ -826,15 +830,23 @@ export async function chatWithTools(
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
-          if(itineraryResearch&&!pageAttempted&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>5000))return publishUnverifiedAgenda(iteration)
+          // An itinerary contract turn never dies on one gateway failure: one bounded
+          // retry inside the itinerary budget, then the honest agenda-only fallback.
+          if(itineraryContract&&!pageAttempted){
+            if(!gatewayRetried&&opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()>60000){gatewayRetried=true;await opts.onStage?.('tool','itinerary:gateway_retry');continue}
+            if(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>5000)return publishUnverifiedAgenda(iteration)
+          }
           if (!(err instanceof TurnDeadlineExceeded) || !rescueEligible) throw err
           await opts.onStage?.('reply_ready', 'source_partial_gateway_timeout')
           const links = foundSources.slice(0, 3).map(s => `${s.title || 'Source'}: ${s.url}`).join('\n')
           return finish({ reply: `The search finished, but I didn't finish checking the options. These are source links, not verified recommendations:\n${links}`, toolCalls: toolCallCount, iterations: iteration, tainted })
         }
         if (!res.ok) {
-            if(itineraryResearch&&!pageAttempted)return publishUnverifiedAgenda(iteration)
             await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), 'http_error', t0, res))
+            if(itineraryContract&&!pageAttempted){
+                if(!gatewayRetried&&opts.deadlineAt!==undefined&&opts.deadlineAt-Date.now()>60000){gatewayRetried=true;await opts.onStage?.('tool','itinerary:gateway_retry');continue}
+                return publishUnverifiedAgenda(iteration)
+            }
             const body = await withinTurn(opts.deadlineAt, () => res.text()).catch(() => '')
             throw new Error(`Gateway ${res.status}: ${body || res.statusText}`)
         }
