@@ -6,13 +6,13 @@ import {chooseItineraryVenues,parseChosenVenues} from '@/lib/files/itinerary-cho
 import {geoapifyPlaces,apiPlaceMenu,compileApiPlaces,apiItineraryBody,namedLookupMatch,type ApiPlace,type PlaceKind} from '@/lib/files/geoapify-itinerary'
 import {widenQuery,widenSourceScore,diningPageEvidence,activityPageEvidence,diverseResearchSources} from '@/lib/files/itinerary-research'
 import {compileItineraryCandidates,itineraryCandidateErrorCode,ITINERARY_CANDIDATE_NOTE} from '@/lib/files/itinerary-candidates'
-import {SELECT_CANDIDATES_TOOL,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
+import {SELECT_CANDIDATES_TOOL,localNow,cleanEmptyHeadings,ensureWeekendGap,dedupePickBullets,ensurePlanFromPicks,ensureWorkingSessions,injectCandidates,requiredKinds,missingKinds,mergePicks,relaxedContract,neutralizeUnpickedVenues,ensureRequestAgenda,pickNameTexts} from '@/lib/files/itinerary-selection'
 import {isHubUrl,sourceScore} from '@/lib/files/itinerary-mentions'
 import {buildPageView,viewNote,quoteToolDef,compileQuoteSelection,verifyPrompt,destinationTokens,resolveDestination} from '@/lib/files/itinerary-view'
 import {itineraryNeedsResearch,itineraryShapeErrorCode,itineraryDayFormatCode} from '@/lib/files/itinerary-contract'
 import {researchFollowup,prematureResearchReply,stripPermissionOffer,RESEARCH_RECOVERY_NOTE,inputSchemaError} from './recovery'
 import { SourceRecords, bindFileSources, compileItinerarySources, sourceBindingErrorCode, sourceResultEnvelope, SOURCE_BINDING_NOTE } from '@/lib/files/source-records'
-import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply } from '@/lib/files/deliverable-contract'
+import { selectDeliverable, contractNote, deliverablePageError, deliverableOutcome, truthfulDeliverableReply, type DeliverableContract } from '@/lib/files/deliverable-contract'
 import { mapSourceUrls, MAP_ARTIFACT_NOTE } from '@/lib/files/map-artifact'
 import { isRetailAvailability } from '@/lib/places/intent'
 import { weeklyPageError } from '@/lib/files/weekly-standard'
@@ -587,6 +587,8 @@ export async function chatWithTools(
         startTainted?: boolean
         /** Force this tool on the first model call (deterministic triggers). */
         forceTool?: string
+        /** Deliverable intent already decided by the caller (legacy contract or bounded Jev judgment); unset selects the legacy contract here. */
+        deliverable?: DeliverableContract | null
         /** Per-turn context that changes every call (clock, background): sent as a late system note so the prompt prefix stays cacheable. */
         volatile?: string
     },
@@ -594,7 +596,7 @@ export async function chatWithTools(
     ctx: UserContext
 ): Promise<ToolChatResult> {
     const currentRetailRequest = [...history].reverse().find(m => m.role === 'user')?.content ?? ''
-    const contract = selectDeliverable(history)
+    const contract = opts.deliverable !== undefined ? opts.deliverable : selectDeliverable(history)
     const sourceRecords = new SourceRecords()
     const itineraryResearch=contract?.kind==='itinerary'&&itineraryNeedsResearch(contract.request)
     const itineraryContract=contract?.kind==='itinerary'
@@ -818,7 +820,7 @@ export async function chatWithTools(
         const callDeadline = itineraryResearch&&opts.deadlineAt!==undefined ? Math.min(opts.deadlineAt-18000,Date.now()+25000) : rescueEligible ? Math.min(opts.deadlineAt! - 8_000, Date.now() + 25_000) : opts.deadlineAt
         let res: Response
         try {
-          res = selecting&&apiPlaces ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-choose',function:{name:SELECT_CANDIDATES_TOOL,arguments:JSON.stringify({candidates:apiPlaces.slice(0,1).map(p=>({line:p.line,kind:p.kind}))})}}]}}]})) : itineraryResearch&&apiPlaces&&selectedCandidates ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-file',function:{name:'create_file',arguments:JSON.stringify({title:'Itinerary for '+(destLabel||'your visit'),body:apiItineraryBody(currentRequest,[]),format:'pdf',kind:'itinerary'})}}]}}]})) : await withinTurn(callDeadline, (signal) => fetch(`${opts.gatewayUrl}/v1/chat/completions`, {
+          res = selecting&&apiPlaces ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-choose',function:{name:SELECT_CANDIDATES_TOOL,arguments:JSON.stringify({candidates:apiPlaces.map(p=>({line:p.line,kind:p.kind}))})}}]}}]})) : itineraryResearch&&apiPlaces&&selectedCandidates ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-file',function:{name:'create_file',arguments:JSON.stringify({title:'Itinerary for '+(destLabel||'your visit'),body:apiItineraryBody(currentRequest,[]),format:'pdf',kind:'itinerary'})}}]}}]})) : await withinTurn(callDeadline, (signal) => fetch(`${opts.gatewayUrl}/v1/chat/completions`, {
             signal,
             method: 'POST',
             headers: {
@@ -1050,7 +1052,7 @@ export async function chatWithTools(
                                 if('candidates' in compiled){
                                     const pickKey=(n:{source?:string;start?:number;end?:number})=>`${n.source}:${n.start}:${n.end}`
                                     const pickBySource=new Map(outcome.picks.map(p=>[pickKey(p.place),p]))
-                                    const chosen:Record<string,unknown>[]=[...compiled.candidates].flatMap(c=>{const pick=pickBySource.get(pickKey(c.name as {source?:string;start?:number;end?:number}));return pick?[{...c,reason:pick.why,catch:pick.why.length>140?pick.why.slice(0,137)+'...':pick.why}]:[]})
+                                    const chosen:Record<string,unknown>[]=[...compiled.candidates].flatMap(c=>{const pick=pickBySource.get(pickKey(c.name as {source?:string;start?:number;end?:number}));return pick?[{...c,reason:pick.why,catch:pick.place.hours?`Provider-reported hours ${pick.place.hours}; prices and availability unverified`:'Hours, prices and availability unverified'}]:[]})
                                     apiCandidates.splice(0,apiCandidates.length,...chosen)
                                     reasonCitations=chosen.flatMap(c=>{const src=(c.name as {source?:string}).source||'',pick=pickBySource.get(pickKey(c.name as {source?:string;start?:number;end?:number}))!,url=sourceRecords.pageUrl(pick.sourceId);return url?[{line:0,source:pick.sourceId,url,claim:pick.why,venueName:pick.place.name,candidateSource:src}]:[]})
                                 }
@@ -1124,7 +1126,7 @@ export async function chatWithTools(
                             input=injectCandidates(input,selectedCandidates)
                             if(typeof (input as {body?:unknown}).body==='string'){const n=neutralizeUnpickedVenues((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords),currentRequest,unsupportedKinds,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})));if(n.removed){await opts.onStage?.('tool',`itinerary:body_venues_removed:${n.removed}`);input={...(input as Record<string,unknown>),body:n.body}}}
                             {const ag=ensureRequestAgenda((input as {body:string}).body,currentRequest);if(ag.added){await opts.onStage?.('tool',`itinerary:request_agenda_added:${ag.added}`);input={...(input as Record<string,unknown>),body:ag.body}}}
-                            {const names=pickNameTexts(selectedCandidates,sourceRecords),pl=selectedCandidates.map((c,x)=>({kind:String((c as {kind?:unknown}).kind),name:names[x]??''})).filter(p=>p.name);const pp=ensurePlanFromPicks((input as {body:string}).body,currentRequest,pl);if(pp.added){await opts.onStage?.('tool',`itinerary:plan_from_picks:${pp.added}`);input={...(input as Record<string,unknown>),body:pp.body}}}
+                            {const names=pickNameTexts(selectedCandidates,sourceRecords),pl=selectedCandidates.map((c,x)=>({kind:String((c as {kind?:unknown}).kind),name:names[x]??''})).filter(p=>p.name);const pp=ensurePlanFromPicks((input as {body:string}).body,currentRequest,pl,localNow((ctx as {timezone?:string}).timezone));if(pp.added){await opts.onStage?.('tool',`itinerary:plan_from_picks:${pp.added}`);input={...(input as Record<string,unknown>),body:pp.body}}}
                             // The user's requested working sessions are an agenda fact the contract checks literally; the server states them as unknown, never invented detail.
                             if(typeof (input as {body?:unknown}).body==='string'){const d=dedupePickBullets((input as {body:string}).body,pickNameTexts(selectedCandidates,sourceRecords));if(d.removed){await opts.onStage?.('tool',`itinerary:pick_bullets_deduped:${d.removed}`);input={...(input as Record<string,unknown>),body:d.body}}}
                             if(typeof (input as {body?:unknown}).body==='string')input={...(input as Record<string,unknown>),body:ensureWeekendGap((input as {body:string}).body,currentRequest,unsupportedKinds)}
@@ -1142,7 +1144,7 @@ export async function chatWithTools(
                                 const citations=reasonCitations.filter(c=>citationPicks.some(pk=>(pk.name as {source:string}).source===c.candidateSource))
                                 const seenCit=new Set<string>(),citLines:string[]=[]
                                 for(const c of citations){const key=c.venueName+'|'+c.source;if(seenCit.has(key))continue;seenCit.add(key);citLines.push('- '+c.venueName+': {{source:'+c.source+'.url}}')}
-                                input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>({kind:String(c.kind),name:pickNameTexts([c],sourceRecords)[0]||''})))+(unsupportedKinds.length?'\n\n## Not found\nNo evidence-backed '+unsupportedKinds.map(k=>k==='activity'?'meaningful weekend activity':k).join(' or ')+' was verified from the candidates checked. None are recommended here.':'')+( /\b(?:game|match)\b/i.test(currentRequest)?'\n\n## Optional game\nGame date, tickets and availability were not verified. No game is scheduled in this itinerary.':'')+(citLines.length?'\n\n## Recommendation evidence\n'+citLines.join('\n'):'')}
+                                input={...(input as Record<string,unknown>),body:apiItineraryBody(currentRequest,selectedCandidates.map(c=>{const places=apiPlaces as ApiPlace[],nm=pickNameTexts([c],sourceRecords)[0]||'',place=places.find(p=>nm&&p.name.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim()===nm.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim())??places.find(p=>p.source===(c.name as {source:string}).source);return {kind:String(c.kind),name:nm,...(place?.hours?{hours:place.hours}:{})}}),localNow((ctx as {timezone?:string}).timezone))+(unsupportedKinds.length?'\n\n## Not found\nNo evidence-backed '+unsupportedKinds.map(k=>k==='activity'?'meaningful weekend activity':k).join(' or ')+' was verified from the candidates checked. None are recommended here.':'')+( /\b(?:game|match)\b/i.test(currentRequest)?'\n\n## Optional game\nGame date, tickets and availability were not verified. No game is scheduled in this itinerary.':'')+(citLines.length?'\n\n## Recommendation evidence\n'+citLines.join('\n'):'')}
                             };
                         }
                     }

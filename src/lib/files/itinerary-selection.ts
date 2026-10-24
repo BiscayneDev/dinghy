@@ -198,29 +198,105 @@ export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[
  return picks.flatMap((c:any)=>{const t=records.pageText(c.name.source);return t?[t.slice(c.name.start,c.name.end)]:[]})
    }
 
-/** When the model body is stripped of its day plan, the server restates a plan only from facts it holds: the user's requested days and the verified picks. */
-export function ensurePlanFromPicks(body:string,request:string,picks:{kind:string;name:string}[]):{body:string;added:number}{
+export type PlanPick={kind:string;name:string;hours?:string}
+const anchorMinutes=(h:string,m:string|undefined,ap:string)=>{let hh=Number(h)%12;if(ap.toLowerCase()==='pm')hh+=12;return hh*60+Number(m??'0')}
+const fmtTime=(t:number)=>{const h=Math.floor(t/60)%24;return (h%12||12)+':'+String(Math.round(t)%60).padStart(2,'0')+(h<12?'am':'pm')}
+/** The first clock-time anchor in the request (e.g. "wedding at 4pm"), reused by the agenda and the timed plan. */
+export function requestAnchor(request:string):{mins:number;label:string;day?:string}|undefined{
+ TIME_RE.lastIndex=0
+ const m=TIME_RE.exec(request)
+ TIME_RE.lastIndex=0
+ if(!m)return undefined
+ const before=request.slice(0,m.index).replace(/\s+$/,'').replace(/\b(?:at|@|by|from)$/i,'').replace(/\s+$/,'')
+ const words=(before.split(/[.;:!?\n,]/).pop()||'').trim().split(/\s+/).filter(Boolean).slice(-4)
+ while(words.length&&LEAD_FILL.has(words[0].toLowerCase()))words.shift()
+ while(words.length&&TRAIL_FILL.has(words[words.length-1].toLowerCase()))words.pop()
+ const what=words.join(' ')
+ return {mins:anchorMinutes(m[1],m[2],m[3]),label:`${m[1]}${m[2]?':'+m[2]:''}${m[3].toLowerCase()}${what?' '+what:''}`,day:dayForItem(request,m.index)}
+}
+const STOP_MINUTES={restaurant:60,activity:90} as const
+export type LocalNow={mins:number;weekday:string}
+/** The user's local clock for past-stop checks; undefined when the timezone cannot be resolved. */
+export function localNow(timezone?:string):LocalNow|undefined{
+ try{
+  const tz=timezone||'UTC',d=new Date()
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'numeric',minute:'numeric',hour12:false,weekday:'long'}).formatToParts(d)
+  const get=(t:string)=>parts.find(p=>p.type===t)?.value
+  return {mins:(Number(get('hour'))%24)*60+Number(get('minute')),weekday:get('weekday')!}
+ }catch{return undefined}
+}
+/** Ordered timed stops ending ahead of a fixed request anchor. Every time is an explicit estimate; hours are
+ * shown only when a provider supplied them, otherwise stated as unverified. Stops that would already be in the
+ * past on the anchor's day are dropped earliest-first; when nothing still fits, the plan stays honestly untimed.
+ * The closing buffer is reserved movement/get-ready time, never a promised arrival at an unverified venue. */
+export function timedPlanRows(request:string,picks:PlanPick[],now?:LocalNow):string[]{
+ const anchorCount=[...request.matchAll(new RegExp(TIME_RE.source,'gi'))].length
+ const anchor=anchorCount===1?requestAnchor(request):undefined;if(!anchor)return []
+ let stops=[...picks.filter(p=>p.kind==='activity'),...picks.filter(p=>p.kind==='restaurant')]
+ if(!stops.length)return []
+ const dur=(p:PlanPick)=>p.kind==='restaurant'?STOP_MINUTES.restaurant:STOP_MINUTES.activity
+ const total=(list:PlanPick[])=>list.reduce((a,p)=>a+dur(p),0)
+ const BUFFER=30,end=anchor.mins-BUFFER
+ let start=end-total(stops)
+ // The anchor is today (unnamed or naming this weekday): never propose a stop that is already past.
+ if(now&&(!anchor.day||anchor.day.toLowerCase()===now.weekday.toLowerCase())){
+  while(stops.length&&start<now.mins){stops=stops.slice(1);start=end-total(stops)}
+ }
+ // Timed rows only when the stops fit in a sane window before the anchor; otherwise the plan stays honestly untimed.
+ if(!stops.length||start<9*60)return []
+ let t=start
+ const rows:string[]=[]
+ for(const p of stops){
+  const note=p.hours?`provider-reported hours ${p.hours}`:'hours not verified'
+  rows.push(`- ${fmtTime(t)} (est): ${p.kind==='restaurant'?'lunch at ':''}${p.name} — about ${dur(p)} min (estimate; ${note})`)
+  t+=dur(p)
+ }
+ rows.push(`- ${fmtTime(end)} (est): reserved buffer before ${anchor.label} — travel and get-ready time; the venue is not verified`)
+ return rows
+}
+
+/** When the model body is stripped of its day plan, the server restates a plan only from facts it holds: the user's requested days and the verified picks. With a clock-time anchor the plan is ordered timed estimates with a buffer; without one it stays honestly untimed. */
+export function ensurePlanFromPicks(body:string,request:string,picks:PlanPick[],now?:LocalNow):{body:string;added:number}{
  const lc=body.toLowerCase()
  picks=picks.filter(p=>p.name&&!lc.includes(p.name.toLowerCase()))
  if(!picks.length)return {body,added:0}
  const days=[...new Set((request.match(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi)||[]).map(d=>d[0].toUpperCase()+d.slice(1).toLowerCase()))]
  const by=(k:string)=>picks.filter(p=>p.kind===k).map(p=>p.name)
  const rows:string[]=[]
- const stay=by('hotel'),eat=by('restaurant'),do_=by('activity')
+ const stay=by('hotel')
  if(stay.length)rows.push(`- Stay: ${stay.join(' or ')}`)
+ const timed=timedPlanRows(request,picks,now)
+ const lines=body.split('\n')
+ const anchor=requestAnchor(request)
+ const first=anchor?.day??days[0]
+ if(timed.length){
+  rows.push(...timed)
+  // Top insertion keeps the day chronological: estimated stops land above the fixed anchor row.
+  insertUnderDay(lines,first,rows,true)
+  return {body:lines.join('\n'),added:rows.length}
+ }
+ const eat=by('restaurant'),do_=by('activity')
  if(eat.length)rows.push(`- Eat: ${eat.join(', ')}`)
  if(do_.length)rows.push(`- Do: ${do_.join(', ')}`)
  if(!rows.length)return {body,added:0}
- rows.push(`- ${days.length?days.join(' / '):'Day'} timing for these is not set.`)
- const lines=body.split('\n')
- const timing=rows.pop()!
- const first=days[0]
+ // A fixed obligation in the request stays visible: never claim no times were given when one was.
+ const anchorCount=[...request.matchAll(new RegExp(TIME_RE.source,'gi'))].length
+ const sole=anchorCount===1?requestAnchor(request):undefined
+ // Grounded only by the clock: when the anchor is today and its remaining window (minus the
+ // reserve) cannot hold even the shortest stop, say exactly that and keep the anchor visible.
+ // The picks stay on the recommendation cards; they are not restated as an undated pre-event plan.
+ const windowLeft=sole&&now&&(!sole.day||sole.day.toLowerCase()===now.weekday.toLowerCase())?sole.mins-30-now.mins:Infinity
+ if(sole&&windowLeft<60){
+  const stayOnly=rows.filter(r=>r.startsWith('- Stay:'))
+  insertUnderDay(lines,first,[...stayOnly,`- Nothing recommended fits the remaining estimated window before ${sole.label} with the travel/get-ready reserve; the fixed time above is unchanged and the recommendations below remain options for another time.`],false)
+  return {body:lines.join('\n'),added:stayOnly.length+1}
+ }
  // Stay and Eat go under the first requested day; Do goes under a weekend/activities/Sat/Sun heading when the body has one.
  const doRows=rows.filter(r=>r.startsWith('- Do:')),mainRows=rows.filter(r=>!r.startsWith('- Do:'))
  let weekendIdx=lines.findIndex(l=>/^\s*#{2,3}\s+(?:.*\b(?:weekend|activit\w*|things to do)\b|sat|sun)/i.test(l)&&!(first&&new RegExp('^\\s*#{2,3}\\s+'+first.slice(0,3),'i').test(l)))
  if(doRows.length&&weekendIdx<0&&/\bweekend\b/i.test(request)){lines.push('', '## Weekend');weekendIdx=lines.length-1}
  if(doRows.length&&weekendIdx>=0){lines.splice(weekendIdx+1,0,...doRows)}else mainRows.push(...doRows)
- insertUnderDay(lines,first,[...mainRows,timing],false)
+ insertUnderDay(lines,first,[...mainRows,anchorCount?`- ${days.length?days.join(' / ')+' t':'T'}iming is open around the fixed times above; venue hours are not verified.`:`- ${days.length?days.join(' / ')+' t':'T'}iming is open: no fixed times were given in the request; venue hours are not verified.`],false)
  return {body:lines.join('\n'),added:rows.length+1}
 }
 /** Repeated untimed recommendation bullets are redundant, not distinct visits. Timed agenda rows stay. */
@@ -266,6 +342,7 @@ export function ensureWorkingSessions(body:string,request:string):{body:string;a
 }
 const TIME_RE=/\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b/gi
 const LEAD_FILL=new Set(['plus','but','or','plan','make','with','then','and','include','including','add','also','a','an','the','my','our','on','friday','saturday','sunday','monday','tuesday','wednesday','thursday','to','for','by','at'])
+const TRAIL_FILL=new Set([...LEAD_FILL,'is','are','was','were','will','be','been','being','start','starts','begin','begins','end','ends','held','holds','takes','place','happens','scheduled'])
 /** User-supplied time-anchored agenda items (e.g. "office visit 10am") are facts the user gave; when the model's body drops one, the server restates it from the request text. */
 export function ensureRequestAgenda(body:string,request:string):{body:string;added:number}{
  const items:{time:string;hour:string;mins:string;what:string;day?:string}[]=[]
@@ -273,7 +350,7 @@ export function ensureRequestAgenda(body:string,request:string):{body:string;add
   const before=request.slice(0,m.index).replace(/\s+$/,'').replace(/\b(?:at|@|by|from)$/i,'').replace(/\s+$/,'')
   const words=(before.split(/[.;:!?\n,]/).pop()||'').trim().split(/\s+/).filter(Boolean).slice(-4)
   while(words.length&&LEAD_FILL.has(words[0].toLowerCase()))words.shift()
-  while(words.length&&LEAD_FILL.has(words[words.length-1].toLowerCase()))words.pop()
+  while(words.length&&TRAIL_FILL.has(words[words.length-1].toLowerCase()))words.pop()
   const what=words.join(' ')
   if(what.length>=3)items.push({time:`${m[1]}${m[2]?':'+m[2]:''}${m[3].toLowerCase()}`,hour:m[1],mins:m[2]??'00',what,day:dayForItem(request,m.index!)})
  }

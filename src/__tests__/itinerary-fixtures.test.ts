@@ -340,6 +340,36 @@ describe('phrases, category headings, plan from picks',()=>{
   expect(epp('# Trip\n- Harbor Inn and Lantern Table tonight','x',picks).added).toBe(0)
   expect(epp('# Trip\n','x',[]).added).toBe(0)
  })
+ it('timed stops order chronologically before the anchor row and carry an honest reserved buffer',()=>{
+  const picks=[{kind:'activity',name:'Tide Museum'},{kind:'restaurant',name:'Lantern Table',hours:'Mo-Sa 09:00-17:00'}]
+  const a=epp('## Day 1\n- 4pm: wedding','The wedding is at 4pm.',picks,{mins:9*60,weekday:'Saturday'})
+  const lines=a.body.split('\n'),at=(t:string)=>lines.findIndex(l=>l.includes(t))
+  expect(at('1:00pm (est): Tide Museum')).toBeGreaterThan(-1)
+  expect(at('1:00pm (est)')).toBeLessThan(at('2:30pm (est)'))
+  expect(at('2:30pm (est)')).toBeLessThan(at('3:30pm (est)'))
+  expect(at('3:30pm (est)')).toBeLessThan(at('- 4pm: wedding'))
+  expect(a.body).toContain('reserved buffer before 4pm wedding — travel and get-ready time; the venue is not verified')
+  expect(a.body).toContain('provider-reported hours Mo-Sa 09:00-17:00')
+  expect(a.body).toContain('hours not verified')
+ })
+ it('drops earliest stops that would already be past and stays untimed when nothing fits',()=>{
+  const picks=[{kind:'activity',name:'Tide Museum'},{kind:'activity',name:'Harbor Gallery'},{kind:'restaurant',name:'Lantern Table'}]
+  // 2:30pm now, 4pm anchor: 90+90+60=240 min cannot fit; the two activities drop, lunch fits alone.
+  const a=epp('## Day 1\n- 4pm: wedding','The wedding is at 4pm.',picks,{mins:14*60+30,weekday:'Saturday'})
+  expect(a.body).not.toContain('Tide Museum');expect(a.body).not.toContain('Harbor Gallery')
+  expect(a.body).toContain('2:30pm (est): lunch at Lantern Table')
+  // 3:45pm now: even one stop ends past the buffer. The fixed obligation stays visible and the fallback
+  // says nothing fits the remaining window; it never claims no times were given.
+  const b=epp('## Day 1\n- 4pm: wedding','The wedding is at 4pm.',[{kind:'activity',name:'Tide Museum'}],{mins:15*60+45,weekday:'Saturday'})
+  expect(b.body).not.toContain('(est):')
+  expect(b.body).toContain('- 4pm: wedding')
+  expect(b.body).toContain('Nothing recommended fits the remaining estimated window before 4pm wedding')
+  expect(b.body).not.toContain('no fixed times were given')
+  expect(b.body).not.toContain('Do: Tide Museum')
+  // A named future weekday is not constrained by today's clock.
+  const c=epp('## Sunday\n- 4pm: wedding','On Sunday the wedding is at 4pm.',[{kind:'activity',name:'Tide Museum'}],{mins:22*60,weekday:'Saturday'})
+  expect(c.body).toContain('(est): Tide Museum')
+ })
 })
 
 it('extractor skips a leading prepositional phrase for the real venue on a list line',()=>{

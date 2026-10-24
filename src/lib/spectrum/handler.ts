@@ -39,7 +39,8 @@ import { recordUsage, spendToolFor, type GatewayUsage } from './metering'
 import { allowanceUsedUpMessage, claimLimitNotice, isOverDailyAllowance } from '@/lib/allowance'
 import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
-import { selectDeliverable } from '@/lib/files/deliverable-contract'
+import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
+import { deliverableIntentEnabled, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -1014,7 +1015,16 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         await saveMessage(chatGuid, 'user', text).catch((err) => logErr('message save failed', err))
     }
 
-    const itineraryJob = selectDeliverable(full)?.kind === 'itinerary'
+    // Model-owned deliverable intent: with the flag on, one bounded Jev judgment decides
+    // what (if any) deliverable every turn asks for. The keyword matcher is only the outage
+    // fallback when the decision is unavailable or uncertain; with the flag off it stays the selector.
+    let deliverable: DeliverableContract | null
+    if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
+        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full) })
+    } else {
+        deliverable = selectDeliverable(full)
+    }
+    const itineraryJob = deliverable?.kind === 'itinerary'
     if(itineraryJob){
         const acknowledgement = 'I am putting the itinerary together. I will send it here when it is ready.'
         const delivered = await sendText(space, chatGuid, 'reply', acknowledgement)
@@ -1103,6 +1113,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
                 apiKey: SHIPYARD_API_KEY,
                 model: SHIPYARD_MODEL,
                 routing,
+                deliverable,
                 facts,
                 includeOpener,
                 knownFirstName: knownFirstName ?? undefined,

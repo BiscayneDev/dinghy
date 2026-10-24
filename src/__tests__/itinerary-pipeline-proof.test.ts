@@ -12,7 +12,7 @@ import {chatWithTools} from '@/lib/spectrum/dinghy'
 import {fileToolsFor} from '@/lib/files/tool'
 import {writeFile,mkdir} from 'node:fs/promises'
 const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Candidate lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' ')[0].slice(1)):9999}
-afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();vi.clearAllMocks()})
+afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs();vi.clearAllMocks()})
 it('mandatory actual production schema compiles first attempt, renders HTML/PDF/localcard and queues one file without sends',async()=>{
  vi.stubEnv('TAVILY_API_KEY','fictional-key')
  const url='https://harbor.test/visitors'
@@ -301,4 +301,52 @@ it('standard founder itinerary runs routed search then publishes two hotels thre
  expect(result.deliverable?.state).toBe('completed');expect(loopTools.filter(n=>n==='web_search')).toHaveLength(1);expect(loopTools.filter(n=>n==='web_fetch')).toHaveLength(19);expect(stages).toContain('itinerary:accepted:h2_r3_a2')
  const markdown=files.files()[0].markdown,html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
  for(const [_k,name,why]of rows){expect(markdown).toContain(name);expect(html).toContain(why)}expect(markdown).toContain(pageUrl);expect(markdown).toMatch(/10:00|10am/);expect(markdown).toMatch(/working sessions/i)
+})
+it('a model-decided itinerary intent completes the rendered itinerary for a time-anchored ask the keyword contract misses',async()=>{
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-10-24T09:00:00Z'))
+ vi.stubEnv('TAVILY_API_KEY','fictional-key')
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-key')
+ const url='https://harbor.test/visitors'
+ const ask="What's fun to do in Harbor. The wedding is at 4pm and I need some activities and a restaurant for lunch."
+ const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
+ const files=fileToolsFor(),stages:string[]=[],requests:any[]=[]
+ published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
+ vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
+  if(String(u).startsWith('https://api.geoapify.com/')){const gu=new URL(String(u));if(gu.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,city:'Harbor',state_code:'FL',country_code:'us',rank:{importance:0.9,confidence:1}}]}));return new Response(JSON.stringify({features:[{properties:{name:'Harbor Museum',categories:['entertainment.museum'],lat:25,lon:-80,place_id:'museum',formatted:'42 Quay St, Harbor'}},{properties:{name:'Harbor Cafe',categories:['catering.cafe'],lat:25.001,lon:-80.001,place_id:'cafe',formatted:'7 Quay St, Harbor',opening_hours:'Mo-Sa 09:00-17:00'}}]}))}
+  if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Museum and public listings.'}]}))
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Museum houses maritime paintings and model ships. Harbor Cafe serves lunch on Quay St. Hours, prices and availability unverified.</body></html>')
+  const reasonReq=JSON.parse(init.body);if(reasonReq.max_tokens===2500&&reasonReq.tool_choice==='none'){const initial=reasonReq.messages.find((m:any)=>String(m.content).includes('Actual read pages: '));const pages=JSON.parse(initial.content.slice(initial.content.indexOf('[{')));const pid=pages.find((p:any)=>p.url==='https://harbor.test/visitors')?.sourceId;return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({venues:[{name:'Harbor Museum',kind:'activity',why:'Houses maritime paintings and model ships to explore.',sourceId:pid},{name:'Harbor Cafe',kind:'restaurant',why:'Provider-listed cafe on Quay St, Harbor.',sourceId:pid}]})}}]}))};if(reasonReq.max_tokens===451){return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({checks:[{name:'Harbor Museum',ok:true}]})}}]}))};if(reasonReq.max_tokens===450)return new Response(JSON.stringify({choices:[{message:{content:'{"candidates":[]}'}}]}));if(reasonReq.max_tokens===500){const spans=JSON.parse(reasonReq.messages[1].content.split('Accepted spans: ')[1]);return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({why:'The source describes: '+spans[0].text,claims:[{text:spans[0].text,spanIds:[spans[0].id]}]})}}]}));}if(reasonReq.max_tokens===180){const packet=JSON.parse(reasonReq.messages.find((m:any)=>String(m.content).includes('Packet: ')).content.split('Packet: ')[1]);return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({spanIds:[packet.spans.find((s:any)=>s.text.includes('maritime'))?.id].filter(Boolean)})}}]}))}if(reasonReq.max_tokens===120)return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({verdict:'yes',reason:'none'})}}]}));if(reasonReq.max_tokens===2200){return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({activities:[{line:1,decision:'recommend',spanId:'span1_1',unknowns:[]}]})}}]}))}if(reasonReq.max_tokens===900){
+   const packet=JSON.parse(reasonReq.messages.find((m:any)=>String(m.content).includes('Evidence: ')).content.split('Evidence: ')[1])[0]
+   const reasons=[packet.venue.line].map(line=>({line,why:'The source describes maritime paintings and model ships.',claims:[{text:'Maritime paintings and model ships',evidenceIds:['ev'+line+'_1']}],unknowns:['Hours and availability not checked']}))
+   return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({reasons})}}]}))
+  }
+  requests.push(reasonReq)
+  if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
+  const name=requests.length===1?'web_search':'select_itinerary_candidates'
+  const menu=requests.at(-1).messages.map((m:any)=>String(m.content)).find((c:string)=>/L\d+ \| (?:hotel|restaurant|activity) \|/.test(c))||''
+  const picks=[...menu.matchAll(/L(\d+) \| (hotel|restaurant|activity) \| (Harbor Museum|Harbor Cafe) \|/g)].map(m=>({line:Number(m[1]),kind:m[2]}))
+  const args=name==='web_search'?{query:'Harbor attractions'}:{candidates:picks}
+  return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
+ }))
+ const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
+ const {selectDeliverable}=await import('@/lib/files/deliverable-contract')
+ expect(selectDeliverable([{role:'user',content:ask}])).toBeNull()
+ const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,deliverable:{kind:'itinerary',request:ask},onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ expect(result.deliverable).toEqual({kind:'itinerary',state:'completed'});expect(published).toHaveBeenCalledTimes(1);expect(files.files()).toHaveLength(1)
+ expect(result.reply).not.toContain('source links, not verified recommendations');expect(result.reply).not.toContain("didn't finish checking")
+ expect(stages).toContain('deliverable:itinerary');expect(stages.some(x=>x.startsWith('itinerary:places_api:ready_'))).toBe(true)
+ expect(requests).toHaveLength(1)
+ const made=files.files()[0];expect(made.bytes.subarray(0,4).toString()).toBe('%PDF')
+ const md=made.markdown!
+ // The fixed ask is a usable time-bounded plan: the wedding anchor is stated cleanly, stops are ordered before it with explicit estimates and a buffer, hours are provider-reported or honestly unverified.
+ expect(md).toContain('- 4pm: wedding');expect(md).not.toContain('wedding is')
+ expect(md).not.toContain('timing for these is not set')
+ // Chronology: estimated stops in order, then the reserved buffer, then the fixed anchor row last.
+ const iMuseum=md.indexOf('1:00pm (est): Harbor Museum'),iCafe=md.indexOf('2:30pm (est): lunch at Harbor Cafe'),iBuffer=md.indexOf('3:30pm (est): reserved buffer before 4pm wedding'),iWedding=md.indexOf('- 4pm: wedding')
+ expect(iMuseum).toBeGreaterThan(-1);expect(iCafe).toBeGreaterThan(iMuseum);expect(iBuffer).toBeGreaterThan(iCafe);expect(iWedding).toBeGreaterThan(iBuffer)
+ expect(md).toContain('travel and get-ready time; the venue is not verified')
+ expect(md).toContain('hours not verified');expect(md).toContain('provider-reported hours Mo-Sa 09:00-17:00')
+ const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
+ expect(html).toContain('Harbor Museum');expect(html).toContain('Harbor Cafe');expect(html).toContain('Geoapify');expect(html).not.toContain('apiKey=')
+ await mkdir('/tmp/model-intent-proof',{recursive:true});await writeFile('/tmp/model-intent-proof/page.html',html);await writeFile('/tmp/model-intent-proof/file.pdf',made.bytes);await writeFile('/tmp/model-intent-proof/card.png',made.card!);await writeFile('/tmp/model-intent-proof/report.json',JSON.stringify({synthetic:true,noSend:true,intent:'model-decided',legacySelected:null,stages,completed:true,httpMocked:true,publishMocked:true},null,2))
 })
