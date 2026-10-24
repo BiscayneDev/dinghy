@@ -80,7 +80,7 @@ export function requiredKinds(request:string):('hotel'|'restaurant'|'activity')[
  const k:('hotel'|'restaurant'|'activity')[]=[]
  if(/\b(?:hotels?|places? to stay)\b/i.test(request))k.push('hotel')
  if(/\brestaurants?\b/i.test(request))k.push('restaurant')
- if(/\b(?:activities|things to do|fun things)\b/i.test(request))k.push('activity')
+ if(/\b(?:activities|things to do|fun things|fun to do|what to do|something to do|activity ideas|places to go)\b/i.test(request))k.push('activity')
  return k
 }
 export const missingKinds=(cands:Record<string,unknown>[],need:string[])=>need.filter(k=>!cands.some(c=>c.kind===k))
@@ -98,7 +98,7 @@ export function relaxedContract<T extends {request:string}|null>(c:T,unsupported
  let r=c.request
  if(unsupported.includes('hotel'))r=r.replace(/\b(?:hotels?|places? to stay)\b/gi,'lodging')
  if(unsupported.includes('restaurant'))r=r.replace(/\brestaurants?\b/gi,'meals')
- if(unsupported.includes('activity'))r=r.replace(/\b(?:activities|things to do|fun things)\b/gi,'plans')
+ if(unsupported.includes('activity'))r=r.replace(/\b(?:activities|things to do|fun things|fun to do|what to do|something to do|activity ideas|places to go)\b/gi,'plans')
  return {...c,request:r+' recommendations'}
    }
 

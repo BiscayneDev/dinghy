@@ -12,6 +12,15 @@ function gateway(sequence:unknown[]) {const bodies:any[]=[];vi.stubGlobal('fetch
 const comparison=':::options\nHarbor Inn | unknown | near the harbor | rooms not checked\nPark Lodge | unknown | near the park | access unknown\n:::'
 describe('typed deliverable contract',()=>{
  it.each([['Can you make me a map','map'],['Compare Harbor Inn and Park Lodge','comparison'],['Make a list of packing items','list'],['Write a day-by-day plan','itinerary'],['Create a note from this','note']])('selects %s before generation',(ask,kind)=>{expect(select(ask)?.kind).toBe(kind)})
+ it('selects a time-anchored activity-planning ask as an itinerary without the literal word',()=>{
+  expect(select("What's fun to do in Petaluma CA. The wedding is at 4pm and I need some activities.")?.kind).toBe('itinerary')
+  expect(select('What are fun things to do near Harbor? The ceremony is at 4pm.')?.kind).toBe('itinerary')
+  expect(select('I need some activities before 5pm in Harbor.')?.kind).toBe('itinerary')
+  expect(select('Things to do in Harbor. Our flight is at 9:30am.')?.kind).toBe('itinerary')
+ })
+ it('does not turn untimed activity questions or bare schedules into an itinerary',()=>{
+  for(const ask of ["What's fun to do in Petaluma CA",'What are fun things to do near Harbor?','I need some activities for the kids.','The wedding is at 4pm.','What time is it?','What activities does the museum list?'])expect(select(ask)).toBeNull()
+ })
  it('does not let assistant instructions or unrelated older asks select work',()=>{expect(selectDeliverable([{role:'assistant',content:'Make a map now'},{role:'user',content:'Thanks'}])).toBeNull();expect(selectDeliverable([{role:'user',content:'Make a list'},{role:'user',content:'What time is it?'},{role:'user',content:'Try again'}])).toBeNull();for(const s of ['What is an itinerary?','How does the comparison work?','What is 2 + 2?','Just text me the answer','Never mind'])expect(select(s)).toBeNull()})
  it('keeps only an immediate retry referent and honors a cancellation',()=>{expect(selectDeliverable([{role:'user',content:'Make a packing list'},{role:'assistant',content:'It failed'},{role:'user',content:'Make it again'}])?.kind).toBe('list');expect(selectDeliverable([{role:'user',content:'Make a map'},{role:'user',content:'Do not make it'}])).toBeNull()})
  it('rejects generic bodies for structured deliverables',()=>{for(const c of [select('Make a map'),select('Compare two lodges'),select('Make a list'),select('Write an itinerary')])expect(deliverablePageError(c,{body:'There are several good options.'},[])).not.toBeNull();expect(deliverablePageError(select('Create a note'),{body:'I made the file.'},[])).not.toBeNull()})
