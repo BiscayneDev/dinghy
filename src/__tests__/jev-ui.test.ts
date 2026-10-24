@@ -11,7 +11,7 @@ const answer=(choice:string)=>({model:'jev-latest',provider:'typesafe',answers:{
 const gen={version:1,title:'Fictional calculator',fallback:'Illustrative calculation only. Enter a value to double it.',controls:[{id:'amount',label:'Value',type:'number',value:'5'}],code:'return "<p>Result: "+(Number(values.amount)*2)+"</p>"'}
 const block=':::pages\n'+JSON.stringify({version:1,generated:gen})+'\n:::'
 const ctx={userId:'fictional-u',telegramId:0,telegramChatId:0,name:'Example',timezone:'UTC',tokens:{}}
-const options={gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'test'}
+const options={gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'test',deliverable:null}
 afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs()})
 describe('Jev-owned UI decisions',()=>{
  it('exposes all implemented capabilities; no keyword selector',()=>{expect(Object.keys(UI_CATALOGUE)).toHaveLength(14);expect(uiChoiceQuestion().criteria).toHaveProperty('generate');expect(uiChoiceQuestion().instructions).toContain('hotel calculator')})

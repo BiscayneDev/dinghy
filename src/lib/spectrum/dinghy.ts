@@ -721,13 +721,28 @@ export async function chatWithTools(
     let uiDecision:UiDecision|undefined
     let generatedBlock:string|undefined
     let generationSourceFacts=''
-    if(jevUiEnabled(opts.sender)&&tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())){
-        // Enforced-private turns keep their existing catalogue path unchanged; no public Jev decision or novel generation.
+    // Enforced-private turns keep their existing catalogue path unchanged; no public Jev decision or novel generation.
+    const uiGateOpen=jevUiEnabled(opts.sender)&&tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())
+    if(uiGateOpen&&(contract?.kind==='itinerary'||contract?.kind==='map')){
+        // Itinerary and map artifacts are already owned by the deterministic deliverable pipeline:
+        // its server-side composition (the premium itinerary unit, the map artifact) IS the component
+        // choice for those turns. A second judgment can only contradict the selection - a 'text' route
+        // would fail the artifact closed, an unrelated catalogue pick would reject the pipeline's own
+        // composition, and 'generate' would divert from the shipped unit. Component routing governs
+        // the remaining asks.
+        await opts.onStage?.('context',`ui:jev:skipped:deliverable:${contract.kind}`)
+    }else if(uiGateOpen){
         try{
             uiDecision=await withinTurn(opts.deadlineAt,signal=>decideUi({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,request:currentRequest,context:JSON.stringify(history.slice(-4).map(m=>({role:m.role,content:m.content}))).slice(0,10000),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000),onUsage:opts.onUsage}))
-            messages.push({role:'system',content:uiDecisionNote(uiDecision)})
-            await opts.onStage?.('context',`ui:jev:${uiDecision.route}${uiDecision.route==='catalogue'?':'+uiDecision.component:''}`)
-            if(uiDecision.route==='generate')tools=[...tools,generationTool({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,modelFields:()=>modelFields(opts.model,routingNow()),request:currentRequest,deadlineAt:opts.deadlineAt,onUsage:opts.onUsage,onDiagnostic:d=>{void opts.onStage?.('tool',`generate_ui:failed:${d.reason}:http_${d.status??'none'}:elapsed_${d.elapsedMs}:limit_${d.attemptLimit??'unknown'}`)},publicationFacts:()=>generationSourceFacts,onGenerated:block=>{generatedBlock=block}})]
+            if(uiDecision.route==='text'&&contract){
+                // The deliverable selection already established that this turn wants an artifact; a
+                // text judgment cannot withdraw it. Keep the artifact path and record the override.
+                await opts.onStage?.('context',`ui:jev:text:overridden:deliverable:${contract.kind}`)
+            }else{
+                messages.push({role:'system',content:uiDecisionNote(uiDecision)})
+                await opts.onStage?.('context',`ui:jev:${uiDecision.route}${uiDecision.route==='catalogue'?':'+uiDecision.component:''}`)
+                if(uiDecision.route==='generate')tools=[...tools,generationTool({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,modelFields:()=>modelFields(opts.model,routingNow()),request:currentRequest,deadlineAt:opts.deadlineAt,onUsage:opts.onUsage,onDiagnostic:d=>{void opts.onStage?.('tool',`generate_ui:failed:${d.reason}:http_${d.status??'none'}:elapsed_${d.elapsedMs}:limit_${d.attemptLimit??'unknown'}`)},publicationFacts:()=>generationSourceFacts,onGenerated:block=>{generatedBlock=block}})]
+            }
         }catch{
             // Degrade to the un-gated path (today's behavior when the flag is off): the turn continues
             // without a Jev UI decision, catalogue enforcement or the generate tool. Never kill the reply.
@@ -1187,9 +1202,10 @@ export async function chatWithTools(
                     }
                     if(call.function.name==='create_file'&&!uiDecision){const b=(input as {body?:unknown}).body;const raw=typeof b==='string'?b.match(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/m)?.[1]:undefined;if(raw&&generatedPage(raw)!==null)throw new Error('Generated UI requires a Jev decision and coding step')}
                     if(uiDecision&&call.function.name==='create_file'){
-                        if(uiDecision.route==='text')throw new Error('Jev selected no UI for this request')
+                        if(uiDecision.route==='text'&&!contract)throw new Error('Jev selected no UI for this request')
                         const b=(input as {body?:unknown}).body
                         const raw=typeof b==='string'?b.match(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/m)?.[1]:undefined
+                        if(uiDecision.route==='text'&&raw&&generatedPage(raw)!==null)throw new Error('Jev did not select generation')
                         if(uiDecision.route==='catalogue'&&typeof b==='string'){const mismatch=catalogueOutputError(uiDecision,b);if(mismatch)throw new Error(mismatch)}
                         if(uiDecision.route==='catalogue'&&raw&&generatedPage(raw)!==null)throw new Error('Jev selected an existing catalogue component; generation is not allowed')
                         if(uiDecision.route==='generate'&&(!generatedBlock||typeof b!=='string'||!b.includes(generatedBlock)))throw new Error('Generate the novel UI first, then publish its exact returned Pages block')
