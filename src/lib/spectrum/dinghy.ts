@@ -720,6 +720,7 @@ export async function chatWithTools(
     }
     let uiDecision:UiDecision|undefined
     let generatedBlock:string|undefined
+    let generationPublishQueued=false
     let generationSourceFacts=''
     // Enforced-private turns keep their existing catalogue path unchanged; no public Jev decision or novel generation.
     const uiGateOpen=jevUiEnabled(opts.sender)&&tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())
@@ -1202,6 +1203,10 @@ export async function chatWithTools(
                     }
                     if(call.function.name==='create_file'&&!uiDecision){const b=(input as {body?:unknown}).body;const raw=typeof b==='string'?b.match(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/m)?.[1]:undefined;if(raw&&generatedPage(raw)!==null)throw new Error('Generated UI requires a Jev decision and coding step')}
                     if(uiDecision&&call.function.name==='create_file'){
+                        if(uiDecision.route==='generate'&&generatedBlock&&deliverableCompleted&&typeof (input as {body?:unknown}).body==='string'&&(input as {body:string}).body.includes(generatedBlock)){
+                            messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({note:'Generated UI already published this turn; not publishing a duplicate.'})})
+                            continue
+                        }
                         if(uiDecision.route==='text'&&!contract)throw new Error('Jev selected no UI for this request')
                         const b=(input as {body?:unknown}).body
                         const raw=typeof b==='string'?b.match(/^:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/m)?.[1]:undefined
@@ -1257,6 +1262,23 @@ export async function chatWithTools(
                     const captured = result.success ? sourceRecords.capture(call.function.name, result.data, new Date().toISOString()) : []
                     content = captured.length ? (itineraryResearch&&call.function.name==='web_search' ? JSON.stringify({search_leads:captured.map(r=>({url:r.url,title:r.title,content:r.content?.slice(0,600)??null})),note:'Search leads only. No candidate source IDs here. Read selected URLs with web_fetch; use only the source_records IDs from successful page reads for itinerary_candidates.'}) : sourceResultEnvelope(captured,TOOL_RESULT_CHAR_CAP)) : JSON.stringify(result.success ? result.data ?? {} : {error:result.error??'tool failed'})
                     if (result.success && call.function.name === 'create_file') deliverableCompleted = true
+                    // A successful Jev-authorized generation is a turn commitment: the validated
+                    // block must reach publication even when the model never issues create_file
+                    // (observed live failure: generation succeeded, the model re-called
+                    // generate_ui until the deadline, nothing was published). The synthetic call
+                    // joins this same batch so every guard above - exact-block match, schema,
+                    // source binding, deliverable shape - applies to it unchanged.
+                    if (call.function.name === 'generate_ui' && result.success && generatedBlock && !deliverableCompleted && !generationPublishQueued) {
+                        generationPublishQueued = true
+                        let genTitle = 'Generated UI'
+                        try {
+                            const specJson = generatedBlock.match(/:::pages[^\S\r\n]*\r?\n([\s\S]*?)\r?\n:::/)?.[1]
+                            const specTitle = specJson ? (JSON.parse(specJson) as { generated?: { title?: unknown } }).generated?.title : undefined
+                            if (typeof specTitle === 'string' && specTitle.trim()) genTitle = specTitle.trim()
+                        } catch { /* keep fallback title */ }
+                        calls.push({ id: `jev-gen-publish-${iteration}`, type: 'function', function: { name: 'create_file', arguments: JSON.stringify({ title: genTitle, body: generatedBlock }) } } as (typeof calls)[number])
+                        await opts.onStage?.('tool', 'generate_ui:auto_publish')
+                    }
                     if(call.function.name==='web_search')await opts.onStage?.('tool',result.success?'research:search_ok':'research:search_failed'+(result.publicSearchFailure?':'+result.publicSearchFailure:''))
                     if (result.success && call.function.name === 'web_fetch') mapResearchRead = !itineraryResearch||captured.some(r=>Boolean(r.content))
                     if (result.success && call.function.name === 'find_places') placesMismatch = unmatchedPlacesReply(result.data)
