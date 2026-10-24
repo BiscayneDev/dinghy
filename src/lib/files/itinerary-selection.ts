@@ -198,7 +198,7 @@ export function pickNameTexts(picks:Record<string,unknown>[],records:SR):string[
  return picks.flatMap((c:any)=>{const t=records.pageText(c.name.source);return t?[t.slice(c.name.start,c.name.end)]:[]})
    }
 
-export type PlanPick={kind:string;name:string;hours?:string}
+export type PlanPick={kind:string;name:string;hours?:string;durationMin?:number}
 const anchorMinutes=(h:string,m:string|undefined,ap:string)=>{let hh=Number(h)%12;if(ap.toLowerCase()==='pm')hh+=12;return hh*60+Number(m??'0')}
 const fmtTime=(t:number)=>{const h=Math.floor(t/60)%24;return (h%12||12)+':'+String(Math.round(t)%60).padStart(2,'0')+(h<12?'am':'pm')}
 /** The first clock-time anchor in the request (e.g. "wedding at 4pm"), reused by the agenda and the timed plan. */
@@ -234,7 +234,7 @@ export function timedPlanRows(request:string,picks:PlanPick[],now?:LocalNow):str
  const anchor=anchorCount===1?requestAnchor(request):undefined;if(!anchor)return []
  let stops=[...picks.filter(p=>p.kind==='activity'),...picks.filter(p=>p.kind==='restaurant')]
  if(!stops.length)return []
- const dur=(p:PlanPick)=>p.kind==='restaurant'?STOP_MINUTES.restaurant:STOP_MINUTES.activity
+ const dur=(p:PlanPick)=>p.durationMin??(p.kind==='restaurant'?STOP_MINUTES.restaurant:STOP_MINUTES.activity)
  const total=(list:PlanPick[])=>list.reduce((a,p)=>a+dur(p),0)
  const BUFFER=30,end=anchor.mins-BUFFER
  let start=end-total(stops)
@@ -248,10 +248,10 @@ export function timedPlanRows(request:string,picks:PlanPick[],now?:LocalNow):str
  const rows:string[]=[]
  for(const p of stops){
   const note=p.hours?`provider-reported hours ${p.hours}`:'hours not verified'
-  rows.push(`- ${fmtTime(t)} (est): ${p.kind==='restaurant'?'lunch at ':''}${p.name} — about ${dur(p)} min (estimate; ${note})`)
+  rows.push(`- ${fmtTime(t)} (est): ${p.kind==='restaurant'?'lunch at ':''}${p.name} — about ${dur(p)} min (${p.durationMin?'stated on the venue page':'estimate'}; ${note})`)
   t+=dur(p)
  }
- rows.push(`- ${fmtTime(end)} (est): reserved buffer before ${anchor.label} — travel and get-ready time; the venue is not verified`)
+ rows.push(`- ${fmtTime(end)} (est): reserved buffer before ${anchor.label} — travel and get-ready time; travel time and the venue are not verified`)
  return rows
 }
 

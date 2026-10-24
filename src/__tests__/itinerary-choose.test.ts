@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest'
 import {SourceRecords} from '@/lib/files/source-records'
-import {chooseVenuesPrompt,parseChosenVenues,venueVeto,chooseItineraryVenues} from '@/lib/files/itinerary-choose'
+import {chooseVenuesPrompt,parseChosenVenues,venueVeto,chooseItineraryVenues,pageStatedDurationMin} from '@/lib/files/itinerary-choose'
 import {namedLookupMatch,type ApiPlace} from '@/lib/files/geoapify-itinerary'
 
 const PAGE='Harbor Guide\nThe Reed Hotel has courtyard rooms and a rooftop pool.\nLantern Table serves wood-fired fish and seasonal vegetables.\nReed Workshop offers hands-on printmaking sessions for visitors.'
@@ -110,11 +110,14 @@ it('a hotel brand property suffix is not a provider alias and its address is nev
  expect(out.verified).toBe(0);expect(out.picks[0].place.name).toBe('Quay Suites Harbor');expect(out.picks[0].place.address).toBe('')
 })
 
-it('reserves a separately bounded final composition and never sends a second chooser request',()=>{
+it('reserves a separately bounded final composition, reuses it, and falls to exactly one bounded direct chooser call only when it produced nothing',()=>{
  const s=readFileSync('src/lib/spectrum/dinghy.ts','utf8')
  expect(s).toContain('chooseDeadline-Date.now()<65000')
  expect(s).toContain('Math.min(35000,chooseDeadline-Date.now()-10000)')
- expect(s).toContain('json:async()=>composed')
+ expect(s).toContain("if(composed!=='\"\"')return composed")
+ expect(s).toContain("itinerary:choose_direct'")
+ expect(s).toContain('itinerary:choose_direct_http:')
+ expect(s).toContain("throw new Error('direct choose call failed')")
  expect(s).not.toContain('routedJson')
  expect(s).toContain('itinerary:compose_error:')
  expect(s).toContain('itinerary:compose_http:')
@@ -156,4 +159,30 @@ it('typographic apostrophe differences bind the exact page spelling, never anoth
  const out=parseChosenVenues({venues:[{name:"Captain's Table",kind:'restaurant',why:'Grilled fish is served here.',sourceId:p.id}]},r)
  expect(out[0].name).toBe('Captain’s Table')
  expect(parseChosenVenues({venues:[{name:'Invented Table',kind:'restaurant',why:'Grilled fish is served here.',sourceId:p.id}]},r)).toHaveLength(0)
+})
+
+it('chooser prompt demands request-matched kinds and situational fit, not provider existence',()=>{
+ const {records}=fixture()
+ const prompt=chooseVenuesPrompt("activities and lunch before a 4pm wedding",records)
+ expect(prompt).toContain('ONLY the kinds of place the request actually asks for')
+ expect(prompt).toContain('access effort')
+ expect(prompt).toContain('typical visit duration')
+ expect(prompt).toContain('scheduled event')
+ expect(prompt).toContain('short pre-event window')
+})
+
+it('a claimed duration stands only when the venue page section states it',()=>{
+ const {records,page}=fixture()
+ // PAGE states no visit length: the model claim is dropped, never printed as page-stated.
+ const bare=parseChosenVenues({venues:[{name:'Reed Workshop',kind:'activity',why:'Visitors can join hands-on printmaking sessions here.',sourceId:page.id,duration:120}]},records)
+ expect(bare).toHaveLength(1);expect(bare[0].durationMin).toBeUndefined()
+ const r2=new SourceRecords()
+ const p2=r2.capture('web_fetch',{url:'https://fictional.test/g2',title:'G2',content:'Reed Workshop offers hands-on printmaking sessions. Most visits run about two hours.'},'fictional-g2')[0]
+ const backed=parseChosenVenues({venues:[{name:'Reed Workshop',kind:'activity',why:'Visitors can join hands-on printmaking sessions here.',sourceId:p2.id,duration:120}]},r2)
+ expect(backed[0].durationMin).toBe(120)
+ const p3=r2.capture('web_fetch',{url:'https://fictional.test/g3',title:'G3',content:'Reed Workshop offers hands-on printmaking sessions. The shop closes at 5pm.'},'fictional-g3')[0]
+ const wrong=parseChosenVenues({venues:[{name:'Reed Workshop',kind:'activity',why:'Visitors can join hands-on printmaking sessions here.',sourceId:p3.id,duration:45}]},r2)
+ expect(wrong[0].durationMin).toBeUndefined()
+ expect(pageStatedDurationMin('Tours last 90 minutes.',0,90)).toBe(true)
+ expect(pageStatedDurationMin('Tours last 90 minutes.',0,45)).toBe(false)
 })

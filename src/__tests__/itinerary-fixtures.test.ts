@@ -348,7 +348,7 @@ describe('phrases, category headings, plan from picks',()=>{
   expect(at('1:00pm (est)')).toBeLessThan(at('2:30pm (est)'))
   expect(at('2:30pm (est)')).toBeLessThan(at('3:30pm (est)'))
   expect(at('3:30pm (est)')).toBeLessThan(at('- 4pm: wedding'))
-  expect(a.body).toContain('reserved buffer before 4pm wedding — travel and get-ready time; the venue is not verified')
+  expect(a.body).toContain('reserved buffer before 4pm wedding — travel and get-ready time; travel time and the venue are not verified')
   expect(a.body).toContain('provider-reported hours Mo-Sa 09:00-17:00')
   expect(a.body).toContain('hours not verified')
  })

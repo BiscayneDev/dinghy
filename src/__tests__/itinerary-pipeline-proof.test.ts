@@ -344,9 +344,114 @@ it('a model-decided itinerary intent completes the rendered itinerary for a time
  // Chronology: estimated stops in order, then the reserved buffer, then the fixed anchor row last.
  const iMuseum=md.indexOf('1:00pm (est): Harbor Museum'),iCafe=md.indexOf('2:30pm (est): lunch at Harbor Cafe'),iBuffer=md.indexOf('3:30pm (est): reserved buffer before 4pm wedding'),iWedding=md.indexOf('- 4pm: wedding')
  expect(iMuseum).toBeGreaterThan(-1);expect(iCafe).toBeGreaterThan(iMuseum);expect(iBuffer).toBeGreaterThan(iCafe);expect(iWedding).toBeGreaterThan(iBuffer)
- expect(md).toContain('travel and get-ready time; the venue is not verified')
+ expect(md).toContain('travel and get-ready time; travel time and the venue are not verified')
  expect(md).toContain('hours not verified');expect(md).toContain('provider-reported hours Mo-Sa 09:00-17:00')
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
  expect(html).toContain('Harbor Museum');expect(html).toContain('Harbor Cafe');expect(html).toContain('Geoapify');expect(html).not.toContain('apiKey=')
  await mkdir('/tmp/model-intent-proof',{recursive:true});await writeFile('/tmp/model-intent-proof/page.html',html);await writeFile('/tmp/model-intent-proof/file.pdf',made.bytes);await writeFile('/tmp/model-intent-proof/card.png',made.card!);await writeFile('/tmp/model-intent-proof/report.json',JSON.stringify({synthetic:true,noSend:true,intent:'model-decided',legacySelected:null,stages,completed:true,httpMocked:true,publishMocked:true},null,2))
+})
+
+it('compose outage still selects from fetched page evidence through one bounded direct choose, dropping unrequested kinds',async()=>{
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-10-24T09:00:00Z'))
+ vi.stubEnv('TAVILY_API_KEY','fictional-key')
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-key')
+ const url='https://harbor.test/visitors'
+ const ask="What's fun to do in Harbor. The wedding is at 4pm and I need some activities and a restaurant for lunch."
+ const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
+ const files=fileToolsFor(),stages:string[]=[],requests:any[]=[]
+ published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
+ vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
+  if(String(u).startsWith('https://api.geoapify.com/')){const gu=new URL(String(u));if(gu.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,city:'Harbor',state_code:'FL',country_code:'us',rank:{importance:0.9,confidence:1}}]}));const cat=gu.searchParams.get('categories')||'';const feat=(name:string,cats:string[],place_id:string,extra:Record<string,string>={})=>({properties:{name,categories:cats,lat:25,lon:-80,place_id,formatted:'42 Quay St, Harbor',...extra}});return new Response(JSON.stringify({features:cat.startsWith('accommodation')?[feat('Harbor Grand Hotel',['accommodation.hotel'],'hotel')]:cat.startsWith('catering')?[feat('Harbor Cafe',['catering.cafe'],'cafe',{opening_hours:'Mo-Sa 09:00-17:00'})]:[feat('Harbor Museum',['entertainment.museum'],'museum')]}))}
+  if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Museum and public listings.'}]}))
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Museum houses maritime paintings and model ships. Most visits run about two hours. Harbor Cafe serves lunch on Quay St. Harbor Grand Hotel has courtyard rooms. Hours, prices and availability unverified.</body></html>')
+  const reasonReq=JSON.parse(init.body)
+  // The research conversation's compose call is down (upstream provider status passed through by the gateway).
+  if(reasonReq.max_tokens===2500&&reasonReq.tool_choice==='none')return new Response('fictional upstream outage',{status:404})
+  // The one bounded direct choose: the chooser reads the fetched page itself.
+  if(reasonReq.max_tokens===1800&&reasonReq.tool_choice==='none'){const prompt=String(reasonReq.messages[0].content);expect(prompt).toContain('Choose real places');const pid=JSON.parse(prompt.split('Pages: ')[1].split('\nKnown verified places')[0]).find((pg:any)=>pg.url===url).sourceId;return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({venues:[{name:'Harbor Museum',kind:'activity',why:'Houses maritime paintings and model ships to explore.',sourceId:pid,duration:120},{name:'Harbor Cafe',kind:'restaurant',why:'Serves lunch on Quay St, a short walk from the museum.',sourceId:pid},{name:'Harbor Grand Hotel',kind:'hotel',why:'Courtyard rooms on the page, but nobody asked for a hotel.',sourceId:pid}]})}}]}))}
+  if(reasonReq.max_tokens===451)return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({checks:[{name:'Harbor Museum',ok:true},{name:'Harbor Cafe',ok:true},{name:'Harbor Grand Hotel',ok:true}]})}}]}))
+  if(reasonReq.max_tokens===450)return new Response(JSON.stringify({choices:[{message:{content:'{"candidates":[]}'}}]}))
+  if(reasonReq.max_tokens===500){const spans=JSON.parse(reasonReq.messages[1].content.split('Accepted spans: ')[1]);return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({why:'The source describes: '+spans[0].text,claims:[{text:spans[0].text,spanIds:[spans[0].id]}]})}}]}))}
+  if(reasonReq.max_tokens===180){const packet=JSON.parse(reasonReq.messages.find((m:any)=>String(m.content).includes('Packet: ')).content.split('Packet: ')[1]);return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({spanIds:[packet.spans.find((s:any)=>s.text.includes('maritime'))?.id].filter(Boolean)})}}]}))}
+  if(reasonReq.max_tokens===120)return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({verdict:'yes',reason:'none'})}}]}))
+  if(reasonReq.max_tokens===2200)return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({activities:[{line:1,decision:'recommend',spanId:'span1_1',unknowns:[]}]})}}]}))
+  if(reasonReq.max_tokens===900){const packet=JSON.parse(reasonReq.messages.find((m:any)=>String(m.content).includes('Evidence: ')).content.split('Evidence: ')[1])[0]
+   const reasons=[packet.venue.line].map(line=>({line,why:'The source describes maritime paintings and model ships.',claims:[{text:'Maritime paintings and model ships',evidenceIds:['ev'+line+'_1']}],unknowns:['Hours and availability not checked']}))
+   return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({reasons})}}]}))}
+  requests.push(reasonReq)
+  if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
+  const name=requests.length===1?'web_search':'select_itinerary_candidates'
+  const menu=requests.at(-1).messages.map((m:any)=>String(m.content)).find((c:string)=>/L\d+ \| (?:hotel|restaurant|activity) \|/.test(c))||''
+  const picks=[...menu.matchAll(/L(\d+) \| (hotel|restaurant|activity) \| (Harbor Museum|Harbor Cafe) \|/g)].map(m=>({line:Number(m[1]),kind:m[2]}))
+  const args=name==='web_search'?{query:'Harbor attractions'}:{candidates:picks}
+  return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
+ }))
+ const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
+ const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,deliverable:{kind:'itinerary',request:ask},onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ expect(result.deliverable).toEqual({kind:'itinerary',state:'completed'});expect(published).toHaveBeenCalledTimes(1);expect(files.files()).toHaveLength(1)
+ // The compose outage is visible, and the direct choose recovered selection from the fetched page.
+ expect(stages).toContain('itinerary:compose_http:404')
+ expect(stages).toContain('itinerary:choose_direct')
+ expect(stages).toContain('itinerary:choose:c3_v3_k2')
+ const md=files.files()[0].markdown!
+ // Picks carry page-evidence reasons, not provider-listing order; the unrequested hotel the chooser nominated is dropped by the request's kinds.
+ expect(md).toContain('Harbor Museum');expect(md).toContain('Harbor Cafe')
+ expect(md).not.toContain('Harbor Grand Hotel');expect(md).not.toContain('provider-listed')
+ // The time-anchored plan still composes around the wedding.
+ expect(md).toContain('- 4pm: wedding')
+ // The stop length comes from the venue page, not the fixed per-kind default, and the
+ // chronology is ordered without overlapping anchors: museum 12:30-2:30, lunch 2:30-3:30, buffer, wedding.
+ expect(md).toContain('about 120 min (stated on the venue page; hours not verified)')
+ const iM=md.indexOf('12:30pm (est): Harbor Museum'),iC=md.indexOf('2:30pm (est): lunch at Harbor Cafe'),iB=md.indexOf('3:30pm (est): reserved buffer'),iW=md.indexOf('- 4pm: wedding')
+ expect(iM).toBeGreaterThan(-1);expect(iC).toBeGreaterThan(iM);expect(iB).toBeGreaterThan(iC);expect(iW).toBeGreaterThan(iB)
+ const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
+ expect(html).toContain('Harbor Museum');expect(html).toContain('Harbor Cafe');expect(html).not.toContain('Harbor Grand Hotel');expect(html).not.toContain('apiKey=')
+ await mkdir('/tmp/direct-choose-proof',{recursive:true});await writeFile('/tmp/direct-choose-proof/page.html',html);await writeFile('/tmp/direct-choose-proof/file.pdf',files.files()[0].bytes)
+})
+
+it('when no pick can be verified the fixed obligation survives and no provider-order stops are manufactured',async()=>{
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-10-24T09:00:00Z'))
+ vi.stubEnv('TAVILY_API_KEY','fictional-key')
+ vi.stubEnv('GEOAPIFY_API_KEY','fictional-key')
+ const url='https://harbor.test/visitors'
+ const ask="What's fun to do in Harbor. The wedding is at 4pm and I need some activities and a restaurant for lunch."
+ const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Synthetic test',timezone:'UTC',tokens:{}}
+ const files=fileToolsFor(),stages:string[]=[],requests:any[]=[]
+ published.mockResolvedValue({url:'https://fictional-pipeline.here.now/',slug:'fictional-pipeline',expiresAt:'2030-06-11T00:00:00Z'})
+ vi.stubGlobal('fetch',vi.fn(async(u,init)=>{
+  if(String(u).startsWith('https://api.geoapify.com/')){const gu=new URL(String(u));if(gu.pathname.includes('geocode'))return new Response(JSON.stringify({results:[{lat:25,lon:-80,city:'Harbor',state_code:'FL',country_code:'us',rank:{importance:0.9,confidence:1}}]}));const cat=gu.searchParams.get('categories')||'';const feat=(name:string,cats:string[],place_id:string,extra:Record<string,string>={})=>({properties:{name,categories:cats,lat:25,lon:-80,place_id,formatted:'42 Quay St, Harbor',...extra}});return new Response(JSON.stringify({features:cat.startsWith('catering')?[feat('Harbor Cafe',['catering.cafe'],'cafe',{opening_hours:'Mo-Sa 09:00-17:00'})]:[feat('Harbor Museum',['entertainment.museum'],'museum')]}))}
+  if(String(u)==='https://api.tavily.com/search')return new Response(JSON.stringify({results:[{title:'Harbor public visitors',url,content:'Museum and public listings.'}]}))
+  if(String(u)===url)return new Response('<html><title>Harbor public visitors</title><body>Harbor Museum houses maritime paintings and model ships. Harbor Cafe serves lunch on Quay St. Hours, prices and availability unverified.</body></html>')
+  const reasonReq=JSON.parse(init.body)
+  if(reasonReq.max_tokens===2500&&reasonReq.tool_choice==='none')return new Response('fictional upstream outage',{status:404})
+  if(reasonReq.max_tokens===1800&&reasonReq.tool_choice==='none')return new Response('fictional upstream outage',{status:404})
+  if(reasonReq.max_tokens===450)return new Response(JSON.stringify({choices:[{message:{content:'{"candidates":[]}'}}]}))
+  requests.push(reasonReq)
+  if(requests.at(-1).max_tokens===8){requests.pop();return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:'yes'}}]}))}
+  const name=requests.length===1?'web_search':'select_itinerary_candidates'
+  const menu=requests.at(-1).messages.map((m:any)=>String(m.content)).find((c:string)=>/L\d+ \| (?:hotel|restaurant|activity) \|/.test(c))||''
+  const picks=[...menu.matchAll(/L(\d+) \| (hotel|restaurant|activity) \| (Harbor Museum|Harbor Cafe) \|/g)].map(m=>({line:Number(m[1]),kind:m[2]}))
+  const args=name==='web_search'?{query:'Harbor attractions'}:{candidates:picks}
+  return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(requests.length),function:{name,arguments:JSON.stringify(args)}}]}}]}))
+ }))
+ const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
+ const result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,deliverable:{kind:'itinerary',request:ask},onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ // Both chooser paths were down: nothing evidence-qualified exists, so the run publishes the supplied
+ // agenda with the fixed obligation preserved and honestly unverified recommendations - never provider-order stops.
+ expect(result.deliverable).toEqual({kind:'itinerary',state:'completed'});expect(files.files()).toHaveLength(1)
+ expect(stages).toContain('itinerary:compose_http:404')
+ expect(stages).toContain('itinerary:choose_direct_http:404')
+ expect(stages).toContain('itinerary:choose_call_failed')
+ expect(stages).toContain('itinerary:choose:c0_v0_k0')
+ expect(stages).toContain('itinerary:choose:no_evidence_picks')
+ expect(stages).toContain('itinerary:agenda_only_fallback')
+ expect(stages).not.toContain('itinerary:choose_direct')
+ const md=files.files()[0].markdown!
+ await mkdir('/tmp/agenda-only-proof',{recursive:true});await writeFile('/tmp/agenda-only-proof/page.html',published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString())
+ expect(md).toMatch(/4pm.*wedding/)
+ expect(md).toContain('No hotel, restaurant or activity is recommended')
+ expect(md).toContain('no recommendation could be verified')
+ expect(md).not.toContain('Harbor Museum')
+ expect(md).not.toContain('Harbor Cafe')
+ expect(md).not.toMatch(/provider[- ](type|listed)/i)
 })
