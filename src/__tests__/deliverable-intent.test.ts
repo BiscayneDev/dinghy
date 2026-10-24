@@ -8,6 +8,14 @@ describe('model-owned deliverable intent',()=>{
   expect(deliverableIntentEnabled()).toBe(false)
   vi.stubEnv(DELIVERABLE_INTENT_FLAG,'on');expect(deliverableIntentEnabled()).toBe(true)
  })
+ it('scopes to a sender allowlist for a single-owner live test',()=>{
+  vi.stubEnv(DELIVERABLE_INTENT_FLAG,'+12035168398')
+  expect(deliverableIntentEnabled('+12035168398')).toBe(true)
+  expect(deliverableIntentEnabled('+15550001111')).toBe(false)
+  expect(deliverableIntentEnabled()).toBe(false)
+  vi.stubEnv(DELIVERABLE_INTENT_FLAG,'+12035168398, +15550001111')
+  expect(deliverableIntentEnabled('+15550001111')).toBe(true)
+ })
  it('selects the itinerary the keyword contract misses',async()=>{
   const c=await call(decision('itinerary'))
   expect(c?.kind).toBe('itinerary');expect(c?.request).toContain('wedding is at 4pm')

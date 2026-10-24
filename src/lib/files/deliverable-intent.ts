@@ -5,7 +5,14 @@ import type { GatewayUsage } from '@/lib/spectrum/metering'
  * asks for (including none). The legacy keyword matcher is only the outage fallback when
  * the decision call is unavailable or uncertain. Flag-gated; default keeps legacy behavior. */
 export const DELIVERABLE_INTENT_FLAG = 'DINGHY_JEV_DELIVERABLE'
-export function deliverableIntentEnabled(): boolean { return process.env[DELIVERABLE_INTENT_FLAG] === 'on' }
+/** 'on' enables globally; any other value is a comma-separated sender-handle allowlist
+ * (e.g. '+1203…'), so a single-owner live test needs no broader flag infrastructure. */
+export function deliverableIntentEnabled(sender?: string): boolean {
+    const raw = process.env[DELIVERABLE_INTENT_FLAG] ?? ''
+    if (raw === 'on') return true
+    if (!sender) return false
+    return raw.split(',').map((s) => s.trim()).filter(Boolean).includes(sender)
+}
 
 const KINDS: DeliverableKind[] = ['map', 'comparison', 'list', 'itinerary', 'note']
 

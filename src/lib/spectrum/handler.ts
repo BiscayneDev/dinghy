@@ -1019,7 +1019,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     // what (if any) deliverable every turn asks for. The keyword matcher is only the outage
     // fallback when the decision is unavailable or uncertain; with the flag off it stays the selector.
     let deliverable: DeliverableContract | null
-    if (deliverableIntentEnabled()) {
+    if (deliverableIntentEnabled(senderAddress(message.sender))) {
         deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full) })
     } else {
         deliverable = selectDeliverable(full)
