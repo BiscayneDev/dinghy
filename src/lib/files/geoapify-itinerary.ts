@@ -119,7 +119,7 @@ export function apiItineraryBody(request:string,picks:{kind:string;name:string;h
  body=ensureRequestAgenda(body,request.replace(/([a-z])(\d{1,2}(?::\d{2})?\s*(?:am|pm)\b)/gi,'$1 $2')).body
  body=ensureWorkingSessions(body,request).body
  body=ensurePlanFromPicks(body,request,picks,now).body
- body=body.replace(/^- Timing to confirm\.\n/gm,'')
+ body=body.replace(/^- Timing to confirm\.\n?/gm,'')
  return body+'\n\n'+GEOAPIFY_ATTRIBUTION
 }
 
