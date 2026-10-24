@@ -59,3 +59,24 @@ it('writes fictional artifacts for pixel inspection',async()=>{
  await writeFile('/tmp/identity-proof/places.html',renderHtml(placesDoc))
  await writeFile('/tmp/identity-proof/briefing.html',renderHtml(briefingDoc))
 })
+
+it('an inner block title matching the doc title is visually suppressed but kept for a11y',()=>{
+ const pages=(title:string)=>`:::pages\n${JSON.stringify({version:1,components:[{id:'pack',type:'checklist',title,rows:[{id:'a',label:'A',detail:'Fictional'}]}]})}\n:::`
+ // Case-only difference still suppresses; the title stays in the DOM for accessible context.
+ const dup=renderHtml({title:'Fictional Harbor Weekend Packing',body:pages('Fictional harbor weekend packing')})
+ expect(dup).toContain('SUPPRESS={&quot;pack&quot;:true}')
+ expect(dup).toContain('clip:rect(0 0 0 0)')
+ expect(dup).toContain('Fictional harbor weekend packing')
+ // A distinct section heading is never suppressed.
+ const distinct=renderHtml({title:'Fictional Harbor Weekend Packing',body:pages('Before you leave')})
+ expect(distinct).toContain('SUPPRESS={}')
+ // Multi-component page: only the matching title is suppressed.
+ const multi=renderHtml({title:'Harbor weekend',body:`:::pages\n${JSON.stringify({version:1,components:[{id:'a',type:'checklist',title:'harbor weekend',rows:[{id:'x',label:'X',detail:'Fictional'}]},{id:'b',type:'checklist',title:'On the boat',rows:[{id:'y',label:'Y',detail:'Fictional'}]}]})}\n:::`})
+ expect(multi).toContain('SUPPRESS={&quot;a&quot;:true}')
+ // Generated UI: same rule, baked into the child at build time.
+ const gen={version:1,title:'fictional fuel splitter',fallback:'Fictional fallback.',controls:[{id:'n',label:'N',type:'number',value:'1'}],code:'return "<p>ok</p>"'}
+ const gdup=renderHtml({title:'Fictional Fuel Splitter',body:`:::pages\n${JSON.stringify({version:1,generated:gen})}\n:::`})
+ expect(gdup).toContain('class=&quot;vh&quot;')
+ const gdistinct=renderHtml({title:'Trip plan',body:`:::pages\n${JSON.stringify({version:1,generated:gen})}\n:::`})
+ expect(gdistinct).not.toContain('class=&quot;vh&quot;')
+})

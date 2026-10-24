@@ -281,7 +281,7 @@ function renderSources(lines: string[]): string {
 }
 
 function renderBlock(name: BlockName, lines: string[], opts: HtmlOptions = {}): string {
-    if(name==='pages')return pageRuntimeHtml(lines.join('\n'))
+    if(name==='pages')return pageRuntimeHtml(lines.join('\n'),{docTitle:opts.docTitle})
     const inline = (t: string) => safe.parseInline(t) as string
     if (name === 'facts') {
         const chips = lines.slice(0, 8).map(pair).map((p) => `<div class="fact"><span class="fk">${esc(p.k)}</span><span class="fv">${inline(p.v)}</span></div>`)
@@ -346,6 +346,8 @@ export interface HtmlOptions {
     imageryState?: 'ready' | 'fallback'
     /** Relative link to a downloadable copy (e.g. the PDF next to the page). */
     download?: { href: string; label: string }
+    /** Document title, used to suppress visually duplicated inner block titles (kept for a11y). */
+    docTitle?: string
 }
 
 // "> Pick: Hotel X" (or "> **Pick:** ...") leads the page as a highlighted verdict card.
@@ -403,7 +405,7 @@ function identityCoverHtml(cover:{eyebrow:string;title:string;sub:string}):strin
 export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const body: string[] = []
     for (const seg of splitBlocks(doc.body)) {
-      if (seg.kind === 'block') { body.push(renderBlock(seg.name, seg.lines, opts)); continue }
+      if (seg.kind === 'block') { body.push(renderBlock(seg.name, seg.lines, { ...opts, docTitle: doc.title })); continue }
       for (const t of marked.lexer(seg.text)) {
         if (t.type === 'heading') {
             const h = t as Tokens.Heading
