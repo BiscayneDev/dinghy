@@ -12,7 +12,7 @@ import {chatWithTools} from '@/lib/spectrum/dinghy'
 import {fileToolsFor} from '@/lib/files/tool'
 import {writeFile,mkdir} from 'node:fs/promises'
 const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Candidate lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' ')[0].slice(1)):9999}
-afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();vi.clearAllMocks()})
+afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs();vi.clearAllMocks()})
 it('mandatory actual production schema compiles first attempt, renders HTML/PDF/localcard and queues one file without sends',async()=>{
  vi.stubEnv('TAVILY_API_KEY','fictional-key')
  const url='https://harbor.test/visitors'
@@ -303,6 +303,7 @@ it('standard founder itinerary runs routed search then publishes two hotels thre
  for(const [_k,name,why]of rows){expect(markdown).toContain(name);expect(html).toContain(why)}expect(markdown).toContain(pageUrl);expect(markdown).toMatch(/10:00|10am/);expect(markdown).toMatch(/working sessions/i)
 })
 it('a model-decided itinerary intent completes the rendered itinerary for a time-anchored ask the keyword contract misses',async()=>{
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-10-24T09:00:00Z'))
  vi.stubEnv('TAVILY_API_KEY','fictional-key')
  vi.stubEnv('GEOAPIFY_API_KEY','fictional-key')
  const url='https://harbor.test/visitors'
@@ -340,8 +341,10 @@ it('a model-decided itinerary intent completes the rendered itinerary for a time
  // The fixed ask is a usable time-bounded plan: the wedding anchor is stated cleanly, stops are ordered before it with explicit estimates and a buffer, hours are provider-reported or honestly unverified.
  expect(md).toContain('- 4pm: wedding');expect(md).not.toContain('wedding is')
  expect(md).not.toContain('timing for these is not set')
- const iMuseum=md.indexOf('1:00pm (est): Harbor Museum'),iCafe=md.indexOf('2:30pm (est): lunch at Harbor Cafe'),iBuffer=md.indexOf('3:30pm (est): buffer before 4pm wedding')
- expect(iMuseum).toBeGreaterThan(-1);expect(iCafe).toBeGreaterThan(iMuseum);expect(iBuffer).toBeGreaterThan(iCafe)
+ // Chronology: estimated stops in order, then the reserved buffer, then the fixed anchor row last.
+ const iMuseum=md.indexOf('1:00pm (est): Harbor Museum'),iCafe=md.indexOf('2:30pm (est): lunch at Harbor Cafe'),iBuffer=md.indexOf('3:30pm (est): reserved buffer before 4pm wedding'),iWedding=md.indexOf('- 4pm: wedding')
+ expect(iMuseum).toBeGreaterThan(-1);expect(iCafe).toBeGreaterThan(iMuseum);expect(iBuffer).toBeGreaterThan(iCafe);expect(iWedding).toBeGreaterThan(iBuffer)
+ expect(md).toContain('travel and get-ready time; the venue is not verified')
  expect(md).toContain('hours not verified');expect(md).toContain('provider-reported hours Mo-Sa 09:00-17:00')
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
  expect(html).toContain('Harbor Museum');expect(html).toContain('Harbor Cafe');expect(html).toContain('Geoapify');expect(html).not.toContain('apiKey=')

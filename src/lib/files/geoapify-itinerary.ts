@@ -1,6 +1,6 @@
 import {SourceRecords} from './source-records'
 import {decodeEntities} from './entities'
-import {ensureRequestAgenda,ensureWorkingSessions,ensurePlanFromPicks} from './itinerary-selection'
+import {ensureRequestAgenda,ensureWorkingSessions,ensurePlanFromPicks,type LocalNow} from './itinerary-selection'
 export type PlaceKind='hotel'|'restaurant'|'activity'
 export type ApiPlace={line:number;kind:PlaceKind;name:string;address:string;lat:number;lon:number;id:string;source:string;start:number;end:number;distance?:number;cuisine?:string;attractionType?:string;hotelType?:string;hours?:string;neighborhood?:string;website?:string;discovered?:boolean;webReason?:string;webSource?:string}
 export const GEOAPIFY_ATTRIBUTION='Venue names, categories and addresses: Geoapify · © OpenStreetMap contributors. Provider listings do not confirm current hours, availability, prices or quality.'
@@ -112,13 +112,13 @@ export function compileApiPlaces(input:unknown,places:ApiPlace[],records:SourceR
 }
 
 /** API mode owns the agenda too: freehand model cuisine, aliases and recommendation scaffolding never reach the body. */
-export function apiItineraryBody(request:string,picks:{kind:string;name:string;hours?:string}[]):string{
+export function apiItineraryBody(request:string,picks:{kind:string;name:string;hours?:string}[],now?:LocalNow):string{
  const days=[...new Set((request.match(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi)||[]).map(d=>d[0].toUpperCase()+d.slice(1).toLowerCase()))]
  let body=(days.length?days:['Day 1']).map(d=>'## '+d+'\n- Timing to confirm.').join('\n\n')
  if(/\bweekend\b/i.test(request)&&!days.some(d=>d==='Saturday'||d==='Sunday'))body+='\n\n## Weekend\n- Timing to confirm.'
  body=ensureRequestAgenda(body,request.replace(/([a-z])(\d{1,2}(?::\d{2})?\s*(?:am|pm)\b)/gi,'$1 $2')).body
  body=ensureWorkingSessions(body,request).body
- body=ensurePlanFromPicks(body,request,picks).body
+ body=ensurePlanFromPicks(body,request,picks,now).body
  body=body.replace(/^- Timing to confirm\.\n/gm,'')
  return body+'\n\n'+GEOAPIFY_ATTRIBUTION
 }

@@ -215,18 +215,35 @@ export function requestAnchor(request:string):{mins:number;label:string;day?:str
  return {mins:anchorMinutes(m[1],m[2],m[3]),label:`${m[1]}${m[2]?':'+m[2]:''}${m[3].toLowerCase()}${what?' '+what:''}`,day:dayForItem(request,m.index)}
 }
 const STOP_MINUTES={restaurant:60,activity:90} as const
+export type LocalNow={mins:number;weekday:string}
+/** The user's local clock for past-stop checks; undefined when the timezone cannot be resolved. */
+export function localNow(timezone?:string):LocalNow|undefined{
+ try{
+  const tz=timezone||'UTC',d=new Date()
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'numeric',minute:'numeric',hour12:false,weekday:'long'}).formatToParts(d)
+  const get=(t:string)=>parts.find(p=>p.type===t)?.value
+  return {mins:(Number(get('hour'))%24)*60+Number(get('minute')),weekday:get('weekday')!}
+ }catch{return undefined}
+}
 /** Ordered timed stops ending ahead of a fixed request anchor. Every time is an explicit estimate; hours are
- * shown only when a provider supplied them, otherwise stated as unverified. Nothing is invented. */
-export function timedPlanRows(request:string,picks:PlanPick[]):string[]{
+ * shown only when a provider supplied them, otherwise stated as unverified. Stops that would already be in the
+ * past on the anchor's day are dropped earliest-first; when nothing still fits, the plan stays honestly untimed.
+ * The closing buffer is reserved movement/get-ready time, never a promised arrival at an unverified venue. */
+export function timedPlanRows(request:string,picks:PlanPick[],now?:LocalNow):string[]{
  const anchorCount=[...request.matchAll(new RegExp(TIME_RE.source,'gi'))].length
  const anchor=anchorCount===1?requestAnchor(request):undefined;if(!anchor)return []
- const stops=[...picks.filter(p=>p.kind==='activity'),...picks.filter(p=>p.kind==='restaurant')]
+ let stops=[...picks.filter(p=>p.kind==='activity'),...picks.filter(p=>p.kind==='restaurant')]
  if(!stops.length)return []
  const dur=(p:PlanPick)=>p.kind==='restaurant'?STOP_MINUTES.restaurant:STOP_MINUTES.activity
- const BUFFER=30,total=stops.reduce((a,p)=>a+dur(p),0),end=anchor.mins-BUFFER
- const start=end-total
+ const total=(list:PlanPick[])=>list.reduce((a,p)=>a+dur(p),0)
+ const BUFFER=30,end=anchor.mins-BUFFER
+ let start=end-total(stops)
+ // The anchor is today (unnamed or naming this weekday): never propose a stop that is already past.
+ if(now&&(!anchor.day||anchor.day.toLowerCase()===now.weekday.toLowerCase())){
+  while(stops.length&&start<now.mins){stops=stops.slice(1);start=end-total(stops)}
+ }
  // Timed rows only when the stops fit in a sane window before the anchor; otherwise the plan stays honestly untimed.
- if(start<9*60)return []
+ if(!stops.length||start<9*60)return []
  let t=start
  const rows:string[]=[]
  for(const p of stops){
@@ -234,12 +251,12 @@ export function timedPlanRows(request:string,picks:PlanPick[]):string[]{
   rows.push(`- ${fmtTime(t)} (est): ${p.kind==='restaurant'?'lunch at ':''}${p.name} — about ${dur(p)} min (estimate; ${note})`)
   t+=dur(p)
  }
- rows.push(`- ${fmtTime(end)} (est): buffer before ${anchor.label}`)
+ rows.push(`- ${fmtTime(end)} (est): reserved buffer before ${anchor.label} — travel and get-ready time; the venue is not verified`)
  return rows
 }
 
 /** When the model body is stripped of its day plan, the server restates a plan only from facts it holds: the user's requested days and the verified picks. With a clock-time anchor the plan is ordered timed estimates with a buffer; without one it stays honestly untimed. */
-export function ensurePlanFromPicks(body:string,request:string,picks:PlanPick[]):{body:string;added:number}{
+export function ensurePlanFromPicks(body:string,request:string,picks:PlanPick[],now?:LocalNow):{body:string;added:number}{
  const lc=body.toLowerCase()
  picks=picks.filter(p=>p.name&&!lc.includes(p.name.toLowerCase()))
  if(!picks.length)return {body,added:0}
@@ -248,13 +265,14 @@ export function ensurePlanFromPicks(body:string,request:string,picks:PlanPick[])
  const rows:string[]=[]
  const stay=by('hotel')
  if(stay.length)rows.push(`- Stay: ${stay.join(' or ')}`)
- const timed=timedPlanRows(request,picks)
+ const timed=timedPlanRows(request,picks,now)
  const lines=body.split('\n')
  const anchor=requestAnchor(request)
  const first=anchor?.day??days[0]
  if(timed.length){
   rows.push(...timed)
-  insertUnderDay(lines,first,rows,false)
+  // Top insertion keeps the day chronological: estimated stops land above the fixed anchor row.
+  insertUnderDay(lines,first,rows,true)
   return {body:lines.join('\n'),added:rows.length}
  }
  const eat=by('restaurant'),do_=by('activity')
