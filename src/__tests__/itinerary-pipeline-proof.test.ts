@@ -336,7 +336,7 @@ it('a model-decided itinerary intent completes the rendered itinerary for a time
  expect(stages).toContain('deliverable:itinerary');expect(stages.some(x=>x.startsWith('itinerary:places_api:ready_'))).toBe(true)
  expect(requests).toHaveLength(1)
  const made=files.files()[0];expect(made.bytes.subarray(0,4).toString()).toBe('%PDF')
- const md=made.markdown
+ const md=made.markdown!
  // The fixed ask is a usable time-bounded plan: the wedding anchor is stated cleanly, stops are ordered before it with explicit estimates and a buffer, hours are provider-reported or honestly unverified.
  expect(md).toContain('- 4pm: wedding');expect(md).not.toContain('wedding is')
  expect(md).not.toContain('timing for these is not set')
