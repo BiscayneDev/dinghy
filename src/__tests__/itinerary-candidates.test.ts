@@ -61,26 +61,31 @@ function expectAgendaOnly(file:{execute:{mock:{calls:unknown[][]}}}){
  expect(input.body).toContain('10am');expect(input.body).toContain('Working sessions')
 }
 
-const povText='Linden House. Rooms from $210 a night. Rated 4.6 by guests. Two minutes from Alderbrook station. Quiet courtyard rooms face the garden. Harbor Annex. Rooms from $140 a night. Rated 4.1 by guests. Next to the ferry. Marrow dinner room seats twenty. Open Friday at 8:30. Tower Boat Tour runs five hours.'
+const povText='Linden House. Rooms from $210 a night. Rated 4.6 by guests. Two minutes on foot from Alderbrook station. Quiet courtyard rooms face the garden. Harbor Annex. Rooms from $140 a night. Rated 4.1 by guests. Fifteen minutes from the station, beside the ferry. Marrow serves a set dinner in a twenty-seat room. Dinner Friday and Saturday, 5:30 to 10. Reservations by phone. Tower Boat Tour runs five hours.'
 const ex=(excerpt:string)=>({source:'src2',field:'content',excerpt})
 const povRegistry=()=>{const r=new SourceRecords();r.capture('web_search',{results:[{url,title:'Stay guide',content:'snippet'}]},'2030-01-01');r.capture('web_fetch',{url,title:'Stay guide',content:povText},'2030-01-01');return r}
+const povAsk='Plan a short stay in Alderbrook. Hotel and restaurant recommendations.'
+const povBody='## Friday\n- 10:00am: Office visit, as you said.\n- Dinner: see my picks above.\n\n## Saturday\n- A slow morning.'
 const pov=[
- {kind:'hotel',name:ex('Linden House'),price:ex('$210'),rating:ex('4.6'),area:ex('Alderbrook station'),reason:'Quiet rooms',catch:'Rates unverified',role:'favorite',slot:'Stay in Alderbrook',fit:'You wanted a calm base for working mornings.',evidence:ex('Quiet courtyard rooms face the garden.')},
- {kind:'hotel',name:ex('Harbor Annex'),price:ex('$140'),rating:ex('4.1'),reason:'Cheaper',catch:'Further from the station',role:'runner_up',slot:'Stay in Alderbrook',fit:'Wins if you would rather save than be close.',evidence:ex('Next to the ferry.')},
- {kind:'restaurant',name:ex('Marrow'),reason:'Small dinner room',catch:'Hours unverified',role:'favorite',slot:'Friday dinner',fit:'A table for two fits a first night in.',evidence:ex('Open Friday at 8:30.')},
- {kind:'activity',name:ex('Tower Boat Tour'),role:'skip',slot:'Saturday',fit:'Too long for a short stay.',evidence:ex('Tower Boat Tour runs five hours.')}
+ {kind:'hotel',name:ex('Linden House'),price:ex('$210'),rating:ex('4.6'),area:ex('Two minutes on foot from Alderbrook station'),catch:'Rates and dates unverified',role:'favorite',slot:'Stay in Alderbrook',fit:'You said you want a calm base after the office visit.',evidence:ex('Quiet courtyard rooms face the garden.')},
+ {kind:'hotel',name:ex('Harbor Annex'),price:ex('$140'),rating:ex('4.1'),area:ex('Fifteen minutes from the station'),catch:'Rates and dates unverified',role:'runner_up',slot:'Stay in Alderbrook',fit:'Better if keeping the room cost down matters more than walking to the station.',evidence:ex('beside the ferry')},
+ {kind:'restaurant',name:ex('Marrow'),reason:'Set dinner in a small room',catch:'Dinner hours are on the page; whether a table is free that night is not checked',role:'favorite',slot:'Friday dinner',fit:'A small room suits the quiet dinner you described.',evidence:ex('a set dinner in a twenty-seat room')},
+ {kind:'activity',name:ex('Tower Boat Tour'),role:'skip',slot:'Saturday',fit:'Five hours is too much for a short stay.',evidence:ex('Tower Boat Tour runs five hours.')}
 ]
-const compileAll=(cands:unknown[])=>{const r=povRegistry(),c=compileItineraryCandidates({...input,itinerary_candidates:cands},r);if('error'in c)return c;const bound=bindFileSources(c.input,r,true);if('error'in bound)return bound;const sourced=compileItinerarySources(bound.input,bound.usedSources,[url]);return sourced}
+const compileAll=(cands:unknown[])=>{const r=povRegistry(),c=compileItineraryCandidates({...input,itinerary_candidates:cands,body:povBody},r);if('error'in c)return c;const bound=bindFileSources(c.input,r,true);if('error'in bound)return bound;const sourced=compileItinerarySources(bound.input,bound.usedSources,[url]);return sourced}
 describe('point of view picks',()=>{
- it('whole journey: bound facts on cards, per-slot take with page evidence, skip has no card, gate passes',()=>{
+ it('whole journey: picks first, bound facts side by side, skip has no card, no duplicate reason list, gate passes',()=>{
   const c=compileAll(pov);if('error'in c)throw Error(c.error)
   const b=(c.input as any).body as string
-  expect(b).toContain('## My take');expect(b).toContain('**Stay in Alderbrook**');expect(b).toContain('**Friday dinner**')
-  expect(b).toMatch(/Favorite: Linden House\. For you: You wanted a calm base[^\n]*Their page says: "Quiet courtyard rooms face the garden\."/)
-  expect(b).toMatch(/Runner-up: Harbor Annex\. For you: Wins if/);expect(b).toMatch(/Skip: Tower Boat Tour\./)
-  expect(b).toContain('Linden House | $210 | 4.6 | Alderbrook station | Rates unverified');expect(b).toContain('Harbor Annex | $140 | 4.1')
-  expect(b).not.toMatch(/\|[^\n]*Tower Boat Tour/);expect(b).not.toContain('{{source')
-  expect(b.indexOf('## My take')).toBeLessThan(b.indexOf('## Hotels'));expect(itineraryPageError(b,ask,[url])).toBeNull()
+  expect(b.startsWith('## My take')).toBe(true);expect(b).toContain('**Stay in Alderbrook**');expect(b).toContain('**Friday dinner**')
+  expect(b).toMatch(/Pick: Linden House\. You said you want a calm base[^\n]*Their page says: "Quiet courtyard rooms face the garden\."/)
+  expect(b).toMatch(/Instead: Harbor Annex\. Better if keeping the room cost down[^\n]*"beside the ferry"/)
+  expect(b).toContain('Side by side, from their pages: Linden House ($210; Two minutes on foot from Alderbrook station) vs Harbor Annex ($140; Fifteen minutes from the station).')
+  expect(b).toMatch(/Skip: Tower Boat Tour\./)
+  expect(b).toContain('Linden House | $210 | 4.6 | Two minutes on foot from Alderbrook station | Rates and dates unverified');expect(b).toContain('Harbor Annex | $140 | 4.1')
+  expect(b).toContain('Marrow | unknown | Set dinner in a small room | Dinner hours are on the page; whether a table is free that night is not checked')
+  expect(b).not.toContain('Selection reasons');expect(b).not.toMatch(/\|[^\n]*Tower Boat Tour/);expect(b).not.toContain('{{source');expect(b).not.toContain('Plans to confirm')
+  expect(itineraryPageError(b,povAsk,[url])).toBeNull()
  })
  it('roles are optional: no filler, no take section',()=>{const c=compileItineraryCandidates(input,registry());if('error'in c)throw Error(c.error);expect((c.input as any).body).not.toContain('My take')})
  it('several stops keep their own favorite per slot',()=>{
@@ -96,7 +101,7 @@ describe('point of view picks',()=>{
   const {file,result,stage}=await run([call('web_search'),call('web_fetch'),call('create_file',{...input,itinerary_candidates:pov})],povText)
   expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).not.toHaveBeenCalledWith('tool','repair:file_once')
   const sent=(file.execute.mock.calls[0] as any[])[0] as {body:string}
-  expect(sent.body).toContain('Favorite: Linden House.');expect(sent.body).toContain('Their page says: "Quiet courtyard rooms face the garden."');expect(result.deliverable?.state).toBe('completed')
+  expect(sent.body).toContain('Pick: Linden House.');expect(sent.body).toContain('Their page says: "Quiet courtyard rooms face the garden."');expect(result.deliverable?.state).toBe('completed')
  })
  it('follow-up: saved profile and a settled choice reach the composer; open slots stay open',async()=>{
   const {renderMemoryBlock}=await import('@/lib/spectrum/memory')
@@ -105,4 +110,8 @@ describe('point of view picks',()=>{
   const sys=JSON.stringify(req[0].messages[0]);expect(sys).toContain('Prefers quiet places');expect(sys).toContain('Chose: Stay in Alderbrook: Linden House')
   const all=JSON.stringify(req);expect(all).toContain('do not re-pitch that slot')
  })
+})
+it('picks keep the itinerary cover instead of a bare first-row hero',async()=>{
+ const {renderHtml}=await import('@/lib/files/render'),c=compileAll(pov);if('error'in c)throw Error(c.error)
+ expect(renderHtml({title:'A short stay in Alderbrook',body:(c.input as any).body} as any)).toContain('itinerary-cover')
 })

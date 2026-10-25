@@ -381,7 +381,7 @@ export function itineraryCover(doc:DinghyDoc):{name:string;destination:string;re
   const stops=(splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='places') as {lines?:string[]}|undefined)?.lines?.length??0
   return {name,destination:[days?days+(days===1?' day':' days'):'',stops?stops+(stops===1?' stop':' stops'):''].filter(Boolean).join(' · '),researched:true}
  }
- if(!/Selection reasons:/i.test(doc.body))return null
+ if(!/Selection reasons:/i.test(doc.body)&&!/^## My take\s*$/m.test(doc.body))return null
  const stay=splitBlocks(doc.body).find(s=>s.kind==='block'&&s.name==='stay')
  if(!stay||stay.kind!=='block')return null
  return {name,destination:'Hotels, dining and activities',researched:/^## Recommendation evidence\s*$/m.test(doc.body)}
