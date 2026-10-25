@@ -1,6 +1,25 @@
 import {SourceRecords,type SourceRef} from './source-records'
-export const ITINERARY_CANDIDATE_NOTE='For researched recommendation itineraries, itinerary_candidates is REQUIRED. Supply itinerary_candidates: [{kind:"hotel"|"restaurant"|"activity",name:{source:"src2",field:"content",excerpt:"Exact venue name from page content"},reason:"your stated selection reason",catch:"your stated caveat",price?:SourceRef,rating?:SourceRef,area?:SourceRef}]. Names and optional facts must be exact complete excerpts from a successful page read, not search snippets or page titles. Only include explicitly selected and typed candidates; never invent a venue or infer its kind from a title. Omit absent optional facts; the server writes unknown. Keep reason/catch as your own selection judgments, not unsupported factual claims. The server builds stay/options columns and sources. Body keeps the supplied agenda/day headings/working sessions; do NOT write :::stay, :::options or :::sources when supplying candidates. Do NOT include sources as an argument. Do NOT bind null/absent fields (including published_date); write unknown instead. Prefer literal excerpt over counting offsets. Excerpt must occur verbatim in the selected page content; numeric start/end remain supported. Use only fields listed as available in source_records.'
+export const ITINERARY_CANDIDATE_NOTE='For researched recommendation itineraries, itinerary_candidates is REQUIRED. Supply itinerary_candidates: [{kind:"hotel"|"restaurant"|"activity",name:{source:"src2",field:"content",excerpt:"Exact venue name from page content"},reason:"your stated selection reason",catch:"your stated caveat; for restaurants say whether it is opening hours or table availability that is unverified",price?:SourceRef,rating?:SourceRef,area?:SourceRef}]. Names and optional facts must be exact complete excerpts from a successful page read, not search snippets or page titles. Optionally add role favorite|runner_up|skip with slot (a short label for the decision, e.g. "Stay in Lisbon" or "Friday dinner"; one favorite per slot, a runner_up needs a favorite in its slot, a skip needs none), fit (one specific line on why THIS venue suits this person, drawn only from what they said or their saved profile, never venue facts; a runner_up fit names the condition under which it beats the favorite; its price/area refs are shown side by side from the pages) and evidence (exact page excerpt backing the pick). A skip candidate gets no card. Only include explicitly selected and typed candidates; never invent a venue or infer its kind from a title. Omit absent optional facts; the server writes unknown. Keep reason/catch as your own selection judgments, not unsupported factual claims. The server builds stay/options columns and sources. Body keeps the supplied agenda/day headings/working sessions; do NOT write :::stay, :::options or :::sources when supplying candidates. Do NOT include sources as an argument. Do NOT bind null/absent fields (including published_date); write unknown instead. Prefer literal excerpt over counting offsets. Excerpt must occur verbatim in the selected page content; numeric start/end remain supported. Use only fields listed as available in source_records.'
 const escapeCell=(s:string)=>s.replace(/&/g,'&amp;').replace(/[<>\\`*_{}\[\]()!#|:]/g,c=>`&#${c.charCodeAt(0)};`).replace(/[\r\n]/g,' ')
+const ROLE_LABEL={favorite:'Pick',runner_up:'Instead',skip:'Skip'} as const
+const KIND_LABEL={hotel:'Stay',restaurant:'Dining',activity:'Activity'} as const
+/** Typed picks only: the model states a role and a fit line; the server renders the labels and keeps the venue name a bound page literal. */
+type Pick={kind:'hotel'|'restaurant'|'activity';role:string;name:string;fit:string;evidence:string;slot:string;price:string;area:string}
+function takeSection(picks:Pick[]):{text:string}|{error:string}{
+ const slots=[...new Map(picks.map(p=>[p.slot.toLowerCase(),p.slot])).entries()]
+ const out:string[]=[]
+ for(const [key,label] of slots){
+  const here=picks.filter(p=>p.slot.toLowerCase()===key)
+  if(here.filter(p=>p.role==='favorite').length>1)return {error:'Candidate role: only one favorite per slot.'}
+  if(here.some(p=>p.role==='runner_up')&&!here.some(p=>p.role==='favorite'))return {error:'Candidate role: a runner-up needs a favorite in the same slot.'}
+  const line=(p:Pick)=>`- ${ROLE_LABEL[p.role as keyof typeof ROLE_LABEL]}: ${p.name}. ${p.fit} Their page says: "${p.evidence}"`
+  const fav=here.find(p=>p.role==='favorite'),alt=here.find(p=>p.role==='runner_up')
+  const side=fav&&alt?[fav,alt].map(p=>p.name+(p.price!=='unknown'||p.area!=='unknown'?' ('+[p.price!=='unknown'?p.price:'',p.area!=='unknown'?p.area:''].filter(Boolean).join('; ')+')':'')):[]
+  const compare=fav&&alt&&(fav.price!=='unknown'||alt.price!=='unknown'||fav.area!=='unknown'||alt.area!=='unknown')?`- Side by side, from their pages: ${side.join(' vs ')}.`:''
+  out.push(`**${label}**\n`+['favorite','runner_up','skip'].flatMap(r=>[...here.filter(p=>p.role===r).map(line),...(r==='runner_up'&&compare?[compare]:[])]).join('\n'))
+ }
+ return {text:out.length?'## My take\nMy read of what suits you. Quotes and the figures beside them come from each venue\'s own page. Hours, prices and table availability stay unverified unless a page said so.\n\n'+out.join('\n\n'):''}
+}
 /** No prose parsing or semantic guessing. Typed model selections stay selections,
  * page-bound facts stay literal source text, renderer columns are server-owned. */
 export function compileItineraryCandidates(input:unknown,records:SourceRecords,opts?:{appendCards?:boolean}):{input:unknown;compiled:boolean}|{error:string} {
@@ -9,6 +28,8 @@ export function compileItineraryCandidates(input:unknown,records:SourceRecords,o
  if(i.itinerary_candidates===undefined)return {input,compiled:false}
  if(typeof i.body!=='string'||!Array.isArray(i.itinerary_candidates)||!i.itinerary_candidates.length||i.itinerary_candidates.length>12)return {error:'Typed itinerary candidates require a body and1-12 explicitly selected candidates.'}
  if(/(?:^|\n)\s*:::(stay|options|sources)\b/i.test(i.body))return {error:'Do not mix typed itinerary candidates with manual stay/options/sources blocks.'}
+ const picks:Pick[]=[]
+ if(i.itinerary_candidates.every((x:any)=>x&&x.role==='skip'))return {error:'Typed itinerary candidates require a body and1-12 explicitly selected candidates (not only skips).'}
  const groups:{hotel:string[];restaurant:string[];activity:string[]}={hotel:[],restaurant:[],activity:[]}
  const refToken=(v:unknown,required=false):string|{error:string}=>{
   if(v===undefined&&!required)return 'unknown'
@@ -32,21 +53,32 @@ export function compileItineraryCandidates(input:unknown,records:SourceRecords,o
   if(!raw||typeof raw!=='object'||Array.isArray(raw))return {error:'Each candidate must be explicitly typed.'}
   const c=raw as Record<string,unknown>,kind=c.kind
   if(kind!=='hotel'&&kind!=='restaurant'&&kind!=='activity')return {error:'Candidate kind must be hotel, restaurant or activity.'}
-  if(Object.keys(c).some(k=>!['kind','name','reason','catch','price','rating','area'].includes(k)))return {error:'Unknown candidate field; no file was published.'}
+  if(Object.keys(c).some(k=>!['kind','name','reason','catch','price','rating','area','role','fit','slot','evidence'].includes(k)))return {error:'Unknown candidate field; no file was published.'}
   if(kind!=='hotel'&&(c.rating!==undefined||c.area!==undefined))return {error:'Rating/area fields are hotel-only; no candidate facts are silently dropped.'}
+  if(c.role!==undefined&&c.role!=='favorite'&&c.role!=='runner_up'&&c.role!=='skip')return {error:'Candidate role must be favorite, runner_up or skip.'}
+  if(c.fit!==undefined&&(typeof c.fit!=='string'||(c.fit as string).length>300))return {error:'Candidate fit must be literal short text.'}
+  if(c.slot!==undefined&&(typeof c.slot!=='string'||!(c.slot as string).trim()||(c.slot as string).length>60))return {error:'Candidate slot must be a short label.'}
+  if(c.role===undefined&&(c.fit!==undefined||c.slot!==undefined||c.evidence!==undefined))return {error:'Candidate fit, slot and evidence need a role.'}
+  if(c.role!==undefined&&!(typeof c.fit==='string'&&c.fit.trim()))return {error:'A role needs a fit line: why it suits this person.'}
+  if(c.role!==undefined&&c.evidence===undefined)return {error:'A role needs an evidence excerpt from the venue page.'}
   for(const k of ['reason','catch'])if(c[k]!==undefined&&(typeof c[k]!=='string'||(c[k] as string).length>500))return {error:'Candidate reason/catch must be literal short text.'}
-  const facts=['name','price','rating','area'].map(k=>refToken(c[k],k==='name'))
+  const facts=['name','price','rating','area','evidence'].map(k=>refToken(c[k],k==='name'))
   const error=facts.find(v=>typeof v!=='string');if(error&&typeof error!=='string')return error
-  const [name,price,rating,area]=facts as string[],reason=escapeCell(typeof c.reason==='string'&&c.reason.trim()?c.reason:'unknown'),catchText=escapeCell(typeof c.catch==='string'&&c.catch.trim()?c.catch:'unknown')
+  const [name,price,rating,area,evidence]=facts as string[],reason=escapeCell(typeof c.reason==='string'&&c.reason.trim()?c.reason:'unknown'),catchText=escapeCell(typeof c.catch==='string'&&c.catch.trim()?c.catch:'unknown')
+  if(c.role==='favorite'||c.role==='runner_up'||c.role==='skip')picks.push({kind,role:c.role,name,fit:escapeCell(c.fit as string),evidence,price,area,slot:escapeCell(typeof c.slot==='string'&&c.slot.trim()?c.slot.trim():KIND_LABEL[kind])})
+  if(c.role==='skip')continue
   const source=(c.name as SourceRef).source,link=`{{source:${source}.url}}`
   if(kind==='hotel')groups.hotel.push(`${name} | ${price} | ${rating} | ${area} | ${catchText} | | ${link}`+'\n')
   else groups[kind].push(`${name} | ${price} | ${reason} | ${catchText} ${link}`+'\n')
  }
  if(groups.hotel.length>6||groups.restaurant.length>5||groups.activity.length>5)return {error:'Candidate groups exceed renderer limits:6hotels,5restaurants,5activities.'}
  let body=i.body.trimEnd()
+ const take=takeSection(picks)
+ if('error'in take)return take
+ if(take.text)body=take.text+'\n\n'+body
  // Provider-picks path: consolidated venue cards (why + hours + actions + source) are built from the validated provider records; appending a second set of option cards would duplicate the same venues.
  if(opts?.appendCards===false){const {itinerary_candidates:_c2,...rest2}=i;return {input:{...rest2,body},compiled:true}}
- if(groups.hotel.length){body+='\n\n## Hotels\n:::stay\n'+groups.hotel.join('')+':::';const reasons=i.itinerary_candidates.filter((c:any)=>c.kind==='hotel').map((c:any)=>typeof c.reason==='string'&&c.reason.trim()?escapeCell(c.reason):'unknown');body+='\n\nSelection reasons:\n'+reasons.map((r:string)=>'- '+r).join('\n')}
+ if(groups.hotel.length){body+='\n\n## Hotels\n:::stay\n'+groups.hotel.join('')+':::';const reasons=picks.length?[]:i.itinerary_candidates.filter((c:any)=>c.kind==='hotel').map((c:any)=>typeof c.reason==='string'&&c.reason.trim()?escapeCell(c.reason):'unknown');if(reasons.length)body+='\n\nSelection reasons:\n'+reasons.map((r:string)=>'- '+r).join('\n')}
  for(const kind of ['restaurant','activity'] as const)if(groups[kind].length)body+='\n\n## '+(kind==='restaurant'?'Dining':'Activities')+'\n:::options\n'+groups[kind].join('')+':::'
  const {itinerary_candidates:_c,...rest}=i
  return {input:{...rest,body},compiled:true}
@@ -72,6 +104,8 @@ export function itineraryCandidateErrorCode(error:string):string {
  if(error.startsWith('Unknown candidate field'))return 'candidate_key'
  if(error.startsWith('Rating/area'))return 'hotel_only'
  if(error.startsWith('Candidate reason/catch'))return 'judgment_shape'
+ if(error.startsWith('Candidate role'))return 'role'
+ if(error.startsWith('Candidate fit')||error.startsWith('Candidate slot')||error.startsWith('A role needs'))return 'fit'
  if(error.startsWith('Candidate groups'))return 'group_limit'
  return 'other'
 }

@@ -29,7 +29,7 @@ describe('typed itinerary candidate compiler',()=>{
 const tool=(name:string,data:unknown={})=>({name,description:'fictional',inputSchema:{type:'object'},execute:vi.fn(async()=>({success:true,data}))})
 const call=(name:string,i:unknown={})=>({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:name,function:{name,arguments:JSON.stringify(i)}}]}}]})
 const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Fictional',timezone:'UTC',tokens:{}}
-async function run(seq:unknown[]){let n=0;const req:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_u,init)=>{req.push(JSON.parse(init.body));return new Response(JSON.stringify(seq[n++]??{choices:[{finish_reason:'stop',message:{content:'Done'}}]}))}));const file=tool('create_file'),stage=vi.fn(async()=>{}),result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'fictional',onStage:stage},[tool('web_search',{results:[{url,title:'Harbor',content:'lead'}]}),tool('web_fetch',{url,title:'Harbor',content:text}),file],ctx);return{file,stage,result,req}}
+async function run(seq:unknown[],page:string=text,memory?:string){let n=0;const req:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_u,init)=>{req.push(JSON.parse(init.body));return new Response(JSON.stringify(seq[n++]??{choices:[{finish_reason:'stop',message:{content:'Done'}}]}))}));const file=tool('create_file'),stage=vi.fn(async()=>{}),result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'fictional',onStage:stage,memory},[tool('web_search',{results:[{url,title:'Harbor',content:'lead'}]}),tool('web_fetch',{url,title:'Harbor',content:page}),file],ctx);return{file,stage,result,req}}
 it('first-attempt typed candidates compile, bind, sourcecompile and pass existing gate',async()=>{const {file,stage,result,req}=await run([call('web_search'),call('create_file',input)]);expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','itinerary:candidates_compiled');expect(stage).toHaveBeenCalledWith('tool','itinerary:sources_compiled');expect(stage).not.toHaveBeenCalledWith('tool','repair:file_once');expect(result.deliverable?.state).toBe('completed');expect(req).toHaveLength(2)})
 it('invalid typed candidate uses exactly onecreate_file repair then succeeds',async()=>{const {file,stage,result,req}=await run([call('web_search'),call('create_file',{...input,itinerary_candidates:[{kind:'unknown',name:ref(0,10)}]}),call('create_file',input)]);expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','invalid:itinerary_candidates');expect(stage).toHaveBeenCalledWith('tool','repair:file_once');expect(req[2].tools.map((t:any)=>t.function.name)).toEqual(['select_itinerary_candidates']);expect(result.deliverable?.state).toBe('completed')})
 it('second invalid typed call exhausts repair and publishes agenda only',async()=>{const bad={...input,itinerary_candidates:[]};const {file,stage,result}=await run([call('web_search'),call('create_file',bad),call('create_file',bad)]);expectAgendaOnly(file);expect(stage).toHaveBeenCalledWith('tool','repair:file_exhausted');expect(result.deliverable?.state).toBe('completed')})
@@ -60,3 +60,58 @@ function expectAgendaOnly(file:{execute:{mock:{calls:unknown[][]}}}){
  expect(input.body).not.toMatch(/:::stay|:::options|:::sources|Harbor Inn|Harbor Cafe|Harbor Museum/)
  expect(input.body).toContain('10am');expect(input.body).toContain('Working sessions')
 }
+
+const povText='Linden House. Rooms from $210 a night. Rated 4.6 by guests. Two minutes on foot from Alderbrook station. Quiet courtyard rooms face the garden. Harbor Annex. Rooms from $140 a night. Rated 4.1 by guests. Fifteen minutes from the station, beside the ferry. Marrow serves a set dinner in a twenty-seat room. Dinner Friday and Saturday, 5:30 to 10. Reservations by phone. Tower Boat Tour runs five hours.'
+const ex=(excerpt:string)=>({source:'src2',field:'content',excerpt})
+const povRegistry=()=>{const r=new SourceRecords();r.capture('web_search',{results:[{url,title:'Stay guide',content:'snippet'}]},'2030-01-01');r.capture('web_fetch',{url,title:'Stay guide',content:povText},'2030-01-01');return r}
+const povAsk='Plan a short stay in Alderbrook. Hotel and restaurant recommendations.'
+const povBody='## Friday\n- 10:00am: Office visit, as you said.\n- Dinner: see my picks above.\n\n## Saturday\n- A slow morning.'
+const pov=[
+ {kind:'hotel',name:ex('Linden House'),price:ex('$210'),rating:ex('4.6'),area:ex('Two minutes on foot from Alderbrook station'),catch:'Rates and dates unverified',role:'favorite',slot:'Stay in Alderbrook',fit:'You said you want a calm base after the office visit.',evidence:ex('Quiet courtyard rooms face the garden.')},
+ {kind:'hotel',name:ex('Harbor Annex'),price:ex('$140'),rating:ex('4.1'),area:ex('Fifteen minutes from the station'),catch:'Rates and dates unverified',role:'runner_up',slot:'Stay in Alderbrook',fit:'Better if keeping the room cost down matters more than walking to the station.',evidence:ex('beside the ferry')},
+ {kind:'restaurant',name:ex('Marrow'),reason:'Set dinner in a small room',catch:'Dinner hours are on the page; whether a table is free that night is not checked',role:'favorite',slot:'Friday dinner',fit:'A small room suits the quiet dinner you described.',evidence:ex('a set dinner in a twenty-seat room')},
+ {kind:'activity',name:ex('Tower Boat Tour'),role:'skip',slot:'Saturday',fit:'Five hours is too much for a short stay.',evidence:ex('Tower Boat Tour runs five hours.')}
+]
+const compileAll=(cands:unknown[])=>{const r=povRegistry(),c=compileItineraryCandidates({...input,itinerary_candidates:cands,body:povBody},r);if('error'in c)return c;const bound=bindFileSources(c.input,r,true);if('error'in bound)return bound;const sourced=compileItinerarySources(bound.input,bound.usedSources,[url]);return sourced}
+describe('point of view picks',()=>{
+ it('whole journey: picks first, bound facts side by side, skip has no card, no duplicate reason list, gate passes',()=>{
+  const c=compileAll(pov);if('error'in c)throw Error(c.error)
+  const b=(c.input as any).body as string
+  expect(b.startsWith('## My take')).toBe(true);expect(b).toContain('**Stay in Alderbrook**');expect(b).toContain('**Friday dinner**')
+  expect(b).toMatch(/Pick: Linden House\. You said you want a calm base[^\n]*Their page says: "Quiet courtyard rooms face the garden\."/)
+  expect(b).toMatch(/Instead: Harbor Annex\. Better if keeping the room cost down[^\n]*"beside the ferry"/)
+  expect(b).toContain('Side by side, from their pages: Linden House ($210; Two minutes on foot from Alderbrook station) vs Harbor Annex ($140; Fifteen minutes from the station).')
+  expect(b).toMatch(/Skip: Tower Boat Tour\./)
+  expect(b).toContain('Linden House | $210 | 4.6 | Two minutes on foot from Alderbrook station | Rates and dates unverified');expect(b).toContain('Harbor Annex | $140 | 4.1')
+  expect(b).toContain('Marrow | unknown | Set dinner in a small room | Dinner hours are on the page; whether a table is free that night is not checked')
+  expect(b).not.toContain('Selection reasons');expect(b).not.toMatch(/\|[^\n]*Tower Boat Tour/);expect(b).not.toContain('{{source');expect(b).not.toContain('Plans to confirm')
+  expect(itineraryPageError(b,povAsk,[url])).toBeNull()
+ })
+ it('roles are optional: no filler, no take section',()=>{const c=compileItineraryCandidates(input,registry());if('error'in c)throw Error(c.error);expect((c.input as any).body).not.toContain('My take')})
+ it('several stops keep their own favorite per slot',()=>{
+  const two=[pov[0],{...pov[2],kind:'hotel',name:ex('Harbor Annex'),price:undefined,rating:undefined,slot:'Stay in Ferrybridge'}]
+  const c=compileAll(two);if('error'in c)throw Error(c.error);expect((c.input as any).body).toContain('**Stay in Ferrybridge**')
+ })
+ it.each([
+  ['favorite without fit',[{...pov[0],fit:undefined}]],['role without evidence',[{...pov[0],evidence:undefined}]],['evidence not on the page',[{...pov[0],evidence:ex('Beachfront with a spa')}]],['bad role',[{...pov[0],role:'best'}]],
+  ['two favorites in a slot',[pov[0],{...pov[1],role:'favorite'}]],['runner-up without favorite',[pov[1]]],['only skips',[pov[3]]],['fit without role',[{...pov[0],role:undefined}]],['long fit',[{...pov[0],fit:'x'.repeat(301)}]],['long slot',[{...pov[0],slot:'x'.repeat(61)}]]
+ ])('rejects %s',(_l,v)=>expect(compileAll(v as unknown[])).toHaveProperty('error'))
+ it('escapes controls and never lets fit or slot create links or blocks',()=>{const c=compileAll([{...pov[0],fit:'a|b\n:::stay {{source:src9.url}} <b>x</b>',slot:'S|:::stay'}]);if('error'in c)throw Error(c.error);const b=(c.input as any).body as string;expect(b).not.toContain('{{source:src9');expect(b).not.toMatch(/\n:::stay[^\n]*x/)})
+ it('stays inside create_file: roles reach the created body with bound quotes, and the file completes',async()=>{
+  const {file,result,stage}=await run([call('web_search'),call('web_fetch'),call('create_file',{...input,itinerary_candidates:pov})],povText)
+  expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).not.toHaveBeenCalledWith('tool','repair:file_once')
+  const sent=(file.execute.mock.calls[0] as any[])[0] as {body:string}
+  expect(sent.body).toContain('Pick: Linden House.');expect(sent.body).toContain('Their page says: "Quiet courtyard rooms face the garden."');expect(result.deliverable?.state).toBe('completed')
+ })
+ it('follow-up: saved profile and a settled choice reach the composer; open slots stay open',async()=>{
+  const {renderMemoryBlock}=await import('@/lib/spectrum/memory')
+  const memory=renderMemoryBlock({profile:'- Prefers quiet places',summaries:[],facts:[],plans:['Alderbrook trip (Nov 6) · Chose: Stay in Alderbrook: Linden House [source: user]'],files:[]})
+  const {req}=await run([call('web_search'),call('web_fetch'),call('create_file',{...input,itinerary_candidates:pov})],povText,memory)
+  const sys=JSON.stringify(req[0].messages[0]);expect(sys).toContain('Prefers quiet places');expect(sys).toContain('Chose: Stay in Alderbrook: Linden House')
+  const all=JSON.stringify(req);expect(all).toContain('do not re-pitch that slot')
+ })
+})
+it('picks keep the itinerary cover instead of a bare first-row hero',async()=>{
+ const {renderHtml}=await import('@/lib/files/render'),c=compileAll(pov);if('error'in c)throw Error(c.error)
+ expect(renderHtml({title:'A short stay in Alderbrook',body:(c.input as any).body} as any)).toContain('itinerary-cover')
+})

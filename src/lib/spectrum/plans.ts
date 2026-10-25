@@ -23,6 +23,8 @@ export interface Plan {
     people: string[]
     details: string
     source: PlanSource
+    /** Decision labels the user withdrew (cancelled or changed their mind). Applied on merge, never stored. */
+    clear_choices?: string[]
 }
 
 export interface PlanRow extends Plan {
@@ -78,7 +80,8 @@ export function cleanPlans(raw: unknown): Plan[] {
         if (starts_on && ends_on && ends_on < starts_on) [starts_on, ends_on] = [ends_on, starts_on]
         const kind = (KINDS.has(String(p?.kind)) ? p.kind : 'trip') as PlanKind
         const source = (SOURCES.has(String(p?.source)) ? p.source : 'user') as PlanSource
-        out.push({ title, kind, starts_on, ends_on, places: list(p?.places), people: list(p?.people), details, source })
+        const clear = list(p?.clear_choices, 6)
+        out.push({ title, kind, starts_on, ends_on, places: list(p?.places), people: list(p?.people), details, source, ...(clear.length ? { clear_choices: clear } : {}) })
         if (out.length >= MAX_PLANS_PER_UPDATE) break
     }
     return out
@@ -107,6 +110,19 @@ export function matchPlan(next: Plan, existing: PlanRow[]): PlanRow | null {
     return null
 }
 
+const CHOSE = /^\s*Chose:\s*([^:\n]{1,60}):/i
+const slotOf = (l: string) => CHOSE.exec(l)?.[1].trim().toLowerCase()
+/** "Chose: <slot>: <venue>" lines record decisions the user made. An update that rewrites details must not drop a decision it does not mention; a newer line for the same slot wins; a withdrawn slot (clear) is removed from both sides and stays removed. */
+export function mergeChoices(prev: string, next: string, clear: string[] = []): string {
+    const cleared = new Set(clear.map((c) => c.trim().toLowerCase()))
+    const dropCleared = (text: string) => text.split('\n').filter((l) => { const k = slotOf(l); return !(k && cleared.has(k)) }).join('\n')
+    const cleanNext = dropCleared(next)
+    if (!next) return dropCleared(prev)
+    const nextSlots = new Set(cleanNext.split('\n').map(slotOf).filter(Boolean))
+    const kept = dropCleared(prev).split('\n').filter((l) => { const k = slotOf(l); return k && !nextSlots.has(k) })
+    return (kept.length ? [...kept, cleanNext].join('\n') : cleanNext).slice(0, 2000)
+}
+
 /** Merge an update into a stored plan: new values win, lists union, details kept unless replaced. */
 export function mergePlan(prev: PlanRow, next: Plan): Plan {
     const union = (a: string[], b: string[]) => {
@@ -120,7 +136,7 @@ export function mergePlan(prev: PlanRow, next: Plan): Plan {
         ends_on: next.ends_on ?? prev.ends_on,
         places: union(prev.places, next.places),
         people: union(prev.people, next.people),
-        details: next.details || prev.details,
+        details: mergeChoices(prev.details, next.details, next.clear_choices),
         source: next.source || prev.source,
     }
 }
@@ -155,7 +171,7 @@ export async function savePlans(userId: string, chatGuid: string, plans: Plan[])
     let n = 0
     for (const p of plans) {
         const hit = matchPlan(p, existing)
-        const row = hit ? mergePlan(hit, p) : p
+        const { clear_choices: _c, ...row } = hit ? mergePlan(hit, p) : { ...p, details: mergeChoices('', p.details, p.clear_choices) }
         const res = hit
             ? await supabase.from('dinghy_plans').update({ ...row, updated_at: new Date().toISOString() }).eq('id', hit.id)
             : await supabase.from('dinghy_plans').insert({ ...row, user_id: userId, chat_guid: chatGuid })
