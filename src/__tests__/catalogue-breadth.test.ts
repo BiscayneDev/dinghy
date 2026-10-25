@@ -177,6 +177,10 @@ describe('output validation for the new components', () => {
 })
 
 describe('view-time script', () => {
+    it('emitted script keeps regex escapes (weights survive the template literal)', () => {
+        const html = renderHtml({ title: 'Fictional', subtitle: '', body: ':::calc\nsplit | 186.40 | Sam x2, Ana, Ben\n:::\n' } as never)
+        expect(html).toContain(String.raw`(?:\s+x(\d+`)
+    })
     it('is injected only when a countdown or calc block is present', () => {
         const withCalc = renderHtml({ title: 'Fictional', subtitle: '', body: ':::calc\nsplit | 100 | Sam, Ana\n:::\n' } as never)
         expect(withCalc).toContain('data-cdn-date')
