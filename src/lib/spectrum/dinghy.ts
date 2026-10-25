@@ -710,6 +710,8 @@ export async function chatWithTools(
     let placesMismatch: string | null = null
     let independentTool = false
     let toolCallCount = 0
+    let workCommitted=false
+    const commitWork=async()=>{if(workCommitted)return;workCommitted=true;await opts.onCommit?.()}
     let successfulSearches = 0
     let sourceOnly = true
     const foundSources: { title: string; url: string }[] = []
@@ -876,6 +878,7 @@ export async function chatWithTools(
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
         const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates&&viewReady
         // First model judgment on an itinerary: it may ask one essential question instead of being forced into research.
+        if(itineraryContract&&iteration>=2)await commitWork()
         const clarifying=itineraryContract&&iteration===1&&!apiPlaces&&!pageAttempted&&!selecting
         const forceTool = clarifying ? undefined : (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
         const offered0 = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
@@ -930,18 +933,21 @@ export async function chatWithTools(
         const msg = choice?.message
         const calls = msg?.tool_calls ?? []
         if(clarifying){
-            const ask=calls.find(c=>c.function.name===CLARIFY_TOOL)
-            if(ask){
-                let question=''
-                try{const q=(JSON.parse(ask.function.arguments||'{}') as {question?:unknown}).question;if(typeof q==='string')question=q.replace(/\s+/g,' ').trim().slice(0,400)}catch{}
-                if(question){
-                    await opts.onStage?.('tool','itinerary:clarification_asked')
-                    // A question is not an artifact: no file, honest unfulfilled state, and the question is the whole reply.
-                    return {reply:question,toolCalls:toolCallCount,iterations:iteration,tainted,deliverable:deliverableOutcome(contract,false)}
-                }
-                messages.push({role:'system',content:'No question was given. Continue with the research or file tool.'});continue
+            // One short question, never a list: cut at the first question mark.
+            const oneQuestion=(raw:string)=>{const t=raw.replace(/\s+/g,' ').trim();const q=t.indexOf('?');return (q>=0?t.slice(0,q+1):t).slice(0,300).trim()}
+            const askCall=calls.find(c=>c.function.name===CLARIFY_TOOL)
+            let question=''
+            if(askCall){try{const q=(JSON.parse(askCall.function.arguments||'{}') as {question?:unknown}).question;if(typeof q==='string')question=oneQuestion(q)}catch{}}
+            // A gateway that ignores tool_choice may answer in plain text. On this first call that text is the model talking to the user; keep it when it is one short question.
+            else if(calls.length===0&&typeof msg?.content==='string'&&msg.content.length<=400&&/\?/.test(msg.content))question=oneQuestion(msg.content)
+            if(question){
+                await opts.onStage?.('tool','itinerary:clarification_asked')
+                // A question is not an artifact: no file, honest unfulfilled state, and the question is the whole reply.
+                return {reply:question,toolCalls:toolCallCount,iterations:iteration,tainted,deliverable:deliverableOutcome(contract,false)}
             }
-            if(calls.length>0)await opts.onCommit?.()
+            if(askCall){messages.push({role:'system',content:'No question was given. Continue with the research or file tool.'});continue}
+            // Committed only by a real research step; a premature create_file is blocked later and commits at the next iteration if the work goes on.
+            if(calls.some(c=>c.function.name!=='create_file'))await commitWork()
         }
         if(itineraryResearch&&forceTool&&!calls.some(c=>c.function.name===forceTool))await opts.onStage?.('tool',`research:choice_missed:${forceTool}`)
 

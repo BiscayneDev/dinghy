@@ -36,7 +36,7 @@ it.each([
  ['dates that disagree','You wrote Sunday the 16th, but the 16th is a different weekday. Which date do you mean?'],
 ])('%s: the first model call may ask one question; no promise, no search, no file, honest unfulfilled state',async(_n,q)=>{
  const t=await turn(itineraryAsk,call('ask_clarifying_question',{question:q}))
- expect(t.result.reply).toBe(q)
+ expect(t.result.reply).toBe(q.slice(0,q.indexOf('?')+1))
  expect(t.result.deliverable?.state).toBe('unfulfilled')
  expect(t.commits).toBe(0);expect(t.outside).toBe(0);expect(published).not.toHaveBeenCalled();expect(t.files.files()).toHaveLength(0)
  expect(t.gateway).toHaveLength(1);expect(t.stages).toContain('itinerary:clarification_asked')
@@ -56,4 +56,19 @@ it('a non-geographic destination (a venue name) is never gated on a place lookup
 it('an empty or malformed question is not turned into a reply: the turn continues to the work',async()=>{
  const t=await turn(itineraryAsk,call('ask_clarifying_question',{question:'   '}))
  expect(t.stages).not.toContain('itinerary:clarification_asked');expect(t.result.reply).not.toBe('')
+})
+const text=(content:string)=>new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content}}]}))
+it('a gateway that ignores tool_choice and answers with one short plain-text question: the question is kept, not swallowed or turned into an empty artifact',async()=>{
+ const q='Which place do you mean by the destination you typed? I will start once I know.'
+ const t=await turn(itineraryAsk,text(q))
+ expect(t.result.reply).toBe('Which place do you mean by the destination you typed?')
+ expect(t.result.deliverable?.state).toBe('unfulfilled');expect(t.commits).toBe(0);expect(t.outside).toBe(0);expect(published).not.toHaveBeenCalled();expect(t.files.files()).toHaveLength(0)
+})
+it('a long multi-question tool argument is cut to one short question',async()=>{
+ const t=await turn(itineraryAsk,call('ask_clarifying_question',{question:'Where exactly? And when do you land? '+'x'.repeat(500)}))
+ expect(t.result.reply).toBe('Where exactly?')
+})
+it('the acknowledgement fires only on real work: an empty question does not commit by itself, and the work that follows does commit once',async()=>{
+ const t=await turn(itineraryAsk,call('ask_clarifying_question',{question:' '}))
+ expect(t.commits).toBe(1);expect(t.stages).not.toContain('itinerary:clarification_asked')
 })
