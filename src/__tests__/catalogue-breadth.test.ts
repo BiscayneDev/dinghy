@@ -80,12 +80,33 @@ describe('chart renderer', () => {
 })
 
 describe('calc cents handling', () => {
-    it('normalizes monetary input to 2 decimals before integer-cent arithmetic', () => {
-        expect(toCents('10.005')).toBe(1001) // toFixed rounds half up, deterministically, in Node and Chrome alike
-        expect(toCents('0.01')).toBe(1)
+    it('parses decimal text to integer cents with an explicit half-up rule, no float decisions', () => {
+        // Decimal-string rule: third fraction digit >= 5 rounds the cent up. Engine-independent.
+        expect(toCents('10.005')).toBe(1001) // float toFixed gives 1001 here by accident of representation
+        expect(toCents('1.005')).toBe(101)   // float toFixed would give 100 - the case that proves the rule
+        expect(toCents('2.675')).toBe(268)   // float toFixed would give 267
+        expect(toCents('0.125')).toBe(13)
+        expect(toCents('0.124')).toBe(12)
+        expect(toCents('0.001')).toBe(0)
         expect(toCents('19.999')).toBe(2000)
-        expect(toCents('abc')).toBeNull()
+        expect(toCents('0.01')).toBe(1)
+        expect(toCents('0')).toBe(0)
         expect(toCents('-5')).toBe(-500)
+        expect(toCents('-0.005')).toBe(-1)
+        // bounds and junk
+        expect(toCents('abc')).toBeNull()
+        expect(toCents('')).toBeNull()
+        expect(toCents('Infinity')).toBeNull()
+        expect(toCents('9999999999999.99')).toBe(999999999999999)  // 13-digit dollars: safe
+        expect(toCents('99999999999999.99')).toBeNull()            // 14 digits: could overflow 2^53, refused
+    })
+    it('view-time script c2 is exact parity with server toCents on the edge values', () => {
+        const html = renderHtml({ title: 'Fictional', subtitle: '', body: ':::calc\nsplit | 100 | Sam, Ana\n:::\n' } as never)
+        const m = html.match(/c2=v=>\{([^}]+)\}/)
+        expect(m, 'emitted c2 function found').toBeTruthy()
+        const c2 = new Function('v', m![1]) as (v: string) => number | null
+        const edges = ['10.005', '1.005', '2.675', '0.125', '0.124', '0.001', '19.999', '0.01', '0', '-5', '-0.005', 'abc', '', 'Infinity', '9999999999999.99', '99999999999999.99', '$1,234.56', ' 7.50 ']
+        for (const e of edges) expect(c2(e), e).toEqual(toCents(e))
     })
     it('half-cent totals split deterministically and the shares sum to the normalized total', () => {
         const r = calcInitialRows('split', { total: '10.005', shares: 'Sam, Ana, Ben' }, {})

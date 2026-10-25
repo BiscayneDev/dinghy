@@ -339,11 +339,21 @@ function renderCountdown(lines: string[], opts?: { hero?: boolean }): string {
 }
 
 const money = (cents: number): string => '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-/** Deterministic 2-decimal normalization: a user-typed 10.005 becomes 1000 cents,
- * identically on server and in the view-time script. Integer cents thereafter. */
+/** Decimal-string to integer cents, explicit round-half-up on the decimal text.
+ * Never floats for the decision: 10.005 -> 1001, 1.005 -> 101, 2.675 -> 268 in
+ * every JS engine, because only digits are read. Bounds: the dollar part may not
+ * exceed 13 digits (14 digits could overflow 2^53 once multiplied by 100); anything
+ * without a numeric token is null. The view-time script mirrors this rule exactly;
+ * catalogue-breadth tests eval the emitted copy against this one for parity. */
 export const toCents = (s?: string): number | null => {
-    const n = num(s)
-    return n === null ? null : Math.round(parseFloat(n.toFixed(2)) * 100)
+    const tok = (s ?? '').match(/-?\d+(?:\.\d+)?/)?.[0]
+    if (!tok) return null
+    const neg = tok[0] === '-'
+    const [ip, fp = ''] = tok.slice(neg ? 1 : 0).split('.')
+    if (ip.length > 13) return null
+    const cents = Number(ip) * 100 + Number((fp[0] ?? '0') + (fp[1] ?? '0')) + (fp.length > 2 && fp[2] >= '5' ? 1 : 0)
+    if (!Number.isSafeInteger(cents)) return null
+    return neg ? -cents : cents
 }
 
 /** calc: deterministic math the user can check and adjust. "split | total | Sam x2, Ana, Ben",
