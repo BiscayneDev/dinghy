@@ -103,7 +103,7 @@ it('two turns at the model level: the original request is retained, the answer a
  expect(second.commits).toBe(1);expect(second.outside).toBeGreaterThan(0);expect((second.result as any).clarification).toBeUndefined()
 })
 it('continuation follows the model verdict, never the shape of the message; stale, user-typed or absent state resumes nothing',()=>{
- const pending={request:'plan a trip',question:'Where?'},cmp={kind:'comparison' as const,request:'compare two laptops'},now=Date.now()
+ const pending={request:'plan a trip',question:'Where?',key:'itin-clarify:t'},cmp={kind:'comparison' as const,request:'compare two laptops'},now=Date.now()
  expect(continueAfterClarification(pending,'cancel','x',null)).toBeNull()
  expect(continueAfterClarification(pending,'new_topic','compare two laptops',cmp)).toBe(cmp)
  expect(continueAfterClarification(pending,null,'x',cmp)).toBe(cmp)
