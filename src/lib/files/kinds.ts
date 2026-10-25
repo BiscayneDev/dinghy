@@ -9,7 +9,7 @@ import {decodeEntities} from './entities'
  * the HTML, so a page cannot pull from a third-party server when it opens.
  */
 
-export const KIND_BLOCKS = ['weather', 'scores', 'media', 'stay', 'route', 'briefing', 'gallery', 'lead', 'checks'] as const
+export const KIND_BLOCKS = ['weather', 'scores', 'media', 'stay', 'route', 'briefing', 'gallery', 'lead', 'checks', 'calc', 'chart', 'countdown'] as const
 export type KindBlock = (typeof KIND_BLOCKS)[number]
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -255,7 +255,7 @@ const WX_SKY: Record<string, [string, string]> = {
  * keeps the sunrise band. Decorative: the same numbers sit in the page below, so it is hidden from screen readers.
  */
 export function pageHero(blocks: Seg[]): string | null {
-    const first = blocks.find((b) => ['stay', 'route', 'scores', 'weather', 'media'].includes(b.name))
+    const first = blocks.find((b) => ['stay', 'route', 'scores', 'weather', 'media', 'countdown'].includes(b.name))
     if (!first) return null
     const lead = blocks.find((b) => b.name === 'lead')
     const leadPick = (lead?.lines.map(cells).find((c) => c[0]?.toLowerCase() === 'pick')?.[1] ?? '').toLowerCase()
@@ -280,6 +280,14 @@ export function pageHero(blocks: Seg[]): string | null {
         const svg = `<svg viewBox="0 0 720 340" preserveAspectRatio="xMidYMid slice"><path d="${path}" stroke="rgba(240,138,104,.3)" stroke-width="16" fill="none" stroke-linecap="round"/><path d="${path}" stroke="#F08A68" stroke-width="5" fill="none" stroke-linecap="round" stroke-dasharray="1 13"/><circle cx="60" cy="250" r="12" fill="#fff"/><circle cx="60" cy="250" r="5" fill="#0E1A33"/><circle cx="670" cy="46" r="14" fill="#F08A68"/><circle cx="670" cy="46" r="5" fill="#fff"/></svg>`
         return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(160deg,#16305A,#0E1A33)">${svg}<div class="hero-in"><span class="hero-k">${esc([...new Set(r.legs.map((l) => l[2]).filter(Boolean))].join(' + ') || 'Route')}</span><span class="hero-n">${esc(r.eta)}</span></div></div>`
     }
+    if (first.name === 'countdown') {
+        const [event, dateISO] = cells(first.lines[0] ?? '')
+        const days = countdownDays(dateISO ?? '')
+        if (!event || days === null) return null
+        const n = Math.abs(days)
+        const label = days === 0 ? '' : days > 0 ? (n === 1 ? 'day to go' : 'days to go') : (n === 1 ? 'day ago' : 'days ago')
+        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(160deg,#16305A,#0E1A33)"><div class="hero-in hero-mid"><span class="hero-k">${esc(event)}</span><span class="hero-n">${days === 0 ? 'Today' : n}</span><span class="hero-s">${esc([label, dateISO].filter(Boolean).join(' · '))}</span></div></div>`
+    }
     if (first.name === 'media') {
         const mrows = first.lines.map(cells).filter((c) => c[0])
         const mp = mrows.find((c) => leadPick && c[0].toLowerCase() === leadPick)
@@ -300,6 +308,114 @@ export function pageHero(blocks: Seg[]): string | null {
     return `<div class="band hero hero-stay" style="background:${bg}">${p ? `<img src="${esc(p)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${picked ? 'Pick' : 'Stay'}</span><span class="hero-n${knownValue(price) ? '' : ' hero-title'}">${esc(knownValue(price) || name)}</span></div></div>`
 }
 
+/** Days between now and a date, whole days, negative when past. Exported for tests (injectable now). */
+export function countdownDays(dateISO: string, now: Date = new Date()): number | null {
+    const t = Date.parse(dateISO)
+    if (!Number.isFinite(t)) return null
+    const dayStart = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+    return Math.round((dayStart(new Date(t)) - dayStart(now)) / 86400000)
+}
+
+/** countdown: "Event | date | milestone; milestone". The big number can move to the page hero. */
+function renderCountdown(lines: string[], opts?: { hero?: boolean }): string {
+    const [event, dateISO, milestones] = cells(lines[0] ?? '')
+    const days = countdownDays(dateISO ?? '')
+    if (!event || days === null) return ''
+    const n = Math.abs(days)
+    const label = days === 0 ? 'today' : days > 0 ? (n === 1 ? 'day to go' : 'days to go') : (n === 1 ? 'day ago' : 'days ago')
+    const ms = (milestones ?? '').split(';').map((m) => m.trim()).filter(Boolean).slice(0, 6)
+    const head = opts?.hero === false ? '' : `<div class="cdn-n">${days === 0 ? '0' : n}</div><div class="cdn-l">${esc(label)}</div>`
+    return `<div class="cdn">${head}<div class="cdn-e">${esc(event)}${dateISO ? `<span class="cdn-d">${esc(dateISO)}</span>` : ''}</div>${ms.length ? `<ul class="cdn-ms">${ms.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}</div>`
+}
+
+const money = (cents: number): string => '$' + (cents / 100).toFixed(2)
+
+/** calc: deterministic math the user can check. "split | total | Sam x2, Ana, Ben",
+ * "tip | bill | percent | people", "convert | amount | from | to | rate | rate date".
+ * Anything unknown or malformed renders nothing, never a wrong number. */
+function renderCalc(lines: string[]): string {
+    const out: string[] = []
+    for (const line of lines.slice(0, 8)) {
+        const c = cells(line)
+        const op = (c[0] ?? '').toLowerCase()
+        if (op === 'split') {
+            const totalC = Math.round((num(c[1]) ?? NaN) * 100)
+            const shares = (c[2] ?? '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => {
+                const m = p.match(/^(.+?)(?:\s+x(\d+(?:\.\d+)?))?$/)
+                return { name: (m?.[1] ?? p).trim(), w: m?.[2] ? parseFloat(m[2]) : 1 }
+            }).filter((p) => p.name && Number.isFinite(p.w) && p.w > 0)
+            if (!Number.isFinite(totalC) || totalC < 0 || !shares.length) return ''
+            const wsum = shares.reduce((a, p) => a + p.w, 0)
+            let assigned = 0
+            const rows = shares.map((p, i) => {
+                const amt = i < shares.length - 1 ? Math.round((totalC * p.w) / wsum) : totalC - assigned
+                assigned += amt
+                return { ...p, amt }
+            })
+            const weighted = shares.some((p) => p.w !== 1)
+            out.push(`<div class="calc"><div class="calc-t"><span>Split ${esc(money(totalC))}</span><span>${shares.length} ${shares.length === 1 ? 'person' : 'people'}</span></div>${rows.map((r) => `<div class="calc-r"><span class="calc-n">${esc(r.name)}${r.w !== 1 ? ` <span class="calc-w">×${r.w}</span>` : ''}</span><span class="calc-a">${esc(money(r.amt))}</span></div>`).join('')}<div class="calc-note">${weighted ? 'Weights applied. ' : ''}Cents are rounded; the last share takes the remainder.</div></div>`)
+        } else if (op === 'tip') {
+            const bill = num(c[1]), pct = num(c[2])
+            if (bill === null || bill < 0 || pct === null || pct < 0) return ''
+            const ppl = Math.max(1, Math.round(num(c[3]) ?? 1))
+            const billC = Math.round(bill * 100)
+            const tipC = Math.round(billC * (pct / 100))
+            const totalC = billC + tipC
+            out.push(`<div class="calc"><div class="calc-t"><span>Bill ${esc(money(billC))} + ${esc(String(pct))}% tip</span><span>${esc(money(totalC))}</span></div><div class="calc-r"><span class="calc-n">Tip</span><span class="calc-a">${esc(money(tipC))}</span></div>${ppl > 1 ? `<div class="calc-r"><span class="calc-n">Per person (${ppl})</span><span class="calc-a">${esc(money(Math.round(totalC / ppl)))}</span></div>` : ''}<div class="calc-note">Cents are rounded.</div></div>`)
+        } else if (op === 'convert') {
+            const amt = num(c[1]), from = c[2], to = c[3], rate = num(c[4]), asof = c[5]
+            if (amt === null || !from || !to) return ''
+            if (rate === null || rate <= 0) {
+                out.push(`<div class="calc"><div class="calc-note">Needs a quoted ${esc(from)} → ${esc(to)} rate with its date. None was given, so nothing was converted.</div></div>`)
+                continue
+            }
+            out.push(`<div class="calc"><div class="calc-t"><span>${esc(String(amt))} ${esc(from)}</span><span>${esc((amt * rate).toFixed(2))} ${esc(to)}</span></div><div class="calc-note">1 ${esc(from)} = ${esc(String(rate))} ${esc(to)}${asof ? ` · rate as of ${esc(asof)}` : ' · rate date not given'}</div></div>`)
+        } else return ''
+    }
+    return out.join('')
+}
+
+/** chart: "labels | a, b, c" then one of "line | name | v1, v2, …", "bar | label | value",
+ * "donut | label | value" per row. Values must be finite numbers; anything else is dropped. */
+function renderChart(lines: string[]): string {
+    const rows = lines.map(cells).filter((c) => c[0])
+    if (!rows.length) return ''
+    const labels = rows[0][0].toLowerCase() === 'labels' ? (rows.shift()?.[1] ?? '').split(',').map((l) => l.trim()) : []
+    const kind = (rows[0]?.[0] ?? '').toLowerCase()
+    const escA = (t: string) => esc(t).replace(/'/g, '&#39;')
+    if (kind === 'line') {
+        const [, name, series] = rows[0]
+        const vals = (series ?? '').split(',').map((v) => num(v.trim())).filter((v): v is number => v !== null).slice(0, 24)
+        if (!name || vals.length < 2) return ''
+        const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1
+        const W = 360, H = 180, P = 28
+        const pts = vals.map((v, i) => [P + (i * (W - P * 1.6)) / (vals.length - 1), H - P - ((v - min) / span) * (H - P * 1.8)] as const)
+        const line = pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
+        const area = `${P},${H - P} ${line} ${pts[pts.length - 1][0].toFixed(1)},${H - P}`
+        const ticks = labels.slice(0, vals.length).filter((_, i) => i % Math.ceil(vals.length / 6) === 0 || i === vals.length - 1)
+        return `<div class="cht"><div class="cht-t">${esc(name)}</div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Line chart: ${escA(name)}, ${vals.length} points, from ${min} to ${max}"><line x1="${P}" y1="${H - P}" x2="${W - 8}" y2="${H - P}" class="cht-ax"/><polygon points="${area}" class="cht-area"/><polyline points="${line}" class="cht-line"/>${pts.map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" class="cht-dot"/>`).join('')}<text x="${P}" y="${P - 10}" class="cht-v">${esc(String(max))}</text><text x="${P}" y="${H - P + 18}" class="cht-v">${esc(String(min))}</text>${ticks.map((t, i) => `<text x="${(P + (i * (W - P * 1.6)) / Math.max(1, ticks.length - 1)).toFixed(1)}" y="${H - 6}" class="cht-x">${esc(t)}</text>`).join('')}</svg></div>`
+    }
+    if (kind === 'bar' || kind === 'donut') {
+        const items = rows.map((c) => ({ l: c[1], v: num(c[2]) })).filter((x): x is { l: string; v: number } => !!x.l && x.v !== null && x.v >= 0).slice(0, 12)
+        if (!items.length) return ''
+        const total = items.reduce((a, x) => a + x.v, 0)
+        if (kind === 'bar') {
+            const max = Math.max(...items.map((x) => x.v)) || 1
+            return `<div class="cht">${items.map((x) => `<div class="cht-b"><span class="cht-bl">${esc(x.l)}</span><span class="cht-bt"><i style="width:${((x.v / max) * 100).toFixed(1)}%"></i></span><span class="cht-bv">${esc(String(x.v))}</span></div>`).join('')}</div>`
+        }
+        const palette = ['#F08A68', '#5B8DD9', '#E5C55B', '#6FBF8F', '#B07FD4', '#8A97A8']
+        let acc = 0
+        const segs = items.map((x, i) => {
+            const frac = total ? x.v / total : 0
+            const seg = `<circle r="15.9155" cx="21" cy="21" fill="transparent" stroke="${palette[i % palette.length]}" stroke-width="10" stroke-dasharray="${(frac * 100).toFixed(2)} ${(100 - frac * 100).toFixed(2)}" stroke-dashoffset="${(25 - acc * 100).toFixed(2)}"/>`
+            acc += frac
+            return seg
+        })
+        return `<div class="cht cht-d"><svg viewBox="0 0 42 42" role="img" aria-label="Donut chart with ${items.length} segments">${segs.join('')}</svg><div class="cht-lg">${items.map((x, i) => `<div><i style="background:${palette[i % palette.length]}"></i>${esc(x.l)} · ${esc(String(x.v))}${total ? ` (${Math.round((x.v / total) * 100)}%)` : ''}</div>`).join('')}</div></div>`
+    }
+    return ''
+}
+
 export function renderKind(name: KindBlock, lines: string[], opts?: { hero?: boolean }): string {
     switch (name) {
         case 'weather': return renderWeather(lines, opts)
@@ -311,11 +427,45 @@ export function renderKind(name: KindBlock, lines: string[], opts?: { hero?: boo
         case 'gallery': return renderGallery(lines)
         case 'lead': return renderLead(lines)
         case 'checks': return renderChecks(lines)
+        case 'calc': return renderCalc(lines)
+        case 'chart': return renderChart(lines)
+        case 'countdown': return renderCountdown(lines, opts)
     }
 }
 
 /** Light styles use the page tokens (--paper, --sand, --ink, --accent); dark mode flips the tokens, so only fixed colours are overridden below. */
 export const KINDS_CSS = `
+.cdn{text-align:center;padding:22px 12px 14px}
+.cdn-n{font-size:84px;font-weight:800;line-height:1;color:var(--accent);letter-spacing:-2px;font-variant-numeric:tabular-nums}
+.cdn-l{font-size:13px;font-weight:600;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);margin-top:6px}
+.cdn-e{font-size:17px;font-weight:600;margin-top:12px}
+.cdn-d{display:block;font-size:13px;color:var(--muted);font-weight:400;margin-top:2px}
+.cdn-ms{list-style:none;margin:14px auto 0;padding:0;max-width:320px;text-align:left}
+.cdn-ms li{font-size:14px;padding:7px 2px;border-top:1px solid var(--line);color:var(--ink)}
+.calc{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:6px 0}
+.calc-t{display:flex;justify-content:space-between;align-items:baseline;background:var(--sand);padding:12px 16px;font-weight:700;font-size:15px}
+.calc-t span:last-child{font-size:20px;color:var(--accent);font-variant-numeric:tabular-nums}
+.calc-r{display:flex;justify-content:space-between;padding:10px 16px;border-top:1px solid var(--line);font-size:14.5px}
+.calc-a{font-weight:600;font-variant-numeric:tabular-nums}
+.calc-w{color:var(--muted);font-size:12px;font-weight:400}
+.calc-note{padding:8px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)}
+.cht{padding:8px 4px}
+.cht-t{font-weight:600;font-size:14px;margin:2px 0 8px}
+.cht svg{width:100%;height:auto;display:block}
+.cht-ax{stroke:var(--line);stroke-width:1}
+.cht-area{fill:var(--accent);opacity:.12}
+.cht-line{fill:none;stroke:var(--accent);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.cht-dot{fill:var(--accent)}
+.cht-v,.cht-x{fill:var(--muted);font-size:10px}
+.cht-b{display:flex;align-items:center;gap:10px;padding:5px 2px;font-size:13.5px}
+.cht-bl{flex:0 0 34%;text-align:right;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cht-bt{flex:1;height:16px;background:var(--sand);border-radius:8px;overflow:hidden}
+.cht-bt i{display:block;height:100%;background:var(--accent);border-radius:8px}
+.cht-bv{flex:0 0 auto;font-weight:600;font-variant-numeric:tabular-nums}
+.cht-d{display:flex;align-items:center;gap:18px}
+.cht-d svg{flex:0 0 120px;width:120px}
+.cht-lg{font-size:13px;display:grid;gap:5px}
+.cht-lg i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}
 .wx,.scs,.mds,.sts,.rt,.brs,.gal{margin-block:var(--gap,24px)}
 .wx{border-radius:var(--r,20px);overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow);background:var(--paper)}
 .wx-hero{display:flex;justify-content:space-between;align-items:center;padding:26px 28px;color:#fff;background:linear-gradient(160deg,#3B5BA8,#7FA3DC)}

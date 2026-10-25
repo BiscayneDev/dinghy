@@ -409,7 +409,7 @@ export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const segs = splitBlocks(doc.body)
     // The band hero consumes the first hero-capable block's identity; that block
     // renders compact so the page never shows the same identity twice.
-    const heroSeg = segs.find((s): s is Extract<Segment, { kind: 'block' }> => s.kind === 'block' && ['stay', 'route', 'scores', 'weather', 'media'].includes(s.name))
+    const heroSeg = segs.find((s): s is Extract<Segment, { kind: 'block' }> => s.kind === 'block' && ['stay', 'route', 'scores', 'weather', 'media', 'countdown'].includes(s.name))
     const cover = itineraryCover(doc)
     const kindHeroHtml = cover ? null : pageHero(segs.flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : [])))
     const heroConsumedSeg = !cover && kindHeroHtml !== null ? heroSeg : undefined
