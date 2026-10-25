@@ -310,10 +310,20 @@ export function pageHero(blocks: Seg[]): string | null {
 
 /** Days between now and a date, whole days, negative when past. Exported for tests (injectable now). */
 export function countdownDays(dateISO: string, now: Date = new Date()): number | null {
-    const t = Date.parse(dateISO)
-    if (!Number.isFinite(t)) return null
-    const dayStart = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
-    return Math.round((dayStart(new Date(t)) - dayStart(now)) / 86400000)
+    // Local-calendar days to the event: a date-only ISO like "2026-11-14" means
+    // that local calendar date, not UTC midnight (UTC day boundaries shift the
+    // count by one for viewers behind UTC). Math.round absorbs DST 23/25h days.
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateISO.trim())
+    let target: Date
+    if (dateOnly) {
+        target = new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    } else {
+        const t = Date.parse(dateISO)
+        if (!Number.isFinite(t)) return null
+        target = new Date(t)
+    }
+    const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+    return Math.round((dayStart(target) - dayStart(now)) / 86400000)
 }
 
 /** countdown: "Event | date | milestone; milestone". The big number can move to the page hero. */
@@ -336,7 +346,8 @@ const money = (cents: number): string => '$' + (cents / 100).toFixed(2)
  * live (same rounding: last share takes the cent remainder). Unknown or malformed input
  * shows an honest note, never a wrong number. Server first paint mirrors the script exactly. */
 function renderCalc(lines: string[]): string {
-    const inp = (f: string, v: string, w = 76) => `<input class="calc-in" style="width:${w}px" data-f="${f}" inputmode="decimal" value="${esc(v)}" aria-label="${f}">`
+    // Width follows content (ch units, tabular-nums) so long totals stay visible on narrow phones.
+    const inp = (f: string, v: string, wCh = 8) => `<input class="calc-in" style="width:${Math.max(wCh, v.length + 2)}ch;max-width:58vw" data-f="${f}" inputmode="decimal" value="${esc(v)}" aria-label="${f}">`
     const rowsHtml = (rows: [string, string][]) => rows.map(([n, a]) => `<div class="calc-r"><span class="calc-n">${esc(n)}</span><span class="calc-a">${esc(a)}</span></div>`).join('')
     const out: string[] = []
     for (const line of lines.slice(0, 8)) {
@@ -352,13 +363,13 @@ function renderCalc(lines: string[]): string {
             if (bill === null || bill < 0 || pct === null || pct < 0) return ''
             const ppl = Math.max(1, Math.round(num(c[3]) ?? 1))
             const init = calcInitialRows('tip', { bill: bill.toFixed(2), pct: String(pct), people: String(ppl) }, {})
-            out.push(`<div class="calc" data-calc="tip"><div class="calc-t"><span>Bill $${inp('bill', bill.toFixed(2))} + ${inp('pct', String(pct), 44)}% tip</span><span data-o="total">${esc(init?.total ?? '')}</span></div><div data-o="rows">${init ? rowsHtml(init.rows) : ''}</div><div class="calc-ed"><label class="calc-lb">People ${inp('people', String(ppl), 44)}</label></div><div class="calc-note" data-o="note">${esc(init?.note ?? '')}</div><button type="button" class="calc-reset" data-a="reset">Reset</button></div>`)
+            out.push(`<div class="calc" data-calc="tip"><div class="calc-t"><span>Bill $${inp('bill', bill.toFixed(2))} + ${inp('pct', String(pct), 4)}% tip</span><span data-o="total">${esc(init?.total ?? '')}</span></div><div data-o="rows">${init ? rowsHtml(init.rows) : ''}</div><div class="calc-ed"><label class="calc-lb">People ${inp('people', String(ppl), 4)}</label></div><div class="calc-note" data-o="note">${esc(init?.note ?? '')}</div><button type="button" class="calc-reset" data-a="reset">Reset</button></div>`)
         } else if (op === 'convert') {
             const amt = num(c[1]), from = c[2], to = c[3], rate = num(c[4]), asof = c[5]
             if (amt === null || !from || !to) return ''
             const data = { from, to, asof: asof ?? '' }
             const init = calcInitialRows('convert', { amt: String(amt), rate: rate !== null && rate > 0 ? String(rate) : '' }, data)
-            out.push(`<div class="calc" data-calc="convert" data-from="${esc(from)}" data-to="${esc(to)}" data-asof="${esc(asof ?? '')}"><div class="calc-t"><span>${inp('amt', String(amt))} ${esc(from)}</span><span data-o="total">${esc(init?.total ?? '')}</span></div><div class="calc-ed"><label class="calc-lb">Rate ${inp('rate', rate !== null && rate > 0 ? String(rate) : '', 70)} ${esc(to)} per ${esc(from)}</label></div><div class="calc-note" data-o="note">${esc(init?.note ?? '')}</div><button type="button" class="calc-reset" data-a="reset">Reset</button></div>`)
+            out.push(`<div class="calc" data-calc="convert" data-from="${esc(from)}" data-to="${esc(to)}" data-asof="${esc(asof ?? '')}"><div class="calc-t"><span>${inp('amt', String(amt))} ${esc(from)}</span><span data-o="total">${esc(init?.total ?? '')}</span></div><div class="calc-ed"><label class="calc-lb">Rate ${inp('rate', rate !== null && rate > 0 ? String(rate) : '', 7)} ${esc(to)} per ${esc(from)}</label></div><div class="calc-note" data-o="note">${esc(init?.note ?? '')}</div><button type="button" class="calc-reset" data-a="reset">Reset</button></div>`)
         } else return ''
     }
     return out.join('')
@@ -472,7 +483,7 @@ export const KINDS_CSS = `
 .cdn-ms{list-style:none;margin:14px auto 0;padding:0;max-width:320px;text-align:left}
 .cdn-ms li{font-size:14px;padding:7px 2px;border-top:1px solid var(--line);color:var(--ink)}
 .calc{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:6px 0}
-.calc-t{display:flex;justify-content:space-between;align-items:baseline;background:var(--sand);padding:12px 16px;font-weight:700;font-size:15px}
+.calc-t{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;background:var(--sand);padding:12px 16px;font-weight:700;font-size:15px}
 .calc-t span:last-child{font-size:20px;color:var(--accent);font-variant-numeric:tabular-nums}
 .calc-r{display:flex;justify-content:space-between;padding:10px 16px;border-top:1px solid var(--line);font-size:14.5px}
 .calc-a{font-weight:600;font-variant-numeric:tabular-nums}

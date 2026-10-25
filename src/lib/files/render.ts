@@ -415,9 +415,10 @@ function pageScript(body: string): string {
     const hasCalc = body.includes(':::calc')
     if (!hasCdn && !hasCalc) return ''
     return `<script>(()=>{
-const D=86400000,ds=d=>Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate());
-document.querySelectorAll('[data-cdn-date]').forEach(el=>{const t=Date.parse(el.getAttribute('data-cdn-date'));if(!isFinite(t))return;const n=Math.round((ds(new Date(t))-ds(new Date()))/D),a=Math.abs(n);el.textContent=n===0?'Today':String(a);const lb=el.parentElement?.querySelector('[data-cdn-label]')||el.parentElement?.parentElement?.querySelector('[data-cdn-label]');if(lb){const d=el.getAttribute('data-cdn-date');lb.textContent=n===0?('today · '+d):((n>0?(a===1?'day to go':'days to go'):(a===1?'day ago':'days ago'))+' · '+d)}});
+const D=86400000,dl=v=>{const x=new Date(v);return new Date(x.getFullYear(),x.getMonth(),x.getDate()).getTime()},pd=s=>{const m=/^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(s);return m?new Date(+m[1],+m[2]-1,+m[3]).getTime():Date.parse(s)};
+document.querySelectorAll('[data-cdn-date]').forEach(el=>{const t=pd(el.getAttribute('data-cdn-date'));if(!isFinite(t))return;const n=Math.round((dl(t)-dl(Date.now()))/D),a=Math.abs(n);el.textContent=n===0?'Today':String(a);const lb=el.parentElement?.querySelector('[data-cdn-label]')||el.parentElement?.parentElement?.querySelector('[data-cdn-label]');if(lb){const d=el.getAttribute('data-cdn-date');lb.textContent=n===0?('today · '+d):((n>0?(a===1?'day to go':'days to go'):(a===1?'day ago':'days ago'))+' · '+d)}});
 const money=c=>'$'+(c/100).toFixed(2),num=v=>{const n=parseFloat(String(v).replace(/[$,]/g,''));return isFinite(n)?n:null};
+document.querySelectorAll('.calc-in:not(.calc-in-text)').forEach(el=>{const rs=()=>{el.style.width=(el.value.length+2)+'ch'};el.addEventListener('input',rs);rs();});
 document.querySelectorAll('.calc').forEach(card=>{
  const op=card.getAttribute('data-calc'),F=f=>card.querySelector('[data-f="'+f+'"]'),O=o=>card.querySelector('[data-o="'+o+'"]');
  const rows=O('rows'),note=O('note'),tot=O('total');

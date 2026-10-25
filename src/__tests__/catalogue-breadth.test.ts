@@ -87,6 +87,33 @@ describe('countdown renderer', () => {
         expect(countdownDays('2026-10-20', now)).toBe(-4)
         expect(countdownDays('not-a-date', now)).toBeNull()
     })
+    it('date-only targets mean local calendar days, not UTC-midnight arithmetic', () => {
+        // Bug class: a date-only ISO parsed as UTC midnight counted 20 days from
+        // Oct 24 (America/New_York evening) to Nov 14; local-calendar diff is 21.
+        const evening = new Date(2026, 9, 24, 21, 30) // local components, any zone
+        expect(countdownDays('2026-11-14', evening)).toBe(21)
+        const earlyMorning = new Date(2026, 9, 24, 1, 0)
+        expect(countdownDays('2026-11-14', earlyMorning)).toBe(21)
+        // Nov 1 from Oct 24 local is 8 calendar days; Nov 14 is 21 regardless of clock time
+        expect(countdownDays('2026-11-01', new Date(2026, 9, 24, 23, 59))).toBe(8)
+    })
+    it('spans the US fall DST boundary without drift (25h day rounds, never off-by-one)', () => {
+        // America/New_York falls back Nov 1 2026; local-day math must absorb the 25h day.
+        const before = new Date(2026, 9, 31, 12, 0)
+        expect(countdownDays('2026-11-02', before)).toBe(2)
+        const after = new Date(2026, 10, 1, 12, 0)
+        expect(countdownDays('2026-11-02', after)).toBe(1)
+        // full span across the boundary: Oct 24 -> Nov 14 = 21 local days
+        expect(countdownDays('2026-11-14', new Date(2026, 9, 24, 12, 0))).toBe(21)
+    })
+    it('today, past and future targets label correctly at local day granularity', () => {
+        const evening = new Date(2026, 9, 24, 22, 0)
+        expect(countdownDays('2026-10-24', evening)).toBe(0)
+        expect(countdownDays('2026-10-25', evening)).toBe(1)
+        expect(countdownDays('2026-10-23', evening)).toBe(-1)
+        // timestamps with a time component still parse (absolute instant, local day of that instant)
+        expect(countdownDays('2026-10-24T23:00:00', evening)).toBe(0)
+    })
     it('renders the big number, label, event and milestones', () => {
         const html = renderKind('countdown', ['Harbor Festival | 2026-11-03 | Lineup drops Friday; Gates 5 PM'])
         expect(html).toContain('cdn-n')
@@ -180,6 +207,17 @@ describe('view-time script', () => {
     it('emitted script keeps regex escapes (weights survive the template literal)', () => {
         const html = renderHtml({ title: 'Fictional', subtitle: '', body: ':::calc\nsplit | 186.40 | Sam x2, Ana, Ben\n:::\n' } as never)
         expect(html).toContain(String.raw`(?:\s+x(\d+`)
+    })
+    it('calc inputs size to their content so long totals stay visible', () => {
+        const html = renderKind('calc', ['split | 1234567.89 | Sam, Ana, Ben'])
+        expect(html).toContain('width:12ch')
+        expect(html).toContain('max-width:58vw')
+        const small = renderKind('calc', ['split | 9.99 | Sam, Ana'])
+        expect(small).toContain('width:8ch')
+    })
+    it('emitted script keeps the countdown date-only regex escapes', () => {
+        const html = renderHtml({ title: 'Fictional', subtitle: '', body: ':::countdown\nHarbor Festival | 2026-11-14\n:::\n' } as never)
+        expect(html).toContain(String.raw`/^(\d{4})-(\d{2})-(\d{2})$/`)
     })
     it('is injected only when a countdown or calc block is present', () => {
         const withCalc = renderHtml({ title: 'Fictional', subtitle: '', body: ':::calc\nsplit | 100 | Sam, Ana\n:::\n' } as never)
