@@ -60,3 +60,31 @@ function expectAgendaOnly(file:{execute:{mock:{calls:unknown[][]}}}){
  expect(input.body).not.toMatch(/:::stay|:::options|:::sources|Harbor Inn|Harbor Cafe|Harbor Museum/)
  expect(input.body).toContain('10am');expect(input.body).toContain('Working sessions')
 }
+
+describe('point of view picks',()=>{
+ const withRoles=[{...candidates[0],role:'favorite',fit:'Quiet and walkable, which is what you asked for'},{...candidates[1],role:'runner_up',fit:'Easier if the group runs late'},{...candidates[2],role:'skip',fit:'Too long for a short stay'}]
+ it('renders labelled picks with bound names before the cards',()=>{
+  const c=compileItineraryCandidates({...input,itinerary_candidates:withRoles},registry());if('error'in c)throw Error(c.error)
+  const b=(c.input as any).body as string
+  expect(b).toContain('## My take');expect(b).toContain('Stay favorite: {{source:src2.content:0:10}}. Quiet and walkable');expect(b).toContain('Dining runner-up');expect(b).toContain('Activity skip')
+  expect(b.indexOf('## My take')).toBeLessThan(b.indexOf('## Hotels'))
+ })
+ it('no roles means no take section',()=>{const c=compileItineraryCandidates(input,registry());if('error'in c)throw Error(c.error);expect((c.input as any).body).not.toContain('My take')})
+ it.each([['favorite without fit',[{...candidates[0],role:'favorite'}]],['bad role',[{...candidates[0],role:'best'}]],['two favorites',[{...candidates[0],role:'favorite',fit:'a'},{...candidates[0],role:'favorite',fit:'b'}]],['long fit',[{...candidates[0],fit:'x'.repeat(301)}]]])('rejects %s',(_l,v)=>expect(compileItineraryCandidates({...input,itinerary_candidates:v},registry())).toHaveProperty('error'))
+ it('escapes controls in fit',()=>{const c=compileItineraryCandidates({...input,itinerary_candidates:[{...candidates[0],role:'favorite',fit:'a|b\n:::stay {{source:src9.url}}'}]},registry());if('error'in c)throw Error(c.error);expect((c.input as any).body).not.toContain('{{source:src9')})
+ it('names resolve to the page text through binding and the gate still passes',()=>{
+  const r=registry(),c=compileItineraryCandidates({...input,itinerary_candidates:withRoles},r);if('error'in c)throw Error(c.error)
+  const bound=bindFileSources(c.input,r,true);if('error'in bound)throw Error(bound.error)
+  const sourced=compileItinerarySources(bound.input,bound.usedSources,[url]);if('error'in sourced)throw Error(sourced.error)
+  const b=(sourced.input as any).body as string
+  expect(b).toContain('Stay favorite: Harbor Inn. Quiet');expect(b).not.toContain('{{source');expect(itineraryPageError(b,ask,[url])).toBeNull()
+ })
+})
+it('whole journey with a point of view: favorite, runner-up and skip reach the created file body, still gated',async()=>{
+ const roles=[{...candidates[0],role:'favorite',fit:'Quiet and close to the train, which is what you asked for'},{...candidates[1],role:'runner_up',fit:'Better if dinner runs late'},{...candidates[2],role:'skip',fit:'Too long for a short stay'}]
+ const {file,result}=await run([call('web_search'),call('create_file',{...input,itinerary_candidates:roles})])
+ expect(file.execute).toHaveBeenCalledTimes(1)
+ const sent=(file.execute.mock.calls[0] as any[])[0] as {body:string}
+ expect(sent.body).toContain('## My take');expect(sent.body).toContain('Stay favorite: Harbor Inn. Quiet');expect(sent.body).toContain('Activity skip: Harbor Museum.');expect(sent.body).toContain('Tickets unverified')
+ expect(result.deliverable?.state).toBe('completed')
+})
