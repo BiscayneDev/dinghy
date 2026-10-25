@@ -146,7 +146,7 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
     const files: SiteFile[] = [{path:'index.html',bytes:Buffer.from(html),contentType:'text/html; charset=utf-8'}]
     if(pdf) files.push({path:pdf.filename,bytes:pdf.bytes,contentType:pdf.mimeType})
     signal?.throwIfAborted()
-    const hosted = await publishSite(files,{title:input.title,userId})
+    const hosted = await publishSite(files,{title:input.title,userId,signal})
     const imagery: ImageryState = {page:'fallback',chat:'fallback',share:'fallback',metadata:await optionalWithin(verifyShareMetadata(hosted,fallbackImage,input.title,photosOk?LINK_VIDEO.url:null),2700,false)?'verified':'unverified',reason:photosOk?'decoration_pending':'privacy_gate'}
     if(imagery.metadata==='unverified'&&photosOk)imagery.reason='metadata_unverified'
     const previews: {og:Omit<PreviewResult,'bytes'>;chat:Omit<PreviewResult,'bytes'>} = {og:{route:'static_link',...(photosOk?{}:{reason:'privacy_gate' as const})},chat:{route:'static_link',...(photosOk?{}:{reason:'privacy_gate' as const})}}
