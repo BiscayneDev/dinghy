@@ -662,8 +662,8 @@ export async function chatWithTools(
             if(!/^\s*-\s+\S/m.test(agendaPart)){
                 await opts.onStage?.('tool','itinerary:no_agenda_content')
                 const links=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
-                const asked=currentRequest.replace(/\s+/g,' ').trim().slice(0,300)
-                return finish({reply:`I couldn't finish researching this trip, so I haven't planned or recommended anything yet. Nothing was booked.\n\nWhat you asked: "${asked}"${links?`\n\nSources found, not verified recommendations:\n${links}`:''}\n\nSay "try again" and I'll rerun it.`,toolCalls:toolCallCount,iterations:iteration,tainted})
+                const placed=resolveDestination(currentRequest)?'':' I also could not match the destination in your message to a known place.'
+                return finish({reply:`I couldn't finish researching this trip: the research step timed out, so I haven't planned or recommended anything yet. Nothing was booked.${placed}${links?`\n\nSources found, not verified recommendations:\n${links}`:''}`,toolCalls:toolCallCount,iterations:iteration,tainted})
             }
             if(!inputSchemaError(input,file.inputSchema)){
                 pageAttempted=true;toolCallCount++

@@ -33,6 +33,8 @@ describe('itinerary contract gateway resilience',()=>{
   expect(input.kind).toBe('itinerary')
   expect(input.body).toContain('Recommendations not verified')
   expect(input.body).not.toMatch(/Venue names, categories and addresses/)
+  // Meaningful agenda = lines derived from the user's own words (times/events), never the generated 'Timing to confirm' filler.
+  expect(input.body).toMatch(/\n- .*9/);expect(input.body).not.toContain('Timing to confirm')
   expect(r.reply).toContain('Recommendations remain unverified')
   expect(r.reply).not.toContain('Something went wrong')
  })
@@ -53,7 +55,7 @@ describe('itinerary contract gateway resilience',()=>{
   expect(f.execute).not.toHaveBeenCalled()
   expect(r.deliverable?.state).toBe('unfulfilled')
   expect(r.reply).toContain("I couldn't finish researching this trip")
-  expect(r.reply).toContain(emptyAsk)
+  expect(r.reply).not.toContain(emptyAsk);expect(r.reply).not.toMatch(/try again|say /i);expect(r.reply).toContain('timed out')
  })
  it('no third attempt: after one retry the fallback owns the outcome',async()=>{
   const stages:string[]=[];const f=file()

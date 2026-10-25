@@ -36,9 +36,11 @@ async function run(slowCalls:number[],SLOW_MS=40_000,ask=baseAsk){
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(n),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
- const p=chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+240_000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ const started=Date.now();let lastStageAt=started
+ const p=chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+240_000,onStage:async(_s,d)=>{if(d){stages.push(d);lastStageAt=Date.now()}}},tools,ctx)
  for(let i=0;i<60;i++)await vi.advanceTimersByTimeAsync(5_000)
- return {result:await p,stages,files}
+ const result=await p
+ return {result,stages,files,requests,elapsed:lastStageAt-started}
 }
 it('a model call that takes 40s (slower than the old 25s cap, far inside the turn budget) still yields the researched itinerary',async()=>{
  const {result,stages,files}=await run([2])
@@ -53,14 +55,16 @@ it('two consecutive 40s calls both fit the window and research is kept',async()=
  expect(stages).not.toContain('itinerary:agenda_only_fallback')
  expect(result.deliverable?.state).toBe('completed')
 })
-it('if every model call after research truly stalls, the reply is honest text with the ask and sources, never an empty page presented as done',async()=>{
- const {result,stages,files}=await run([2,3,4,5,6],200_000,noAgendaAsk)
+it('if every model call after research truly stalls, the reply is honest text with sources and the blocker, not the ask, never an empty page presented as done',async()=>{
+ const {result,stages,files,requests,elapsed}=await run([2,3,4,5,6],200_000,noAgendaAsk)
+ // Spend is bounded: the search call, the stalled call and exactly one retry; no further blind repeats. Time stays inside the 240s turn with the 18s reserve.
+ expect(requests).toHaveLength(3);expect(elapsed).toBeLessThanOrEqual(240_000-18_000)
  expect(stages).toContain('itinerary:gateway_retry')
  expect(stages).toContain('itinerary:no_agenda_content')
  expect(stages).not.toContain('itinerary:agenda_only_fallback')
  expect(files.files()).toHaveLength(0);expect(published).not.toHaveBeenCalled()
  expect(result.deliverable?.state).toBe('unfulfilled')
  expect(result.reply).toContain("I couldn't finish researching this trip")
- expect(result.reply).toContain('Harbor')
+ expect(result.reply).not.toContain('fictional founders');expect(result.reply).not.toMatch(/try again/i);expect(result.reply).not.toContain('Hotel and restaurant recommendations')
  expect(result.reply).toContain('https://harbor.test/visitors')
 })
