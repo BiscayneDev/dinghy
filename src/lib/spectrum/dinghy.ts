@@ -1,5 +1,6 @@
 import {decideUi} from '@/lib/pages/jev'
 import {jevUiEnabled,uiDecisionNote,catalogueOutputError,type UiDecision} from '@/lib/pages/catalogue'
+import {uiProofSender} from '@/lib/pages/ui-proof-once'
 import {generationTool} from '@/lib/pages/generate-tool'
 import {generatedPage} from '@/lib/pages/runtime'
 import {chooseItineraryVenues,parseChosenVenues} from '@/lib/files/itinerary-choose'
@@ -596,6 +597,8 @@ export async function chatWithTools(
         deliverable?: DeliverableContract | null
         /** Per-turn context that changes every call (clock, background): sent as a late system note so the prompt prefix stays cacheable. */
         volatile?: string
+        /** One-use catalogue proof claim (handler; durable, at most one success per sender). Proof turns never add the generate tool. */
+        uiProofClaim?: (sender: string) => Promise<boolean>
     },
     tools: Tool[],
     ctx: UserContext
@@ -726,7 +729,18 @@ export async function chatWithTools(
     let generationPublishQueued=false
     let generationSourceFacts=''
     // Enforced-private turns keep their existing catalogue path unchanged; no public Jev decision or novel generation.
-    const uiGateOpen=jevUiEnabled(opts.sender)&&tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())
+    const uiBaseEligible=tools.some(t=>t.name==='create_file')&&!(tainted&&privateRouteEnforced())
+    const uiChooserSkips=contract?.kind==='itinerary'||contract?.kind==='map'
+    // One-use catalogue proof (DINGHY_JEV_UI_PROOF): only when the rollout flag is off for this
+    // sender, the turn could otherwise open the gate, and the contract kind would reach the
+    // chooser. The durable claim fires at most once, BEFORE any decision call; a claim failure
+    // closes the gate (today's behavior). Proof turns never add the generate tool below.
+    let proofTurn=false
+    if(!jevUiEnabled(opts.sender)&&uiBaseEligible&&!uiChooserSkips&&opts.uiProofClaim&&uiProofSender(opts.sender)){
+        proofTurn=await opts.uiProofClaim(opts.sender).catch(()=>false)
+        if(proofTurn)await opts.onStage?.('context','ui:proof:claimed')
+    }
+    const uiGateOpen=(jevUiEnabled(opts.sender)||proofTurn)&&uiBaseEligible
     if(uiGateOpen&&(contract?.kind==='itinerary'||contract?.kind==='map')){
         // Itinerary and map artifacts are already owned by the deterministic deliverable pipeline:
         // its server-side composition (the premium itinerary unit, the map artifact) IS the component
@@ -742,15 +756,24 @@ export async function chatWithTools(
                 // The deliverable selection already established that this turn wants an artifact; a
                 // text judgment cannot withdraw it. Keep the artifact path and record the override.
                 await opts.onStage?.('context',`ui:jev:text:overridden:deliverable:${contract.kind}`)
+                if(proofTurn)await opts.onStage?.('context','ui:proof:consumed:text:overridden')
+            }else if(uiDecision.route==='generate'&&proofTurn){
+                // Proof mode forbids generation at the mechanism level: no note, no tool, so the
+                // controlled test can never start generation spend. The stage trail records the route.
+                await opts.onStage?.('context',`ui:jev:${uiDecision.route}`)
+                await opts.onStage?.('context','ui:jev:generate:forbidden:proof')
+                await opts.onStage?.('context','ui:proof:consumed:generate')
             }else{
                 messages.push({role:'system',content:uiDecisionNote(uiDecision)})
                 await opts.onStage?.('context',`ui:jev:${uiDecision.route}${uiDecision.route==='catalogue'?':'+uiDecision.component:''}`)
+                if(proofTurn)await opts.onStage?.('context',`ui:proof:consumed:${uiDecision.route}${uiDecision.route==='catalogue'?':'+uiDecision.component:''}`)
                 if(uiDecision.route==='generate')tools=[...tools,generationTool({gatewayUrl:opts.gatewayUrl,apiKey:opts.apiKey,modelFields:()=>modelFields(opts.model,routingNow()),request:currentRequest,deadlineAt:opts.deadlineAt,onUsage:opts.onUsage,onDiagnostic:d=>{void opts.onStage?.('tool',`generate_ui:failed:${d.reason}:http_${d.status??'none'}:elapsed_${d.elapsedMs}:limit_${d.attemptLimit??'unknown'}`)},publicationFacts:()=>generationSourceFacts,onGenerated:block=>{generatedBlock=block}})]
             }
         }catch{
             // Degrade to the un-gated path (today's behavior when the flag is off): the turn continues
             // without a Jev UI decision, catalogue enforcement or the generate tool. Never kill the reply.
             await opts.onStage?.('context','ui:jev:unavailable')
+            if(proofTurn)await opts.onStage?.('context','ui:proof:consumed:unavailable')
         }
     }
     const loopCtx = (iteration: number, toolsOffered: number): CallContext => ({

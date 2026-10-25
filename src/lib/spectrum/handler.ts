@@ -53,6 +53,7 @@ import { GATEWAY_URL, SHIPYARD_API_KEY, SHIPYARD_MODEL } from './config'
 import { dinghyContactCard } from './contact-card'
 import { takeLooseConnectLink } from '@/lib/tools/google-connect'
 import { dinghyLineFor } from './line-for-chat'
+import { randomUUID } from 'crypto'
 import { createServerClient } from '@/lib/supabase/server'
 import { hitRateLimit, RATE_NOTICE } from './rate-limit'
 import {
@@ -1123,6 +1124,23 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
                 volatile: (background ?? '') + '\n\n' + clock,
                 interviewLine: interviewLine ?? undefined,
                 onUsage,
+                // One-use catalogue proof claim (ui-proof-once.ts): durable, at most one success per
+                // sender, keyed independently of any consumed internal-proof token. Failure closes
+                // the proof gate; it never blocks or alters the normal turn.
+                uiProofClaim: async (sender: string) => {
+                    try {
+                        const db = createServerClient()
+                        const { data, error } = await db.rpc('claim_inbound_delivery', {
+                            p_message_id: `ui-proof-once:${sender}`,
+                            p_chat_guid: 'uiproof;-;once',
+                            p_claim_id: randomUUID(),
+                        })
+                        if (error) return false
+                        return data === true
+                    } catch {
+                        return false
+                    }
+                },
                 ...(wantsPlaces(text) && tools.some((t) => t.name === 'find_places') ? { forceTool: 'find_places' } : {}),
             }
             const r = await chatWithTools(full, toolOpts, tools, runCtx)
