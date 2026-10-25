@@ -6,6 +6,7 @@ const files=[{path:'index.html',bytes:Buffer.from('<p>fictional</p>'),contentTyp
 const opts={title:'Fictional page',userId:'fictional'}
 const json=(b:unknown,status=200)=>new Response(JSON.stringify(b),{status})
 const created={slug:'fictional-slug',siteUrl:'https://fictional-slug.here.now/',upload:{versionId:'v1',uploads:[{path:'index.html',url:'https://up.test/i'},{path:'a.pdf',url:'https://up.test/p'}]}}
+const live={v:'old'}
 const timeout=()=>Object.assign(new Error('The operation was aborted due to timeout'),{name:'TimeoutError'})
 /** Scripted network: key is "METHOD host+path", value is a queue of outcomes. */
 function net(script:Record<string,Array<'ok'|'timeout'|number>>){
@@ -16,11 +17,12 @@ function net(script:Record<string,Array<'ok'|'timeout'|number>>){
   if(out==='timeout')throw timeout()
   if(typeof out==='number')return new Response('',{status:out})
   if(key.endsWith('/publish'))return json(created)
+  if(key==='GET here.now/api/v1/publish/fictional-slug')return json({currentVersionId:live.v})
   return json({})
  }))
  return calls
 }
-beforeEach(()=>{vi.stubEnv('HERENOW_API_KEY','fictional-key');vi.useFakeTimers()})
+beforeEach(()=>{live.v='old';vi.stubEnv('HERENOW_API_KEY','fictional-key');vi.useFakeTimers()})
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs()})
 const run=async(p:Promise<unknown>)=>{const r=p.then(v=>({v}),e=>({e}));await vi.runAllTimersAsync();return r}
 describe('hosted publish retries a transient failure once per step',()=>{
@@ -53,5 +55,23 @@ describe('hosted publish retries a transient failure once per step',()=>{
   const slow=vi.fn(async()=>{await new Promise(r=>setTimeout(r,15_000));throw timeout()});vi.stubGlobal('fetch',slow)
   const r=await run(publishSite(files,opts)) as {e:Error}
   expect(r.e.message).toMatch(/create failed/);expect(slow.mock.calls.length).toBeLessThanOrEqual(3)
+ })
+ it('does not retry a 429 (documented per-hour publish limit, no Retry-After)',async()=>{
+  const calls=net({'POST here.now/api/v1/publish':[429]});const r=await run(publishSite(files,opts)) as {e:Error}
+  expect(r.e.message).toMatch(/create failed \(attempt 1\).*429/);expect(calls).toHaveLength(1)
+ })
+ it('accepts a finalize that timed out after the site went live (confirmed by one read)',async()=>{
+  live.v='v1';const calls=net({'POST here.now/api/v1/publish/fictional-slug/finalize':['timeout','timeout']})
+  expect(await run(publishSite(files,opts))).toHaveProperty('v.slug','fictional-slug');expect(calls.at(-1)).toBe('GET here.now/api/v1/publish/fictional-slug')
+ })
+ it('still fails finalize when the read shows the version is not live',async()=>{
+  live.v='old';net({'POST here.now/api/v1/publish/fictional-slug/finalize':['timeout','timeout']})
+  expect(((await run(publishSite(files,opts))) as {e:Error}).e.message).toMatch(/finalize failed \(attempt 2\)/)
+ })
+ it('stops at once when the turn is aborted: no retry, no reconcile read',async()=>{
+  const ac=new AbortController();const calls:string[]=[]
+  vi.stubGlobal('fetch',vi.fn(async(url:string,init?:RequestInit)=>{calls.push(`${init?.method} ${new URL(url).pathname}`);ac.abort(new Error('turn over'));throw timeout()}))
+  const r=await run(publishSite(files,{...opts,signal:ac.signal})) as {e:Error}
+  expect(r.e).toBeTruthy();expect(calls).toHaveLength(1)
  })
 })

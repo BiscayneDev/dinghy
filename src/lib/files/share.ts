@@ -19,7 +19,9 @@ const TIMEOUT_MS = 15_000
 /** One slow here.now call used to fail the whole publish and drop the reply to a flat PDF.
  * A transient failure (timeout, network error, 429/5xx) gets one retry per step, inside a
  * total budget, and every failure names the step that failed. */
-const PUBLISH_BUDGET_MS = 45_000
+// Fits the 85s turn budget after model + PDF render (~30-35s in the Oct 25 trace) with margin; the
+// turn's own abort signal still wins if the turn runs out first.
+const PUBLISH_BUDGET_MS = 40_000
 const RETRY_BACKOFF_MS = 400
 const MIN_RETRY_WINDOW_MS = 5_000
 const FOLDER = 'Dinghy'
@@ -74,6 +76,9 @@ export class HereNowError extends Error {
     constructor(message: string, readonly transient: boolean) { super(message) }
 }
 
+/** 429 is deliberately not retried: here.now documents per-hour publish limits and no Retry-After, so a quick retry would only spend the limit. */
+const transientStatus = (status: number) => status >= 500
+
 function transientFailure(err: unknown): boolean {
     if (err instanceof HereNowError) return err.transient
     const name = err instanceof Error ? err.name : ''
@@ -81,24 +86,26 @@ function transientFailure(err: unknown): boolean {
 }
 
 /** Runs one publish step, retrying a transient failure once while the budget allows. */
-async function step<T>(label: string, deadline: number, run: (timeoutMs: number) => Promise<T>): Promise<T> {
+async function step<T>(label: string, deadline: number, run: (signal: AbortSignal) => Promise<T>, turn?: AbortSignal): Promise<T> {
     for (let attempt = 1; ; attempt++) {
         const left = deadline - Date.now()
+        const limit = AbortSignal.timeout(Math.max(1_000, Math.min(TIMEOUT_MS, left)))
         try {
-            return await run(Math.max(1_000, Math.min(TIMEOUT_MS, left)))
+            turn?.throwIfAborted()
+            return await run(turn ? AbortSignal.any([limit, turn]) : limit)
         } catch (err) {
             const reason = err instanceof Error ? (err.name === 'TimeoutError' ? 'timeout' : err.message) : String(err)
-            const retry = attempt === 1 && transientFailure(err) && deadline - Date.now() > MIN_RETRY_WINDOW_MS + RETRY_BACKOFF_MS
+            const retry = attempt === 1 && !turn?.aborted && transientFailure(err) && deadline - Date.now() > MIN_RETRY_WINDOW_MS + RETRY_BACKOFF_MS
             if (!retry) throw new HereNowError(`here.now ${label} failed (attempt ${attempt}): ${reason}`, false)
             await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS))
         }
     }
 }
 
-async function call<T>(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<T> {
+async function call<T>(path: string, init: RequestInit, signal: AbortSignal = AbortSignal.timeout(TIMEOUT_MS)): Promise<T> {
     const res = await fetch(`${API}${path}`, {
         ...init,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
         headers: {
             Authorization: `Bearer ${process.env.HERENOW_API_KEY}`,
             'Content-Type': 'application/json',
@@ -106,7 +113,7 @@ async function call<T>(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS):
             ...(init.headers ?? {}),
         },
     })
-    if (!res.ok) throw new HereNowError(`here.now ${init.method ?? 'GET'} ${path} ${res.status}`, res.status === 429 || res.status >= 500)
+    if (!res.ok) throw new HereNowError(`here.now ${init.method ?? 'GET'} ${path} ${res.status}`, transientStatus(res.status))
     const text = await res.text()
     return (text ? JSON.parse(text) : {}) as T
 }
@@ -126,36 +133,48 @@ function manifestBody(files: SiteFile[], opts: { title: string; userId: string }
     }
 }
 
-async function uploadAndFinalize(slug: string, upload: CreateResponse['upload'], files: SiteFile[], deadline: number): Promise<void> {
+async function uploadAndFinalize(slug: string, upload: CreateResponse['upload'], files: SiteFile[], deadline: number, turn?: AbortSignal): Promise<void> {
     const byPath = new Map(files.map((f) => [f.path, f]))
     for (const u of upload.uploads) {
         const f = byPath.get(u.path)
         if (!f) continue
-        await step(`upload ${u.path}`, deadline, async (timeoutMs) => {
+        await step(`upload ${u.path}`, deadline, async (signal) => {
             const put = await fetch(u.url, {
                 method: 'PUT',
                 body: new Uint8Array(f.bytes),
                 headers: { 'Content-Type': f.contentType, ...(u.headers ?? {}) },
-                signal: AbortSignal.timeout(timeoutMs),
+                signal,
             })
-            if (!put.ok) throw new HereNowError(`here.now upload ${put.status}`, put.status === 429 || put.status >= 500)
-        })
+            if (!put.ok) throw new HereNowError(`here.now upload ${put.status}`, transientStatus(put.status))
+        }, turn)
     }
-    await step('finalize', deadline, (timeoutMs) => call(`/publish/${encodeURIComponent(slug)}/finalize`, {
-        method: 'POST',
-        body: JSON.stringify({ versionId: upload.versionId }),
-    }, timeoutMs))
+    try {
+        await step('finalize', deadline, (signal) => call(`/publish/${encodeURIComponent(slug)}/finalize`, {
+            method: 'POST',
+            body: JSON.stringify({ versionId: upload.versionId }),
+        }, signal), turn)
+    } catch (err) {
+        // here.now does not document finalize as idempotent. If an attempt timed out after the server
+        // flipped the pointer, the site is already live: confirm with one bounded read before failing.
+        if (turn?.aborted || deadline - Date.now() < 1_000) throw err
+        let live = false
+        try {
+            const site = await call<{ currentVersionId?: string | null }>(`/publish/${encodeURIComponent(slug)}`, { method: 'GET' }, AbortSignal.timeout(Math.min(5_000, Math.max(1_000, deadline - Date.now()))))
+            live = site.currentVersionId === upload.versionId
+        } catch { /* keep the original failure */ }
+        if (!live) throw err
+    }
 }
 
 /** Publish files as one Site; returns its link. Throws on any failure. */
-export async function publishSite(files: SiteFile[], opts: { title: string; userId: string }): Promise<PublishedSite> {
+export async function publishSite(files: SiteFile[], opts: { title: string; userId: string; signal?: AbortSignal }): Promise<PublishedSite> {
     await assertAccountActive(opts.userId)
     if (!shareEnabled()) throw new Error('hosted files are not set up')
     const ttl = ttlSeconds()
     const deadline = Date.now() + PUBLISH_BUDGET_MS
     // A retried create can leave one unused site behind; it expires with the normal 7-day TTL.
-    const created = await step('create', deadline, (timeoutMs) => call<CreateResponse>('/publish', { method: 'POST', body: JSON.stringify(manifestBody(files, opts)) }, timeoutMs))
-    await uploadAndFinalize(created.slug, created.upload, files, deadline)
+    const created = await step('create', deadline, (signal) => call<CreateResponse>('/publish', { method: 'POST', body: JSON.stringify(manifestBody(files, opts)) }, signal), opts.signal)
+    await uploadAndFinalize(created.slug, created.upload, files, deadline, opts.signal)
     return { url: created.siteUrl, slug: created.slug, versionId: created.upload.versionId, expiresAt: new Date(Date.now() + ttl * 1000).toISOString() }
 }
 
@@ -164,13 +183,13 @@ export async function publishSite(files: SiteFile[], opts: { title: string; user
  * Used to add the og tag once the Site's own address is known. Callers treat a failure as "keep the
  * version that is already live".
  */
-export async function updateSite(slug: string, files: SiteFile[], opts: { title: string; userId: string; baseVersionId?: string }): Promise<void> {
+export async function updateSite(slug: string, files: SiteFile[], opts: { title: string; userId: string; baseVersionId?: string; signal?: AbortSignal }): Promise<void> {
     await assertAccountActive(opts.userId)
     if (!shareEnabled()) throw new Error('hosted files are not set up')
     if (!opts.baseVersionId) throw new Error('missing base version for site update')
     const deadline = Date.now() + PUBLISH_BUDGET_MS
-    const updated = await step('update', deadline, (timeoutMs) => call<CreateResponse>(`/publish/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify({ ...manifestBody(files, opts), baseVersionId: opts.baseVersionId }) }, timeoutMs))
-    await uploadAndFinalize(slug, updated.upload, files, deadline)
+    const updated = await step('update', deadline, (signal) => call<CreateResponse>(`/publish/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify({ ...manifestBody(files, opts), baseVersionId: opts.baseVersionId }) }, signal), opts.signal)
+    await uploadAndFinalize(slug, updated.upload, files, deadline, opts.signal)
 }
 
 interface SiteDetails { slug: string; siteUrl: string; displayName?: string; displayDescription?: string; expiresAt?: string | null }
