@@ -1,13 +1,13 @@
 import {afterEach,beforeEach,expect,it,vi} from 'vitest'
 // Two-turn handler regression, all fictional. Persistence, sends and the gateway are in-memory; the handler and chatWithTools are real.
-const state=vi.hoisted(()=>({messages:[] as {role:string;content:string;at?:string}[],sent:[] as string[],chatCalls:[] as any[],stages:[] as string[],verdict:'answer' as string|null,decisions:0,now:Date.now()}))
+const state=vi.hoisted(()=>({messages:[] as {role:string;content:string;at?:string}[],sent:[] as string[],chatCalls:[] as any[],stages:[] as string[],verdict:'answer' as string|null,claims:new Set<string>(),freeze:null as any,decisions:0,now:Date.now()}))
 const {published}=vi.hoisted(()=>({published:vi.fn()}))
 vi.mock('@/lib/files/share',()=>({shareEnabled:()=>true,publishSite:published,revokeSite:vi.fn(),updateSite:vi.fn()}))
 vi.mock('@/lib/files/imagery',async orig=>({...await orig<any>(),verifyShareMetadata:async()=>true}))
 vi.mock('@/lib/supabase/server',()=>{const chain:any=new Proxy(function(){},{get:(_t,k)=>k==='then'?(r:any)=>r({data:[],error:null,count:0}):chain,apply:()=>chain});return {createServerClient:()=>chain}})
-vi.mock('@/spectrum/store',async orig=>({...await orig<any>(),ensureIdentity:async()=>{},isGoogleConnected:async()=>false,isPayboxConnected:async()=>false,isGithubConnected:async()=>false,isHealthConnected:async()=>false,loadFacts:async()=>[],loadHistory:async()=>state.messages.map(m=>({...m})),saveMessage:async(_g:string,role:string,content:string)=>{state.messages.push({role,content,at:new Date().toISOString()})},saveMessageReturningId:async()=>'id',updateMessageContent:async()=>{},createConnectLink:async()=>'https://x.test'}))
+vi.mock('@/spectrum/store',async orig=>({...await orig<any>(),ensureIdentity:async()=>{},isGoogleConnected:async()=>false,isPayboxConnected:async()=>false,isGithubConnected:async()=>false,isHealthConnected:async()=>false,loadFacts:async()=>[],loadHistory:async()=>(state.freeze??state.messages).map(m=>({...m})),saveMessage:async(_g:string,role:string,content:string)=>{state.messages.push({role,content,at:new Date().toISOString()})},saveMessageReturningId:async()=>'id',updateMessageContent:async()=>{},createConnectLink:async()=>'https://x.test'}))
 vi.mock('@/lib/spectrum/beta-gate',async orig=>({...await orig<any>(),getBetaRole:async()=>'owner'}))
-vi.mock('@/lib/spectrum/outbox',async orig=>({...await orig<any>(),claimInboundDelivery:async()=>true,enqueueOutbox:async()=>'o',markOutboxSent:async()=>{},markOutboxFailed:async()=>{}}))
+vi.mock('@/lib/spectrum/outbox',async orig=>({...await orig<any>(),claimInboundDelivery:async(id:string)=>{if(state.claims.has(id))return false;state.claims.add(id);return true},enqueueOutbox:async()=>'o',markOutboxSent:async()=>{},markOutboxFailed:async()=>{}}))
 vi.mock('@/lib/data-portability/erasure-state',async orig=>({...await orig<any>(),assertAccountActive:async()=>{},erasureEnabled:()=>false,isEraseIntent:()=>false}))
 vi.mock('@/lib/allowance',async orig=>({...await orig<any>(),allowanceUsedUpMessage:()=>'',claimLimitNotice:async()=>false,isOverDailyAllowance:async()=>({over:false})}))
 vi.mock('@/lib/spectrum/rate-limit',async orig=>({...await orig<any>(),hitRateLimit:async()=>false}))
@@ -25,7 +25,7 @@ const call=(name:string,args:unknown)=>new Response(JSON.stringify({choices:[{fi
 const stop=(c:string)=>new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:c}}]}))
 const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Candidate lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' ')[0].slice(1)):9999}
 let gateway:any[]=[],work=0,selects=0,mode:'search_only'|'success'='search_only'
-beforeEach(()=>{state.messages=[];state.sent=[];state.chatCalls=[];gateway=[];work=0;selects=0;mode='search_only';state.verdict='answer';state.decisions=0;published.mockReset();published.mockResolvedValue({url:'https://fictional-handler.here.now/',slug:'fictional-handler',expiresAt:'2030-06-11T00:00:00Z'})})
+beforeEach(()=>{state.claims=new Set();state.freeze=null;state.messages=[];state.sent=[];state.chatCalls=[];gateway=[];work=0;selects=0;mode='search_only';state.verdict='answer';state.decisions=0;published.mockReset();published.mockResolvedValue({url:'https://fictional-handler.here.now/',slug:'fictional-handler',expiresAt:'2030-06-11T00:00:00Z'})})
 afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs()})
 const space={id:'any;-;+15550000000',send:async(t:any)=>{state.sent.push(t)}}
 const texts=()=>state.sent.filter((x:any)=>typeof x==='string') as string[]
@@ -115,4 +115,15 @@ it('the marker cannot be forged or leaked: user text never creates pending state
  expect(state.chatCalls[0]?.opts.clarified).toBeUndefined()
  expect(texts().join('\n')).not.toContain('clarification pending')
  expect(state.messages.filter(m=>m.role==='assistant').every(m=>!m.content.startsWith('[itinerary clarification pending]'))).toBe(true)
+})
+
+it('two different answers to the same question: exactly one continuation, the other is an ordinary message that is not dropped',async()=>{
+ install();mode='success';state.messages=pendingHistory() as any;state.freeze=[...state.messages]
+ await Promise.all([handleSpectrumMessage(space,inbound('a1','The fictional north one')),handleSpectrumMessage(space,inbound('a2','Actually the fictional south one'))])
+ expect(state.decisions).toBe(2)
+ const clarified=state.chatCalls.filter(c=>c.opts.clarified===true)
+ expect(clarified).toHaveLength(1)
+ expect(state.chatCalls).toHaveLength(2) // the losing message still got a normal turn, not silence
+ expect(published).toHaveBeenCalledTimes(1)
+ expect(texts().filter(t=>t.includes('putting the itinerary together'))).toHaveLength(1)
 })

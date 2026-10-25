@@ -1032,6 +1032,8 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     // A pending itinerary question carries the original request forward only when the model judges the new message to be its answer.
     let replyVerdict: ReplyVerdict | null = null
     if (pendingQuestion) replyVerdict = await decideClarificationReply({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, pending: pendingQuestion, reply: text, signal: AbortSignal.timeout(8000) }).catch(() => null)
+    // Two answers to the same question must not both start the itinerary: one atomic claim per question (the inbound-dedupe RPC). The loser, or a failed claim, is handled as an ordinary message.
+    if (pendingQuestion && replyVerdict === 'answer' && !(await claimInboundDelivery(`${pendingQuestion.key}`, chatGuid))) replyVerdict = null
     deliverable = continueAfterClarification(pendingQuestion, replyVerdict, text, deliverable)
     let askedQuestion = false
     const answeredQuestion = Boolean(pendingQuestion && replyVerdict === 'answer' && deliverable?.kind === 'itinerary')

@@ -11,7 +11,7 @@ type Line = { role: string; content?: unknown; at?: string }
 
 export const stripClarifyMark = (text: string): string => text.split(CLARIFY_MARK).join('')
 
-export interface PendingClarification { request: string; question: string }
+export interface PendingClarification { request: string; question: string; /** Stable identity of this question (its saved timestamp), used to let exactly one answer continue the work. */ key: string }
 
 /** The original request and question, when the last assistant message is a fresh pending itinerary question. */
 export function pendingItineraryClarification(history: Line[], now: number = Date.now()): PendingClarification | null {
@@ -21,7 +21,7 @@ export function pendingItineraryClarification(history: Line[], now: number = Dat
     if (!Number.isFinite(at) || now - at > CLARIFY_TTL_MS || at - now > 60_000) return null
     for (let i = history.length - 2; i >= 0; i--) {
         const m = history[i]
-        if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) return { request: m.content, question: last.content.slice(CLARIFY_MARK.length) }
+        if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) return { request: m.content, question: last.content.slice(CLARIFY_MARK.length), key: `itin-clarify:${new Date(at).toISOString()}` }
     }
     return null
 }
