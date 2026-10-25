@@ -736,7 +736,7 @@ export async function chatWithTools(
     // chooser. The durable claim fires at most once, BEFORE any decision call; a claim failure
     // closes the gate (today's behavior). Proof turns never add the generate tool below.
     let proofTurn=false
-    if(!jevUiEnabled(opts.sender)&&uiBaseEligible&&!uiChooserSkips&&opts.uiProofClaim&&uiProofSender(opts.sender)){
+    if(!jevUiEnabled(opts.sender)&&uiBaseEligible&&!uiChooserSkips&&opts.uiProofClaim&&opts.sender&&uiProofSender(opts.sender)){
         proofTurn=await opts.uiProofClaim(opts.sender).catch(()=>false)
         if(proofTurn)await opts.onStage?.('context','ui:proof:claimed')
     }
