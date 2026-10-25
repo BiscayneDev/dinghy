@@ -1,5 +1,5 @@
 import { it, expect, describe } from 'vitest'
-import { renderKind, countdownDays, pageHero } from '@/lib/files/kinds'
+import { renderKind, countdownDays, pageHero, calcInitialRows } from '@/lib/files/kinds'
 import { renderHtml, flattenBlocks } from '@/lib/files/render'
 import { UI_CATALOGUE, UI_REGISTRY, catalogueOutputError, type CatalogueId } from '@/lib/pages/catalogue'
 
@@ -8,11 +8,20 @@ import { UI_CATALOGUE, UI_REGISTRY, catalogueOutputError, type CatalogueId } fro
 describe('calc renderer', () => {
     it('splits a shared cost evenly, cents rounded with the last share taking the remainder', () => {
         const html = renderKind('calc', ['split | 100 | Sam, Ana, Ben'])
-        expect(html).toContain('Split $100.00')
+        expect(html).toContain('data-calc="split"')
+        expect(html).toContain('value="100.00"')
         expect(html).toContain('3 people')
         expect(html).toContain('$33.34')
         expect(html.match(/\$33\.33/g)?.length).toBe(2)
         expect(html).toContain('last share takes the remainder')
+        expect(html).toContain('data-a="reset"')
+    })
+    it('server first paint mirrors the script math (no-JS view complete)', () => {
+        const init = calcInitialRows('split', { total: '90.00', shares: 'Sam x2, Ana' }, {})
+        expect(init?.rows).toEqual([['Sam x2', '$60.00'], ['Ana', '$30.00']])
+        expect(calcInitialRows('tip', { bill: '80.00', pct: '20', people: '2' }, {})?.total).toBe('$96.00')
+        expect(calcInitialRows('convert', { amt: '100', rate: '' }, { from: 'USD', to: 'EUR', asof: '' })?.note).toContain('Needs a quoted')
+        expect(calcInitialRows('split', { total: '-5', shares: 'Sam' }, {})).toBeNull()
     })
     it('applies share weights', () => {
         const html = renderKind('calc', ['split | 90 | Sam x2, Ana'])
@@ -31,6 +40,7 @@ describe('calc renderer', () => {
     it('converts only with an explicit quoted rate and shows its date', () => {
         const html = renderKind('calc', ['convert | 100 | USD | EUR | 0.92 | 2026-10-20'])
         expect(html).toContain('92.00 EUR')
+        expect(html).toContain('value="0.92"')
         expect(html).toContain('rate as of 2026-10-20')
     })
     it('never invents a rate: missing rate renders an honest note, not a number', () => {
@@ -163,6 +173,20 @@ describe('output validation for the new components', () => {
         expect(err('recipe', steps + '\n:::facts\nYield: 4 servings\n:::')).toBeNull()
         expect(err('recipe', 'Bake something nice.')).toMatch(/recipe/)
         expect(err('recipe', steps)).toMatch(/recipe/)
+    })
+})
+
+describe('view-time script', () => {
+    it('is injected only when a countdown or calc block is present', () => {
+        const withCalc = renderHtml({ title: 'Fictional', subtitle: '', body: ':::calc\nsplit | 100 | Sam, Ana\n:::\n' } as never)
+        expect(withCalc).toContain('data-cdn-date')
+        expect(withCalc).toContain('<script>')
+        const plain = renderHtml({ title: 'Fictional', subtitle: '', body: 'Just notes.\n' } as never)
+        expect(plain).not.toContain('<script>')
+    })
+    it('countdown number carries its date for deterministic view-time recompute', () => {
+        const html = renderHtml({ title: 'Fictional', subtitle: '', body: ':::countdown\nHarbor Festival | 2026-11-03\n:::\n' } as never)
+        expect(html).toContain('data-cdn-date="2026-11-03"')
     })
 })
 
