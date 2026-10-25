@@ -46,7 +46,7 @@ describe('reply context overlap', () => {
 
   it('overlaps independent history, facts and memory without caching credentials or pinning a model', () => {
     const handler = readFileSync('src/lib/spectrum/handler.ts', 'utf8')
-    expect(handler).toContain('const [memory, history, loadedFacts] = await Promise.all([')
+    expect(handler).toContain('const [memory, historyRaw, loadedFacts] = await Promise.all([')
     expect(handler).toContain('preflight_ms=')
     expect(handler).toContain('gatewayMs: usage.reduce')
     expect(handler).toContain('const routing = routingFor()')
