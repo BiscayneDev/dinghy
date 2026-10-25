@@ -103,6 +103,8 @@ export interface HistoryMessage {
   content: string
   /** Written from a turn that held Gmail/Calendar data; routes later calls private. */
   googleDerived?: boolean
+  /** When the row was saved (ISO). */
+  at?: string
 }
 
 /** History row recording a file delivery (not shown to the model). */
@@ -123,13 +125,13 @@ export async function loadHistory(chatGuid: string, limit = 20): Promise<History
   // rather than lose history.
   let res = await query('role, content, created_at, google_derived')
   if (res.error) res = await query('role, content, created_at')
-  const rows = ((res.data ?? []) as unknown as { role: string; content: string; google_derived?: boolean | null }[]).reverse()
+  const rows = ((res.data ?? []) as unknown as { role: string; content: string; created_at?: string; google_derived?: boolean | null }[]).reverse()
   return rows
     .filter((r) => r.role === 'user' || r.role === 'assistant')
     // "[sent file: x.pdf]" rows record deliveries for us; the model must not
     // see them, or it copies the marker as text instead of calling create_file.
     .filter((r) => !isFileMarker(r.content))
-    .map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content, ...(r.google_derived ? { googleDerived: true } : {}) }))
+    .map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content, ...(r.created_at ? { at: r.created_at } : {}), ...(r.google_derived ? { googleDerived: true } : {}) }))
 }
 
 export async function saveMessage(chatGuid: string, role: 'user' | 'assistant', content: string, googleDerived = false): Promise<void> {
