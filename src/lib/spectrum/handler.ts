@@ -40,6 +40,7 @@ import { allowanceUsedUpMessage, claimLimitNotice, isOverDailyAllowance } from '
 import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
+import { CLARIFY_MARK, pendingItineraryClarification, continueAfterClarification } from '@/lib/files/itinerary-continuation'
 import { deliverableIntentEnabled, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
@@ -986,7 +987,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     if (steer) interviewLine = interviewLine ? `${interviewLine} ${steer}` : steer
 
     const full: Message[] = [
-        ...history,
+        ...history.map((m) => (m.role === 'assistant' && typeof m.content === 'string' && m.content.startsWith(CLARIFY_MARK) ? { ...m, content: m.content.slice(CLARIFY_MARK.length) } : m)),
         { role: 'user', content: withReplyContext(text, replyTo), ...(inboundImage ? { images: [inboundImage.dataUrl] } : {}) },
     ]
     // Photo turns: save the label now (keeps history order), describe the
@@ -1025,6 +1026,11 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     } else {
         deliverable = selectDeliverable(full)
     }
+    // A pending itinerary question carries the original request forward: the answer is applied to it, not treated as a new topic.
+    const pendingQuestion = pendingItineraryClarification(history)
+    deliverable = continueAfterClarification(pendingQuestion, text, deliverable)
+    let askedQuestion = false
+    const answeredQuestion = Boolean(pendingQuestion && deliverable?.kind === 'itinerary')
     const itineraryJob = deliverable?.kind === 'itinerary'
     // The acknowledgement waits until the first model judgment decides to do the work; a clarifying question must not follow a promise.
     const acknowledgeItinerary = async () => {
@@ -1111,6 +1117,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             const toolOpts = {
                 deadlineAt, onStage,
                 ...(itineraryJob ? { onCommit: acknowledgeItinerary } : {}),
+                ...(answeredQuestion ? { clarified: true } : {}),
                 sender: senderAddress(message.sender) ?? undefined,
                 taskClass: classifyUserTurn(selectDeliverable(full)?.request ?? text),
                 gatewayUrl: GATEWAY_URL,
@@ -1148,6 +1155,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             const r = await chatWithTools(full, toolOpts, tools, runCtx)
             if (r.deliverable) await onStage('reply_ready', `deliverable:${r.deliverable.kind}:${r.deliverable.state}`)
             reply = r.reply
+            askedQuestion = Boolean(r.clarification)
             replyTainted = Boolean(r.tainted)
             toolCalls = r.toolCalls
             iterations = r.iterations
@@ -1202,7 +1210,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         }
         await onStage('reply_attempted', answerDelivered ? 'delivered' : 'not_confirmed')
         await settleWorkingTapback(message, eyes, text)
-        await saveMessage(chatGuid, 'assistant', plainReply, replyTainted).catch((err) => logErr('message save failed', err))
+        await saveMessage(chatGuid, 'assistant', askedQuestion ? CLARIFY_MARK + plainReply : plainReply, replyTainted).catch((err) => logErr('message save failed', err))
         // The exact draft, rendered by the server, as its own bubble.
         const loose = takeLooseProposal(chatGuid)
         const proposal = actions?.proposal() ?? loose

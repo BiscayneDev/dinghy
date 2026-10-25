@@ -527,6 +527,8 @@ export interface ToolChatResult {
     /** The turn read Google data (or started with it): save its reply tagged google_derived. */
     tainted?: boolean
     deliverable?: ReturnType<typeof deliverableOutcome>
+    /** The reply is the one question the itinerary work is waiting on (saved as pending state by the handler). */
+    clarification?: boolean
 }
 
 /**
@@ -605,6 +607,8 @@ export async function chatWithTools(
         uiProofClaim?: (sender: string) => Promise<boolean>
         /** Fired once, after the first model judgment chose to do the itinerary work (not to ask a question). */
         onCommit?: () => Promise<void>
+        /** This turn already carries the user's answer to a clarifying question: do not offer to ask again. */
+        clarified?: boolean
     },
     tools: Tool[],
     ctx: UserContext
@@ -879,7 +883,7 @@ export async function chatWithTools(
         const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates&&viewReady
         // First model judgment on an itinerary: it may ask one essential question instead of being forced into research.
         if(itineraryContract&&iteration>=2)await commitWork()
-        const clarifying=itineraryContract&&iteration===1&&!apiPlaces&&!pageAttempted&&!selecting
+        const clarifying=itineraryContract&&!opts.clarified&&iteration===1&&!apiPlaces&&!pageAttempted&&!selecting
         const forceTool = clarifying ? undefined : (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
         const offered0 = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
         const offered = clarifying ? [...offered0, CLARIFY_DEF] : offered0
@@ -933,17 +937,14 @@ export async function chatWithTools(
         const msg = choice?.message
         const calls = msg?.tool_calls ?? []
         if(clarifying){
-            // One short question, never a list: cut at the first question mark.
-            const oneQuestion=(raw:string)=>{const t=raw.replace(/\s+/g,' ').trim();const q=t.indexOf('?');return (q>=0?t.slice(0,q+1):t).slice(0,300).trim()}
             const askCall=calls.find(c=>c.function.name===CLARIFY_TOOL)
             let question=''
-            if(askCall){try{const q=(JSON.parse(askCall.function.arguments||'{}') as {question?:unknown}).question;if(typeof q==='string')question=oneQuestion(q)}catch{}}
-            // A gateway that ignores tool_choice may answer in plain text. On this first call that text is the model talking to the user; keep it when it is one short question.
-            else if(calls.length===0&&typeof msg?.content==='string'&&msg.content.length<=400&&/\?/.test(msg.content))question=oneQuestion(msg.content)
+            // Only the structured tool counts. A question is used whole or not at all: empty or oversized is rejected, never trimmed.
+            if(askCall){try{const q=(JSON.parse(askCall.function.arguments||'{}') as {question?:unknown}).question;if(typeof q==='string'){const t=q.replace(/\s+/g,' ').trim();if(t&&t.length<=500)question=t}}catch{}}
             if(question){
                 await opts.onStage?.('tool','itinerary:clarification_asked')
                 // A question is not an artifact: no file, honest unfulfilled state, and the question is the whole reply.
-                return {reply:question,toolCalls:toolCallCount,iterations:iteration,tainted,deliverable:deliverableOutcome(contract,false)}
+                return {reply:question,toolCalls:toolCallCount,iterations:iteration,tainted,deliverable:deliverableOutcome(contract,false),clarification:true}
             }
             if(askCall){messages.push({role:'system',content:'No question was given. Continue with the research or file tool.'});continue}
             // Committed only by a real research step; a premature create_file is blocked later and commits at the next iteration if the work goes on.
