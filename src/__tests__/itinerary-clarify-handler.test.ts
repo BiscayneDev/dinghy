@@ -127,3 +127,12 @@ it('two different answers to the same question: exactly one continuation, the ot
  expect(published).toHaveBeenCalledTimes(1)
  expect(texts().filter(t=>t.includes('putting the itinerary together'))).toHaveLength(1)
 })
+
+it('the claim key is per chat: the same question timestamp in two chats does not collide, and carries no chat id in clear',async()=>{
+ install();mode='success';state.messages=pendingHistory() as any;state.freeze=[...state.messages]
+ await handleSpectrumMessage(space,inbound('b1','The fictional north one'))
+ await handleSpectrumMessage({...space,id:'any;-;+15550000001'},inbound('b2','The fictional north one'))
+ const keys=[...state.claims].filter(k=>k.startsWith('itin-clarify:'))
+ expect(keys).toHaveLength(2)
+ expect(keys.join()).not.toContain('+1555')
+})

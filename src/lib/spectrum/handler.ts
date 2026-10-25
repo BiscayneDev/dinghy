@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { wantsPageResend, latestChatFile, verifiedPage, deliverHostedLink } from '@/lib/files/recover'
 import { fileReply } from '@/lib/files/reply'
 import { assertAccountActive, erasureEnabled, isEraseIntent } from '@/lib/data-portability/erasure-state'
@@ -1033,7 +1034,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     let replyVerdict: ReplyVerdict | null = null
     if (pendingQuestion) replyVerdict = await decideClarificationReply({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, pending: pendingQuestion, reply: text, signal: AbortSignal.timeout(8000) }).catch(() => null)
     // Two answers to the same question must not both start the itinerary: one atomic claim per question (the inbound-dedupe RPC). The loser, or a failed claim, is handled as an ordinary message.
-    if (pendingQuestion && replyVerdict === 'answer' && !(await claimInboundDelivery(`${pendingQuestion.key}`, chatGuid))) replyVerdict = null
+    if (pendingQuestion && replyVerdict === 'answer' && !(await claimInboundDelivery(`itin-clarify:${createHash('sha256').update(`${chatGuid}\n${pendingQuestion.key}`).digest('hex')}`, chatGuid))) replyVerdict = null
     deliverable = continueAfterClarification(pendingQuestion, replyVerdict, text, deliverable)
     let askedQuestion = false
     const answeredQuestion = Boolean(pendingQuestion && replyVerdict === 'answer' && deliverable?.kind === 'itinerary')
