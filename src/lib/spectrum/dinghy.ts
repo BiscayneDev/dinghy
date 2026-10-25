@@ -565,6 +565,8 @@ const PAGE_FINISH =
     'This answer is too long for chat and no page was made. Call create_file once with this answer, using only supported facts and observed source URLs, then give a short verdict. ' +
     'If hosting fails, give the useful result in chat and say the page was not made. Never claim a page exists without a successful tool result.'
 
+const CLARIFY_TOOL='ask_clarifying_question'
+const CLARIFY_DEF={type:'function' as const,function:{name:CLARIFY_TOOL,description:'Ask the user ONE essential question instead of starting research. Use it only when the request cannot be researched or planned without the answer: the destination is unclear, or the dates conflict or are missing in a way that changes the plan. Never guess a named place or a date, and do not ask when the request is enough to proceed; in that case call the research or file tool instead.',parameters:{type:'object',properties:{question:{type:'string',description:'One short question in plain words.'}},required:['question']}}}
 /** Live runs showed itinerary model calls taking 18-28s for tiny outputs; a 25s cap cut two post-search calls with ~200s of the 240s turn left and discarded the research. One slow call may now use up to 60s, always inside the turn deadline. */
 const ITINERARY_CALL_MS=60_000
 export async function chatWithTools(
@@ -601,6 +603,8 @@ export async function chatWithTools(
         volatile?: string
         /** One-use catalogue proof claim (handler; durable, at most one success per sender). Proof turns never add the generate tool. */
         uiProofClaim?: (sender: string) => Promise<boolean>
+        /** Fired once, after the first model judgment chose to do the itinerary work (not to ask a question). */
+        onCommit?: () => Promise<void>
     },
     tools: Tool[],
     ctx: UserContext
@@ -662,8 +666,7 @@ export async function chatWithTools(
             if(!/^\s*-\s+\S/m.test(agendaPart)){
                 await opts.onStage?.('tool','itinerary:no_agenda_content')
                 const links=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
-                const placed=resolveDestination(currentRequest)?'':' I also could not match the destination in your message to a known place.'
-                return finish({reply:`I couldn't finish researching this trip: the research step timed out, so I haven't planned or recommended anything yet. Nothing was booked.${placed}${links?`\n\nSources found, not verified recommendations:\n${links}`:''}`,toolCalls:toolCallCount,iterations:iteration,tainted})
+                                return finish({reply:`I couldn't finish researching this trip: the research step timed out, so I haven't planned or recommended anything yet. Nothing was booked.${links?`\n\nSources found, not verified recommendations:\n${links}`:''}`,toolCalls:toolCallCount,iterations:iteration,tainted})
             }
             if(!inputSchemaError(input,file.inputSchema)){
                 pageAttempted=true;toolCallCount++
@@ -872,8 +875,11 @@ export async function chatWithTools(
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
         const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates&&viewReady
-        const forceTool = (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
-        const offered = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
+        // First model judgment on an itinerary: it may ask one essential question instead of being forced into research.
+        const clarifying=itineraryContract&&iteration===1&&!apiPlaces&&!pageAttempted&&!selecting
+        const forceTool = clarifying ? undefined : (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
+        const offered0 = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
+        const offered = clarifying ? [...offered0, CLARIFY_DEF] : offered0
         const t0 = Date.now()
         // Bound a post-search generation, not tools or actions. Preserve honest
         // source-only progress when the gateway stalls, with transport headroom.
@@ -889,7 +895,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), ...(clarifying ? { tool_choice: 'required' } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
@@ -923,6 +929,20 @@ export async function chatWithTools(
         const choice = data.choices?.[0]
         const msg = choice?.message
         const calls = msg?.tool_calls ?? []
+        if(clarifying){
+            const ask=calls.find(c=>c.function.name===CLARIFY_TOOL)
+            if(ask){
+                let question=''
+                try{const q=(JSON.parse(ask.function.arguments||'{}') as {question?:unknown}).question;if(typeof q==='string')question=q.replace(/\s+/g,' ').trim().slice(0,400)}catch{}
+                if(question){
+                    await opts.onStage?.('tool','itinerary:clarification_asked')
+                    // A question is not an artifact: no file, honest unfulfilled state, and the question is the whole reply.
+                    return {reply:question,toolCalls:toolCallCount,iterations:iteration,tainted,deliverable:deliverableOutcome(contract,false)}
+                }
+                messages.push({role:'system',content:'No question was given. Continue with the research or file tool.'});continue
+            }
+            if(calls.length>0)await opts.onCommit?.()
+        }
         if(itineraryResearch&&forceTool&&!calls.some(c=>c.function.name===forceTool))await opts.onStage?.('tool',`research:choice_missed:${forceTool}`)
 
         if (choice?.finish_reason !== 'tool_calls' || calls.length === 0) {

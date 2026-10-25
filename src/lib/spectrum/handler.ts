@@ -1026,7 +1026,8 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         deliverable = selectDeliverable(full)
     }
     const itineraryJob = deliverable?.kind === 'itinerary'
-    if(itineraryJob){
+    // The acknowledgement waits until the first model judgment decides to do the work; a clarifying question must not follow a promise.
+    const acknowledgeItinerary = async () => {
         const acknowledgement = 'I am putting the itinerary together. I will send it here when it is ready.'
         const delivered = await sendText(space, chatGuid, 'reply', acknowledgement)
         if(delivered)await saveMessage(chatGuid, 'assistant', acknowledgement).catch((err)=>logErr('itinerary acknowledgement save failed',err))
@@ -1109,6 +1110,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         if (tools.length > 0) {
             const toolOpts = {
                 deadlineAt, onStage,
+                ...(itineraryJob ? { onCommit: acknowledgeItinerary } : {}),
                 sender: senderAddress(message.sender) ?? undefined,
                 taskClass: classifyUserTurn(selectDeliverable(full)?.request ?? text),
                 gatewayUrl: GATEWAY_URL,
