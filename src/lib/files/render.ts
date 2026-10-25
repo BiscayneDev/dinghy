@@ -417,8 +417,8 @@ function pageScript(body: string): string {
     return `<script>(()=>{
 const D=86400000,dl=v=>{const x=new Date(v);return new Date(x.getFullYear(),x.getMonth(),x.getDate()).getTime()},pd=s=>{const m=/^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(s);return m?new Date(+m[1],+m[2]-1,+m[3]).getTime():Date.parse(s)};
 document.querySelectorAll('[data-cdn-date]').forEach(el=>{const t=pd(el.getAttribute('data-cdn-date'));if(!isFinite(t))return;const n=Math.round((dl(t)-dl(Date.now()))/D),a=Math.abs(n);el.textContent=n===0?'Today':String(a);const lb=el.parentElement?.querySelector('[data-cdn-label]')||el.parentElement?.parentElement?.querySelector('[data-cdn-label]');if(lb){const d=el.getAttribute('data-cdn-date');lb.textContent=n===0?('today · '+d):((n>0?(a===1?'day to go':'days to go'):(a===1?'day ago':'days ago'))+' · '+d)}});
-const money=c=>'$'+(c/100).toFixed(2),num=v=>{const n=parseFloat(String(v).replace(/[$,]/g,''));return isFinite(n)?n:null};
-document.querySelectorAll('.calc-in:not(.calc-in-text)').forEach(el=>{const rs=()=>{el.style.width=(el.value.length+2)+'ch'};el.addEventListener('input',rs);rs();});
+const money=c=>'$'+(c/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}),num=v=>{const n=parseFloat(String(v).replace(/[$,]/g,''));return isFinite(n)?n:null},c2=v=>{const n=num(v);return n===null?null:Math.round(parseFloat(n.toFixed(2))*100)};
+document.querySelectorAll('.calc-in:not(.calc-in-text)').forEach(el=>{const rs=()=>{el.size=1;el.style.width='auto';el.style.width=Math.max(48,el.scrollWidth+16)+'px'};el.addEventListener('input',rs);rs();if(document.fonts&&document.fonts.ready)document.fonts.ready.then(rs);});
 document.querySelectorAll('.calc').forEach(card=>{
  const op=card.getAttribute('data-calc'),F=f=>card.querySelector('[data-f="'+f+'"]'),O=o=>card.querySelector('[data-o="'+o+'"]');
  const rows=O('rows'),note=O('note'),tot=O('total');
@@ -428,16 +428,16 @@ document.querySelectorAll('.calc').forEach(card=>{
   if(op==='split'){const tv=num(F('total').value);const parts=F('shares').value.split(',').map(p=>p.trim()).filter(Boolean).map(p=>{const m=p.match(/^(.+?)(?:\\s+x(\\d+(?:\\.\\d+)?))?$/);return{name:(m?m[1]:p).trim(),w:m&&m[2]?parseFloat(m[2]):1}}).filter(p=>p.name&&isFinite(p.w)&&p.w>0);
    const cnt=card.querySelector('[data-o="count"]');if(cnt)cnt.textContent=parts.length+(parts.length===1?' person':' people');
    if(tv===null||tv<0||!parts.length){bad('Enter a non-negative total and at least one share.');return}
-   const totalC=Math.round(tv*100),ws=parts.reduce((a,p)=>a+p.w,0);let as=0;rows.innerHTML='';
+   const totalC=c2(F('total').value),ws=parts.reduce((a,p)=>a+p.w,0);let as=0;rows.innerHTML='';
    parts.forEach((p,i)=>{const amt=i<parts.length-1?Math.round(totalC*p.w/ws):totalC-as;as+=amt;rows.appendChild(row(p.name+(p.w!==1?' x'+p.w:''),money(amt)))});
    note.textContent=(parts.some(p=>p.w!==1)?'Weights applied. ':'')+'Cents are rounded; the last share takes the remainder.'}
   else if(op==='tip'){const b=num(F('bill').value),pc=num(F('pct').value),pp=Math.max(1,Math.round(num(F('people').value)||1));
    if(b===null||b<0||pc===null||pc<0){bad('Enter a non-negative bill and tip percent.');return}
-   const bC=Math.round(b*100),tC=Math.round(bC*pc/100),toC=bC+tC;tot.textContent=money(toC);rows.innerHTML='';rows.appendChild(row('Tip',money(tC)));if(pp>1)rows.appendChild(row('Per person ('+pp+')',money(Math.round(toC/pp))));note.textContent='Cents are rounded.'}
+   const bC=c2(F('bill').value),tC=Math.round(bC*pc/100),toC=bC+tC;tot.textContent=money(toC);rows.innerHTML='';rows.appendChild(row('Tip',money(tC)));if(pp>1)rows.appendChild(row('Per person ('+pp+')',money(Math.round(toC/pp))));note.textContent='Cents are rounded.'}
   else if(op==='convert'){const a=num(F('amt').value),r=num(F('rate').value),from=card.getAttribute('data-from'),to=card.getAttribute('data-to'),asof=card.getAttribute('data-asof');
    if(a===null){bad('Enter an amount.');return}
    if(r===null||r<=0){bad('Needs a quoted '+from+' → '+to+' rate with its date. Nothing was converted.');return}
-   tot.textContent=(a*r).toFixed(2)+' '+to;note.textContent='1 '+from+' = '+r+' '+to+(asof?' · rate as of '+asof:' · rate date not given')}};
+   tot.textContent=(a*r).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+to;note.textContent='1 '+from+' = '+r+' '+to+(asof?' · rate as of '+asof:' · rate date not given')}};
  card.querySelectorAll('input').forEach(i=>i.addEventListener('input',go));
  const rst=card.querySelector('[data-a="reset"]');if(rst)rst.addEventListener('click',()=>{card.querySelectorAll('input').forEach(i=>{i.value=i.defaultValue});go()});
  go()});

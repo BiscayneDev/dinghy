@@ -1,5 +1,5 @@
 import { it, expect, describe } from 'vitest'
-import { renderKind, countdownDays, pageHero, calcInitialRows } from '@/lib/files/kinds'
+import { renderKind, countdownDays, pageHero, calcInitialRows, toCents } from '@/lib/files/kinds'
 import { renderHtml, flattenBlocks } from '@/lib/files/render'
 import { UI_CATALOGUE, UI_REGISTRY, catalogueOutputError, type CatalogueId } from '@/lib/pages/catalogue'
 
@@ -76,6 +76,28 @@ describe('chart renderer', () => {
     it('drops non-numeric values and renders nothing when nothing is usable', () => {
         expect(renderKind('chart', ['line | Steps | a, b'])).toBe('')
         expect(renderKind('chart', [])).toBe('')
+    })
+})
+
+describe('calc cents handling', () => {
+    it('normalizes monetary input to 2 decimals before integer-cent arithmetic', () => {
+        expect(toCents('10.005')).toBe(1001) // toFixed rounds half up, deterministically, in Node and Chrome alike
+        expect(toCents('0.01')).toBe(1)
+        expect(toCents('19.999')).toBe(2000)
+        expect(toCents('abc')).toBeNull()
+        expect(toCents('-5')).toBe(-500)
+    })
+    it('half-cent totals split deterministically and the shares sum to the normalized total', () => {
+        const r = calcInitialRows('split', { total: '10.005', shares: 'Sam, Ana, Ben' }, {})
+        expect(r?.rows).toEqual([['Sam', '$3.34'], ['Ana', '$3.34'], ['Ben', '$3.33']]) // sums $10.01, the normalized total
+    })
+    it('formats money with thousands grouping, weighted remainder included', () => {
+        const r = calcInitialRows('split', { total: '1234567.89', shares: 'Sam x2, Ana, Ben' }, {})
+        expect(r?.rows).toEqual([['Sam x2', '$617,283.95'], ['Ana', '$308,641.97'], ['Ben', '$308,641.97']])
+        const tip = calcInitialRows('tip', { bill: '1234.56', pct: '20', people: '1' }, {})
+        expect(tip?.total).toBe('$1,481.47')
+        const conv = calcInitialRows('convert', { amt: '1000000', rate: '0.92' }, { from: 'USD', to: 'EUR', asof: '2026-10-20' })
+        expect(conv?.total).toBe('920,000.00 EUR')
     })
 })
 

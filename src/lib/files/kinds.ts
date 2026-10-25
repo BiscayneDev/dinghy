@@ -338,7 +338,13 @@ function renderCountdown(lines: string[], opts?: { hero?: boolean }): string {
     return `<div class="cdn">${head}<div class="cdn-e">${esc(event)}${dateISO ? `<span class="cdn-d">${esc(dateISO)}</span>` : ''}</div>${ms.length ? `<ul class="cdn-ms">${ms.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}</div>`
 }
 
-const money = (cents: number): string => '$' + (cents / 100).toFixed(2)
+const money = (cents: number): string => '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+/** Deterministic 2-decimal normalization: a user-typed 10.005 becomes 1000 cents,
+ * identically on server and in the view-time script. Integer cents thereafter. */
+export const toCents = (s?: string): number | null => {
+    const n = num(s)
+    return n === null ? null : Math.round(parseFloat(n.toFixed(2)) * 100)
+}
 
 /** calc: deterministic math the user can check and adjust. "split | total | Sam x2, Ana, Ben",
  * "tip | bill | percent | people", "convert | amount | from | to | rate | rate date".
@@ -379,7 +385,7 @@ function renderCalc(lines: string[]): string {
 export function calcInitialRows(op: string, fields: Record<string, string>, data: Record<string, string>): { rows: [string, string][]; note: string; total?: string } | null {
     const g = (k: string) => fields[k] ?? ''
     if (op === 'split') {
-        const totalC = Math.round((num(g('total')) ?? NaN) * 100)
+        const totalC = toCents(g('total')) ?? NaN
         const shares = g('shares').split(',').map((p) => p.trim()).filter(Boolean).map((p) => {
             const m = p.match(/^(.+?)(?:\s+x(\d+(?:\.\d+)?))?$/)
             return { name: (m?.[1] ?? p).trim(), w: m?.[2] ? parseFloat(m[2]) : 1 }
@@ -398,7 +404,7 @@ export function calcInitialRows(op: string, fields: Record<string, string>, data
         const bill = num(g('bill')), pct = num(g('pct'))
         if (bill === null || bill < 0 || pct === null || pct < 0) return null
         const ppl = Math.max(1, Math.round(num(g('people')) ?? 1))
-        const billC = Math.round(bill * 100), tipC = Math.round(billC * (pct / 100)), totalC = billC + tipC
+        const billC = toCents(g('bill')) ?? NaN, tipC = Math.round(billC * (pct / 100)), totalC = billC + tipC
         const rows: [string, string][] = [['Tip', money(tipC)]]
         if (ppl > 1) rows.push([`Per person (${ppl})`, money(Math.round(totalC / ppl))])
         return { rows, note: 'Cents are rounded.', total: money(totalC) }
@@ -407,7 +413,7 @@ export function calcInitialRows(op: string, fields: Record<string, string>, data
         const amt = num(g('amt')), rate = num(g('rate'))
         if (amt === null) return null
         if (rate === null || rate <= 0) return { rows: [], note: `Needs a quoted ${data.from} → ${data.to} rate with its date. None was given, so nothing was converted.` }
-        return { rows: [], note: `1 ${data.from} = ${rate} ${data.to}${data.asof ? ` · rate as of ${data.asof}` : ' · rate date not given'}`, total: `${(amt * rate).toFixed(2)} ${data.to}` }
+        return { rows: [], note: `1 ${data.from} = ${rate} ${data.to}${data.asof ? ` · rate as of ${data.asof}` : ' · rate date not given'}`, total: `${(amt * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${data.to}` }
     }
     return null
 }
@@ -489,7 +495,7 @@ export const KINDS_CSS = `
 .calc-a{font-weight:600;font-variant-numeric:tabular-nums}
 .calc-w{color:var(--mute);font-size:12px;font-weight:400}
 .calc-note{padding:8px 16px;font-size:12px;color:var(--mute);border-top:1px solid var(--line)}
-.calc-in{font:inherit;font-size:15px;font-weight:600;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:2px 6px;text-align:right;font-variant-numeric:tabular-nums}
+.calc-in{font:inherit;font-size:15px;font-weight:600;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:2px 6px;text-align:right;font-variant-numeric:tabular-nums;box-sizing:border-box;min-width:48px;max-width:58vw}
 .calc-in:focus{outline:2px solid var(--accent);outline-offset:1px}
 .calc-in-text{width:100%;text-align:left;font-weight:400;font-size:14px;margin-top:4px}
 .calc-ed{padding:8px 16px;border-top:1px solid var(--line)}
