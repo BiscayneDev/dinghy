@@ -304,7 +304,7 @@ function renderBlock(name: BlockName, lines: string[], opts: HtmlOptions = {}): 
     if (name === 'options') return renderOptions(lines)
     if (name === 'places') return renderPlaces(lines)
     if (name === 'sources') return renderSources(lines)
-    if ((KIND_BLOCKS as readonly string[]).includes(name)) return renderKind(name as KindBlock, lines)
+    if ((KIND_BLOCKS as readonly string[]).includes(name)) return renderKind(name as KindBlock, lines, { hero: !opts.kindHeroConsumed })
     // place
     const f = Object.fromEntries(lines.map(pair).map((p) => [p.k.toLowerCase(), p.v]))
     const title = f['name'] ?? lines[0] ?? 'Place'
@@ -343,6 +343,8 @@ export interface HtmlOptions {
     /** Direct downloadable MP4, never an embed/player page. Image remains fallback. */
     ogVideo?: { url: string; type: 'video/mp4'; width: number; height: number }
     description?: string
+    /** Internal: the band hero already carries this block's identity, so its card renders compact. */
+    kindHeroConsumed?: boolean
     imageryState?: 'ready' | 'fallback'
     /** Relative link to a downloadable copy (e.g. the PDF next to the page). */
     download?: { href: string; label: string }
@@ -404,8 +406,15 @@ function identityCoverHtml(cover:{eyebrow:string;title:string;sub:string}):strin
 }
 export function renderHtml(doc: DinghyDoc, opts: HtmlOptions = {}): string {
     const body: string[] = []
-    for (const seg of splitBlocks(doc.body)) {
-      if (seg.kind === 'block') { body.push(renderBlock(seg.name, seg.lines, { ...opts, docTitle: doc.title })); continue }
+    const segs = splitBlocks(doc.body)
+    // The band hero consumes the first hero-capable block's identity; that block
+    // renders compact so the page never shows the same identity twice.
+    const heroSeg = segs.find((s): s is Extract<Segment, { kind: 'block' }> => s.kind === 'block' && ['stay', 'route', 'scores', 'weather', 'media'].includes(s.name))
+    const cover = itineraryCover(doc)
+    const kindHeroHtml = cover ? null : pageHero(segs.flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : [])))
+    const heroConsumedSeg = !cover && kindHeroHtml !== null ? heroSeg : undefined
+    for (const seg of segs) {
+      if (seg.kind === 'block') { body.push(renderBlock(seg.name, seg.lines, { ...opts, docTitle: doc.title, kindHeroConsumed: seg === heroConsumedSeg })); continue }
       for (const t of marked.lexer(seg.text)) {
         if (t.type === 'heading') {
             const h = t as Tokens.Heading
@@ -498,7 +507,7 @@ blockquote{margin:20px 0;padding:14px 18px;border-radius:16px;background:var(--s
 .facts{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}.fact{flex:1 1 130px;padding:10px 14px;border:1px solid var(--line);border-radius:14px;background:var(--paper)}.fk{display:block;font:500 10px/1.6 'DM Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}.fv{display:block;color:var(--ink);font-weight:600;font-size:16px}
 .cost{margin:18px 0;padding:6px 18px;border:1px solid var(--line);border-radius:16px}.crow{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}.crow:last-child{border-bottom:0}.crow span:first-child{white-space:nowrap}.crow span:last-child{text-align:right}.ctotal{font-weight:600;color:var(--ink);font-size:18px}.cnote{margin:6px 0 10px;font-size:13px;color:var(--accent)}
 .heads{margin:22px 0;padding:14px 18px;border-radius:16px;background:#fff1e8;border-left:4px solid var(--ink);color:var(--ink)}.heads p{margin:6px 0 0}.heads-label{display:block;font:500 10px/1 'DM Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:var(--ink)}
-.place{margin:16px 0;padding:14px 18px;border:1px solid var(--line);border-radius:16px}.pn{font:600 17px/1.3 Schibsted,sans-serif;color:var(--ink)}.pm{font-size:14px;color:var(--body)}.pa{display:flex;gap:10px;margin-top:10px}.pa a{text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:7px 16px;font:500 11px/1 'DM Mono',monospace;letter-spacing:.12em;text-transform:uppercase}
+.place{margin:16px 0;padding:14px 18px;border:1px solid var(--line);border-radius:16px}.pn{font:600 17px/1.3 Schibsted,sans-serif;color:var(--ink)}.pm{font-size:14px;color:var(--body)}.pa{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}.pa a{text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:7px 16px;font:500 11px/1 'DM Mono',monospace;letter-spacing:.12em;text-transform:uppercase}
 .checklist{list-style:none;padding:0}.checklist li{margin:0;padding:8px 0;border-bottom:1px solid var(--line)}.checklist label{display:flex;gap:12px;align-items:flex-start;cursor:pointer}.checklist input{width:22px;height:22px;margin:1px 0 0;accent-color:var(--accent)}.checklist input:checked+span{text-decoration:line-through;color:var(--mute)}
 h3.day{margin:30px 0 4px;padding-top:14px;border-top:1px solid var(--line);font:500 11px/1 'DM Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
 .replies{margin:22px 0;display:grid;gap:10px}.reply-hint{margin:0;font:500 10px/1 'DM Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
@@ -561,7 +570,7 @@ th{background:var(--sand);color:var(--ink)}
 @media print{.band{display:none}.card{margin:0;box-shadow:none;width:100%;max-width:none}.card>*,.band svg{animation:none}.reply,.pa,.dl{display:none}}
 </style></head>
 <body${opts.imageryState ? ` data-imagery="${opts.imageryState}"` : ''}>
-${itineraryCover(doc)?coverHtml(itineraryCover(doc)!):pageHero(splitBlocks(doc.body).flatMap((s) => (s.kind === 'block' ? [{ name: s.name, lines: s.lines }] : []))) ?? (identityCover(doc)?identityCoverHtml(identityCover(doc)!):`<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`)}
+${cover?coverHtml(cover):kindHeroHtml ?? (identityCover(doc)?identityCoverHtml(identityCover(doc)!):`<div class="band" aria-hidden="true">${sunriseSvg({ id: 'f', sunX: 900, boatX: 300, horizon: 330 })}</div>`)}
 <main class="card">
 <div class="brand">${anchorSvg(BRAND.ink, 18)}<span>dinghy</span></div>
 ${itineraryCover(doc)||identityCover(doc)?'':`<h1>${esc(doc.title)}</h1>`}

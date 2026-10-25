@@ -70,7 +70,7 @@ export const num = (s?: string): number | null => {
  * weather: first line "Place | now temp | sky | high | low | wind | rain chance | feels like",
  * then one "Day | high | low | sky | rain chance" line per forecast day.
  */
-function renderWeather(lines: string[]): string {
+function renderWeather(lines: string[], opts?: { hero?: boolean }): string {
     const [place, now, sky, hi, lo, wind, rain, feels] = cells(lines[0] ?? '')
     if (!place) return ''
     const s = skyOf(sky ?? '')
@@ -96,7 +96,10 @@ function renderWeather(lines: string[]): string {
         const ds = skyOf(d[3] ?? '')
         return `<div class="wx-day"><span class="wx-dn">${esc(d[0])}</span><span class="wx-dg" title="${esc(d[3] ?? '')}">${skyIcon(ds.cls, 26)}</span><span class="wx-dl">${esc(d[2] ?? '')}</span>${bar(num(d[2]), num(d[1]))}<span class="wx-dh">${esc(d[1] ?? '')}</span><span class="wx-dr">${esc(d[4] ?? '')}</span></div>`
     })
-    return `<div class="wx wx-${s.cls}"><div class="wx-hero"><div><div class="wx-place">${esc(place)}</div><div class="wx-now">${esc(now ?? '')}</div><div class="wx-sky">${esc(sky ?? '')}</div></div><div class="wx-glyph" aria-hidden="true">${skyIcon(s.cls, 88)}</div></div>${facts.length ? `<div class="wx-facts">${facts.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('')}</div>` : ''}${rows.length ? `<div class="wx-days">${rows.join('')}</div>` : ''}</div>`
+    // When the page hero already carries this block's place/temp/sky identity, the
+    // card shows only what the hero cannot: the fact grid and the day rows.
+    const head = opts?.hero === false ? '' : `<div class="wx-hero"><div><div class="wx-place">${esc(place)}</div><div class="wx-now">${esc(now ?? '')}</div><div class="wx-sky">${esc(sky ?? '')}</div></div><div class="wx-glyph" aria-hidden="true">${skyIcon(s.cls, 88)}</div></div>`
+    return `<div class="wx wx-${s.cls}">${head}${facts.length ? `<div class="wx-facts">${facts.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('')}</div>` : ''}${rows.length ? `<div class="wx-days">${rows.join('')}</div>` : ''}</div>`
 }
 
 /**
@@ -297,9 +300,9 @@ export function pageHero(blocks: Seg[]): string | null {
     return `<div class="band hero hero-stay" style="background:${bg}">${p ? `<img src="${esc(p)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${picked ? 'Pick' : 'Stay'}</span><span class="hero-n${knownValue(price) ? '' : ' hero-title'}">${esc(knownValue(price) || name)}</span></div></div>`
 }
 
-export function renderKind(name: KindBlock, lines: string[]): string {
+export function renderKind(name: KindBlock, lines: string[], opts?: { hero?: boolean }): string {
     switch (name) {
-        case 'weather': return renderWeather(lines)
+        case 'weather': return renderWeather(lines, opts)
         case 'scores': return renderScores(lines)
         case 'media': return renderMedia(lines)
         case 'stay': return renderStay(lines)
