@@ -21,6 +21,13 @@ const MATCH: Record<string, string> = {
     filter: pages('filter'),
     checklist: pages('checklist'),
     map: pages('map'),
+    calc: ':::calc\nsplit | 100 | Sam, Ana, Ben\n:::',
+    chart: ':::chart\nbar | Fiction | 8\n:::',
+    countdown: ':::countdown\nHarbor Festival | 2030-06-04\n:::',
+    standings: '| Team | W | L |\n|---|---|---|\n| Fictional Gulls | 9 | 4 |',
+    events: ':::briefing\nHarbor Nights | Example Venue | Oct 30 | Doors 8 PM | https://example.com\n:::',
+    agenda: '- 9:00 AM Fictional standup\n- 12:30 PM Lunch',
+    recipe: '1. Mix flour and water.\n2. Bake 30 minutes.\n- [ ] 2 cups flour',
 }
 
 describe('catalogue coverage', () => {

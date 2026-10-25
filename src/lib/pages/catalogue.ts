@@ -1,21 +1,41 @@
-/** Product catalogue shared by Jev and output validation. No topic-keyword routing. */
-export const UI_CATALOGUE = {
-    weather: 'Current conditions and multi-day forecast. Static weather cards; no interactive climate simulation.',
-    scores: 'Sports results, live status and upcoming fixtures. No tournament editor or historical chart.',
-    media: 'Book, movie and game recommendations with covers, metadata and source links.',
-    stay: 'Hotel/lodging shortlist with price, area, catch and links. No booking/payment or price-map controls.',
-    route: 'Travel legs and itinerary/day schedules with verified times or explicit unknowns. No route engine.',
-    briefing: 'News/research briefing with headlines, summaries, dated sources.',
-    places: 'Restaurant/place discovery or source-backed locators with addresses and map links. Not a basemap.',
-    options: 'Static comparison/recommendation cards or tables with pick, price, reasons and catches.',
-    facts: 'Structured facts, costs, warnings and source/check status for a document.',
-    gallery: 'A credited gallery of vetted local photos.',
-    comparison: 'Interactive searchable comparison of named rows; row label/detail only, no calculated values.',
-    filter: 'Interactive text filter of existing shortlist rows; no new computed output.',
-    checklist: 'Interactive task/packing checklist with browser-local state; no shared account updates.',
-    map: 'Source-coordinate plot of named points, without a basemap, navigation or verified indoor route.',
-} as const
-export type CatalogueId = keyof typeof UI_CATALOGUE
+/** One selectable capability: what it does, how it renders, and where its data must come from. */
+export type CatalogueEntry = {
+    /** Selection criteria text: the job this component does (and does not do). */
+    description: string
+    /** Renderer mapping: a dedicated :::block, a template over existing blocks, or a composition. */
+    renders: string
+    /** Data contract: 'none' = user/model-supplied only; 'research' = web research with source binding;
+     * 'calendar' = the owner's connected calendar (runtime wiring must be verified before relying on it). */
+    data: 'none' | 'research' | 'calendar'
+}
+/** Product catalogue shared by Jev and output validation. No topic-keyword routing.
+ * Breadth lives in templates and compositions over a small set of render primitives;
+ * add a dedicated renderer only when no existing block shape covers the job. */
+export const UI_REGISTRY: Record<string, CatalogueEntry> = {
+    weather: { description: 'Current conditions and multi-day forecast. Static weather cards; no interactive climate simulation.', renders: ':::weather', data: 'research' },
+    scores: { description: 'Sports results, live status and upcoming fixtures. No tournament editor or historical chart.', renders: ':::scores', data: 'research' },
+    media: { description: 'Book, movie and game recommendations with covers, metadata and source links.', renders: ':::media', data: 'research' },
+    stay: { description: 'Hotel/lodging shortlist with price, area, catch and links. No booking/payment or price-map controls.', renders: ':::stay', data: 'research' },
+    route: { description: 'Travel legs and itinerary/day schedules with verified times or explicit unknowns. No route engine.', renders: ':::route', data: 'research' },
+    briefing: { description: 'News/research briefing with headlines, summaries, dated sources.', renders: ':::briefing', data: 'research' },
+    places: { description: 'Restaurant/place discovery or source-backed locators with addresses and map links. Not a basemap.', renders: ':::places', data: 'research' },
+    options: { description: 'Static comparison/recommendation cards or tables with pick, price, reasons and catches.', renders: ':::options', data: 'research' },
+    facts: { description: 'Structured facts, costs, warnings and source/check status for a document.', renders: ':::facts / :::cost / :::heads-up / :::checks', data: 'none' },
+    gallery: { description: 'A credited gallery of vetted local photos.', renders: ':::gallery', data: 'research' },
+    comparison: { description: 'Interactive searchable comparison of named rows; row label/detail only, no calculated values.', renders: ':::pages comparison', data: 'none' },
+    filter: { description: 'Interactive text filter of existing shortlist rows; no new computed output.', renders: ':::pages filter', data: 'none' },
+    checklist: { description: 'Interactive task/packing checklist with browser-local state; no shared account updates.', renders: ':::pages checklist', data: 'none' },
+    map: { description: 'Source-coordinate plot of named points, without a basemap, navigation or verified indoor route.', renders: ':::pages map', data: 'research' },
+    calc: { description: 'Deterministic money and unit math the user can check: split a shared cost across named people with optional weights, tip and bill splits, or unit/currency conversion using an explicit quoted rate with its date. Never invent a rate; ask or research first.', renders: ':::calc', data: 'research' },
+    chart: { description: 'A simple line, bar or donut chart of values already given or researched, with labels. No live data feeds, no fabricated series.', renders: ':::chart', data: 'research' },
+    countdown: { description: 'Days or time until a fixed date: a big-number display with the date and optional milestones.', renders: ':::countdown', data: 'none' },
+    standings: { description: 'Season standings, league tables or ranked results as a table, with the as-of date.', renders: 'markdown table', data: 'research' },
+    events: { description: 'Dated happenings - concerts, showtimes, venue events - with date, time, place and link. For the venues themselves use places.', renders: ':::briefing', data: 'research' },
+    agenda: { description: "A day's schedule as a timed plan. Calendar events come from the owner's connected calendar when available; never invent events or times.", renders: 'timed markdown plan', data: 'calendar' },
+    recipe: { description: 'A cooking recipe: time and yield, an ingredient checklist, then numbered steps.', renders: 'composition: :::facts + markdown checklist + ordered list', data: 'research' },
+}
+export const UI_CATALOGUE = Object.fromEntries(Object.entries(UI_REGISTRY).map(([k, v]) => [k, v.description])) as Record<keyof typeof UI_REGISTRY, string>
+export type CatalogueId = keyof typeof UI_REGISTRY
 export type UiDecision = { route: 'text' } | { route: 'catalogue'; component: CatalogueId } | { route: 'generate' }
 export const UI_DECISION_FLAG = 'DINGHY_JEV_UI'
 /** 'on' enables globally; any other value is a comma-separated sender-handle allowlist
@@ -58,6 +78,10 @@ export function catalogueOutputError(d:UiDecision,body:string):string|null {
   if(d.component==='checklist'&&/^\s*[-*] \[[ xX]\]/m.test(body))return null
  }else if(d.component==='facts'&&['facts','cost','heads-up','checks'].some(block))return null
  else if(d.component==='route'&&(block('route')||/^###?\s+.*(?:day|mon|tue|wed|thu|fri|sat|sun)/im.test(body)))return null
+ else if(d.component==='standings'&&/^\s*\|.+\|/m.test(body))return null
+ else if(d.component==='events'&&block('briefing'))return null
+ else if(d.component==='agenda'&&/^\s*[-*]\s*\(?\d{1,2}:\d{2}/m.test(body))return null
+ else if(d.component==='recipe'&&/^\s*\d+\.\s/m.test(body)&&(block('facts')||/^\s*[-*] \[[ xX]\]/m.test(body)))return null
  else if(block(d.component))return null
  return 'Use the existing '+d.component+' component selected by Jev, not an unrelated layout.'
 }

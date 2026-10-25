@@ -9,7 +9,7 @@ import {decodeEntities} from './entities'
  * the HTML, so a page cannot pull from a third-party server when it opens.
  */
 
-export const KIND_BLOCKS = ['weather', 'scores', 'media', 'stay', 'route', 'briefing', 'gallery', 'lead', 'checks'] as const
+export const KIND_BLOCKS = ['weather', 'scores', 'media', 'stay', 'route', 'briefing', 'gallery', 'lead', 'checks', 'calc', 'chart', 'countdown'] as const
 export type KindBlock = (typeof KIND_BLOCKS)[number]
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -255,7 +255,7 @@ const WX_SKY: Record<string, [string, string]> = {
  * keeps the sunrise band. Decorative: the same numbers sit in the page below, so it is hidden from screen readers.
  */
 export function pageHero(blocks: Seg[]): string | null {
-    const first = blocks.find((b) => ['stay', 'route', 'scores', 'weather', 'media'].includes(b.name))
+    const first = blocks.find((b) => ['stay', 'route', 'scores', 'weather', 'media', 'countdown'].includes(b.name))
     if (!first) return null
     const lead = blocks.find((b) => b.name === 'lead')
     const leadPick = (lead?.lines.map(cells).find((c) => c[0]?.toLowerCase() === 'pick')?.[1] ?? '').toLowerCase()
@@ -280,6 +280,14 @@ export function pageHero(blocks: Seg[]): string | null {
         const svg = `<svg viewBox="0 0 720 340" preserveAspectRatio="xMidYMid slice"><path d="${path}" stroke="rgba(240,138,104,.3)" stroke-width="16" fill="none" stroke-linecap="round"/><path d="${path}" stroke="#F08A68" stroke-width="5" fill="none" stroke-linecap="round" stroke-dasharray="1 13"/><circle cx="60" cy="250" r="12" fill="#fff"/><circle cx="60" cy="250" r="5" fill="#0E1A33"/><circle cx="670" cy="46" r="14" fill="#F08A68"/><circle cx="670" cy="46" r="5" fill="#fff"/></svg>`
         return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(160deg,#16305A,#0E1A33)">${svg}<div class="hero-in"><span class="hero-k">${esc([...new Set(r.legs.map((l) => l[2]).filter(Boolean))].join(' + ') || 'Route')}</span><span class="hero-n">${esc(r.eta)}</span></div></div>`
     }
+    if (first.name === 'countdown') {
+        const [event, dateISO] = cells(first.lines[0] ?? '')
+        const days = countdownDays(dateISO ?? '')
+        if (!event || days === null) return null
+        const n = Math.abs(days)
+        const label = days === 0 ? '' : days > 0 ? (n === 1 ? 'day to go' : 'days to go') : (n === 1 ? 'day ago' : 'days ago')
+        return `<div class="band hero" aria-hidden="true" style="background:linear-gradient(160deg,#16305A,#0E1A33)"><div class="hero-in hero-mid"><span class="hero-k">${esc(event)}</span><span class="hero-n" data-cdn-date="${esc(dateISO ?? '')}">${days === 0 ? 'Today' : n}</span><span class="hero-s" data-cdn-label>${esc([label, dateISO].filter(Boolean).join(' · '))}</span></div></div>`
+    }
     if (first.name === 'media') {
         const mrows = first.lines.map(cells).filter((c) => c[0])
         const mp = mrows.find((c) => leadPick && c[0].toLowerCase() === leadPick)
@@ -300,6 +308,171 @@ export function pageHero(blocks: Seg[]): string | null {
     return `<div class="band hero hero-stay" style="background:${bg}">${p ? `<img src="${esc(p)}" alt="" decoding="async">` : ''}<div class="hero-in" aria-hidden="true"><span class="hero-k">${picked ? 'Pick' : 'Stay'}</span><span class="hero-n${knownValue(price) ? '' : ' hero-title'}">${esc(knownValue(price) || name)}</span></div></div>`
 }
 
+/** Days between now and a date, whole days, negative when past. Exported for tests (injectable now). */
+export function countdownDays(dateISO: string, now: Date = new Date()): number | null {
+    // Local-calendar days to the event: a date-only ISO like "2026-11-14" means
+    // that local calendar date, not UTC midnight (UTC day boundaries shift the
+    // count by one for viewers behind UTC). Math.round absorbs DST 23/25h days.
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateISO.trim())
+    let target: Date
+    if (dateOnly) {
+        target = new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    } else {
+        const t = Date.parse(dateISO)
+        if (!Number.isFinite(t)) return null
+        target = new Date(t)
+    }
+    const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+    return Math.round((dayStart(target) - dayStart(now)) / 86400000)
+}
+
+/** countdown: "Event | date | milestone; milestone". The big number can move to the page hero. */
+function renderCountdown(lines: string[], opts?: { hero?: boolean }): string {
+    const [event, dateISO, milestones] = cells(lines[0] ?? '')
+    const days = countdownDays(dateISO ?? '')
+    if (!event || days === null) return ''
+    const n = Math.abs(days)
+    const label = days === 0 ? 'today' : days > 0 ? (n === 1 ? 'day to go' : 'days to go') : (n === 1 ? 'day ago' : 'days ago')
+    const ms = (milestones ?? '').split(';').map((m) => m.trim()).filter(Boolean).slice(0, 6)
+    const head = opts?.hero === false ? '' : `<div class="cdn-n" data-cdn-date="${esc(dateISO ?? '')}">${days === 0 ? '0' : n}</div><div class="cdn-l" data-cdn-label>${esc(label)}</div>`
+    return `<div class="cdn">${head}<div class="cdn-e">${esc(event)}${dateISO ? `<span class="cdn-d">${esc(dateISO)}</span>` : ''}</div>${ms.length ? `<ul class="cdn-ms">${ms.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}</div>`
+}
+
+const money = (cents: number): string => '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+/** Decimal-string to integer cents, explicit round-half-up on the decimal text.
+ * Never floats for the decision: 10.005 -> 1001, 1.005 -> 101, 2.675 -> 268 in
+ * every JS engine, because only digits are read. Bounds: the dollar part may not
+ * exceed 13 digits (14 digits could overflow 2^53 once multiplied by 100); anything
+ * without a numeric token is null. The view-time script mirrors this rule exactly;
+ * catalogue-breadth tests eval the emitted copy against this one for parity. */
+export const toCents = (s?: string): number | null => {
+    const tok = (s ?? '').match(/-?\d+(?:\.\d+)?/)?.[0]
+    if (!tok) return null
+    const neg = tok[0] === '-'
+    const [rawIp, fp = ''] = tok.slice(neg ? 1 : 0).split('.')
+    const ip = rawIp.replace(/^0+(?=\d)/, '') // leading zeros are not magnitude
+    if (ip.length > 13) return null // conservative pre-check; the isSafeInteger guard below is authoritative, including the +1 rounding carry
+    const cents = Number(ip) * 100 + Number((fp[0] ?? '0') + (fp[1] ?? '0')) + (fp.length > 2 && fp[2] >= '5' ? 1 : 0)
+    if (!Number.isSafeInteger(cents)) return null
+    return neg ? -cents : cents
+}
+
+/** calc: deterministic math the user can check and adjust. "split | total | Sam x2, Ana, Ben",
+ * "tip | bill | percent | people", "convert | amount | from | to | rate | rate date".
+ * Inputs render editable with the authored values as defaults; the page script recalculates
+ * live (same rounding: last share takes the cent remainder). Unknown or malformed input
+ * shows an honest note, never a wrong number. Server first paint mirrors the script exactly. */
+function renderCalc(lines: string[]): string {
+    // Width follows content (ch units, tabular-nums) so long totals stay visible on narrow phones.
+    const inp = (f: string, v: string, wCh = 8) => `<input class="calc-in" style="width:${Math.max(wCh, v.length + 2)}ch;max-width:58vw" data-f="${f}" inputmode="decimal" value="${esc(v)}" aria-label="${f}">`
+    const rowsHtml = (rows: [string, string][]) => rows.map(([n, a]) => `<div class="calc-r"><span class="calc-n">${esc(n)}</span><span class="calc-a">${esc(a)}</span></div>`).join('')
+    const out: string[] = []
+    for (const line of lines.slice(0, 8)) {
+        const c = cells(line)
+        const op = (c[0] ?? '').toLowerCase()
+        if (op === 'split') {
+            const total = num(c[1]), shares = (c[2] ?? '').split(',').map((p) => p.trim()).filter(Boolean).join(', ')
+            if (total === null || total < 0 || !shares) return ''
+            const init = calcInitialRows('split', { total: total.toFixed(2), shares }, {})
+            out.push(`<div class="calc" data-calc="split"><div class="calc-t"><span>Split $${inp('total', total.toFixed(2))}</span><span data-o="count">${shares.split(',').length} people</span></div><div class="calc-ed"><label class="calc-lb">Shares <input class="calc-in calc-in-text" data-f="shares" value="${esc(shares)}" aria-label="shares, comma separated, optional xN weight"></label></div><div data-o="rows">${init ? rowsHtml(init.rows) : ''}</div><div class="calc-note" data-o="note">${esc(init?.note ?? '')}</div><button type="button" class="calc-reset" data-a="reset">Reset</button></div>`)
+        } else if (op === 'tip') {
+            const bill = num(c[1]), pct = num(c[2])
+            if (bill === null || bill < 0 || pct === null || pct < 0) return ''
+            const ppl = Math.max(1, Math.round(num(c[3]) ?? 1))
+            const init = calcInitialRows('tip', { bill: bill.toFixed(2), pct: String(pct), people: String(ppl) }, {})
+            out.push(`<div class="calc" data-calc="tip"><div class="calc-t"><span>Bill $${inp('bill', bill.toFixed(2))} + ${inp('pct', String(pct), 4)}% tip</span><span data-o="total">${esc(init?.total ?? '')}</span></div><div data-o="rows">${init ? rowsHtml(init.rows) : ''}</div><div class="calc-ed"><label class="calc-lb">People ${inp('people', String(ppl), 4)}</label></div><div class="calc-note" data-o="note">${esc(init?.note ?? '')}</div><button type="button" class="calc-reset" data-a="reset">Reset</button></div>`)
+        } else if (op === 'convert') {
+            const amt = num(c[1]), from = c[2], to = c[3], rate = num(c[4]), asof = c[5]
+            if (amt === null || !from || !to) return ''
+            const data = { from, to, asof: asof ?? '' }
+            const init = calcInitialRows('convert', { amt: String(amt), rate: rate !== null && rate > 0 ? String(rate) : '' }, data)
+            out.push(`<div class="calc" data-calc="convert" data-from="${esc(from)}" data-to="${esc(to)}" data-asof="${esc(asof ?? '')}"><div class="calc-t"><span>${inp('amt', String(amt))} ${esc(from)}</span><span data-o="total">${esc(init?.total ?? '')}</span></div><div class="calc-ed"><label class="calc-lb">Rate ${inp('rate', rate !== null && rate > 0 ? String(rate) : '', 7)} ${esc(to)} per ${esc(from)}</label></div><div class="calc-note" data-o="note">${esc(init?.note ?? '')}</div><button type="button" class="calc-reset" data-a="reset">Reset</button></div>`)
+        } else return ''
+    }
+    return out.join('')
+}
+
+/** Server-side first paint/** Server-side first paint for calc cards: same math as the page script, so the no-JS view is complete. */
+export function calcInitialRows(op: string, fields: Record<string, string>, data: Record<string, string>): { rows: [string, string][]; note: string; total?: string } | null {
+    const g = (k: string) => fields[k] ?? ''
+    if (op === 'split') {
+        const totalC = toCents(g('total')) ?? NaN
+        const shares = g('shares').split(',').map((p) => p.trim()).filter(Boolean).map((p) => {
+            const m = p.match(/^(.+?)(?:\s+x(\d+(?:\.\d+)?))?$/)
+            return { name: (m?.[1] ?? p).trim(), w: m?.[2] ? parseFloat(m[2]) : 1 }
+        }).filter((p) => p.name && Number.isFinite(p.w) && p.w > 0)
+        if (!Number.isFinite(totalC) || totalC < 0 || !shares.length) return null
+        const wsum = shares.reduce((a, p) => a + p.w, 0)
+        let assigned = 0
+        const rows = shares.map((p, i): [string, string] => {
+            const amt = i < shares.length - 1 ? Math.round((totalC * p.w) / wsum) : totalC - assigned
+            assigned += amt
+            return [p.name + (p.w !== 1 ? ` x${p.w}` : ''), money(amt)]
+        })
+        return { rows, note: (shares.some((p) => p.w !== 1) ? 'Weights applied. ' : '') + 'Cents are rounded; the last share takes the remainder.' }
+    }
+    if (op === 'tip') {
+        const bill = num(g('bill')), pct = num(g('pct'))
+        if (bill === null || bill < 0 || pct === null || pct < 0) return null
+        const ppl = Math.max(1, Math.round(num(g('people')) ?? 1))
+        const billC = toCents(g('bill')) ?? NaN, tipC = Math.round(billC * (pct / 100)), totalC = billC + tipC
+        const rows: [string, string][] = [['Tip', money(tipC)]]
+        if (ppl > 1) rows.push([`Per person (${ppl})`, money(Math.round(totalC / ppl))])
+        return { rows, note: 'Cents are rounded.', total: money(totalC) }
+    }
+    if (op === 'convert') {
+        const amt = num(g('amt')), rate = num(g('rate'))
+        if (amt === null) return null
+        if (rate === null || rate <= 0) return { rows: [], note: `Needs a quoted ${data.from} → ${data.to} rate with its date. None was given, so nothing was converted.` }
+        return { rows: [], note: `1 ${data.from} = ${rate} ${data.to}${data.asof ? ` · rate as of ${data.asof}` : ' · rate date not given'}`, total: `${(amt * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${data.to}` }
+    }
+    return null
+}
+
+/** chart:/** chart: "labels | a, b, c" then one of "line | name | v1, v2, …", "bar | label | value",
+ * "donut | label | value" per row. Values must be finite numbers; anything else is dropped. */
+function renderChart(lines: string[]): string {
+    const rows = lines.map(cells).filter((c) => c[0])
+    if (!rows.length) return ''
+    const labels = rows[0][0].toLowerCase() === 'labels' ? (rows.shift()?.[1] ?? '').split(',').map((l) => l.trim()) : []
+    const kind = (rows[0]?.[0] ?? '').toLowerCase()
+    const escA = (t: string) => esc(t).replace(/'/g, '&#39;')
+    if (kind === 'line') {
+        const [, name, series] = rows[0]
+        const vals = (series ?? '').split(',').map((v) => num(v.trim())).filter((v): v is number => v !== null).slice(0, 24)
+        if (!name || vals.length < 2) return ''
+        const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1
+        const W = 360, H = 180, P = 34
+        const pts = vals.map((v, i) => [P + (i * (W - P * 1.6)) / (vals.length - 1), H - P - ((v - min) / span) * (H - P * 1.8)] as const)
+        const line = pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
+        const area = `${P},${H - P} ${line} ${pts[pts.length - 1][0].toFixed(1)},${H - P}`
+        const mid = (max + min) / 2
+        const yOf = (v: number) => H - P - ((v - min) / span) * (H - P * 1.8)
+        const grid = [max, mid, min].map((v) => `<line x1="${P}" y1="${yOf(v).toFixed(1)}" x2="${W - 8}" y2="${yOf(v).toFixed(1)}" class="cht-grid"/><text x="${P - 6}" y="${(yOf(v) + 3).toFixed(1)}" text-anchor="end" class="cht-v">${esc(String(Number.isInteger(v) ? v : Math.round(v * 10) / 10))}</text>`).join('')
+        const ticks = labels.slice(0, vals.length).filter((_, i) => i % Math.ceil(vals.length / 6) === 0 || i === vals.length - 1)
+        return `<div class="cht"><div class="cht-t">${esc(name)}</div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Line chart: ${escA(name)}, ${vals.length} points, from ${min} to ${max}">${grid}<line x1="${P}" y1="${H - P}" x2="${W - 8}" y2="${H - P}" class="cht-ax"/><polygon points="${area}" class="cht-area"/><polyline points="${line}" class="cht-line"/>${pts.map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" class="cht-dot"/>`).join('')}${ticks.map((t, i) => `<text x="${(P + (i * (W - P * 1.6)) / Math.max(1, ticks.length - 1)).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="cht-x">${esc(t)}</text>`).join('')}</svg></div>`
+    }
+    if (kind === 'bar' || kind === 'donut') {
+        const items = rows.map((c) => ({ l: c[1], v: num(c[2]) })).filter((x): x is { l: string; v: number } => !!x.l && x.v !== null && x.v >= 0).slice(0, 12)
+        if (!items.length) return ''
+        const total = items.reduce((a, x) => a + x.v, 0)
+        if (kind === 'bar') {
+            const max = Math.max(...items.map((x) => x.v)) || 1
+            return `<div class="cht">${items.map((x) => `<div class="cht-b"><span class="cht-bl">${esc(x.l)}</span><span class="cht-bt"><i style="width:${((x.v / max) * 100).toFixed(1)}%"></i></span><span class="cht-bv">${esc(String(x.v))}</span></div>`).join('')}</div>`
+        }
+        const palette = ['#F08A68', '#5B8DD9', '#E5C55B', '#6FBF8F', '#B07FD4', '#8A97A8']
+        let acc = 0
+        const segs = items.map((x, i) => {
+            const frac = total ? x.v / total : 0
+            const seg = `<circle r="15.9155" cx="21" cy="21" fill="transparent" stroke="${palette[i % palette.length]}" stroke-width="10" stroke-dasharray="${(frac * 100).toFixed(2)} ${(100 - frac * 100).toFixed(2)}" stroke-dashoffset="${(25 - acc * 100).toFixed(2)}"/>`
+            acc += frac
+            return seg
+        })
+        return `<div class="cht cht-d"><svg viewBox="0 0 42 42" role="img" aria-label="Donut chart with ${items.length} segments">${segs.join('')}</svg><div class="cht-lg">${items.map((x, i) => `<div><i style="background:${palette[i % palette.length]}"></i>${esc(x.l)} · ${esc(String(x.v))}${total ? ` (${Math.round((x.v / total) * 100)}%)` : ''}</div>`).join('')}</div></div>`
+    }
+    return ''
+}
+
 export function renderKind(name: KindBlock, lines: string[], opts?: { hero?: boolean }): string {
     switch (name) {
         case 'weather': return renderWeather(lines, opts)
@@ -311,11 +484,52 @@ export function renderKind(name: KindBlock, lines: string[], opts?: { hero?: boo
         case 'gallery': return renderGallery(lines)
         case 'lead': return renderLead(lines)
         case 'checks': return renderChecks(lines)
+        case 'calc': return renderCalc(lines)
+        case 'chart': return renderChart(lines)
+        case 'countdown': return renderCountdown(lines, opts)
     }
 }
 
 /** Light styles use the page tokens (--paper, --sand, --ink, --accent); dark mode flips the tokens, so only fixed colours are overridden below. */
 export const KINDS_CSS = `
+.cdn{text-align:center;padding:22px 12px 14px}
+.cdn-n{font-size:84px;font-weight:800;line-height:1;color:var(--accent);letter-spacing:-2px;font-variant-numeric:tabular-nums}
+.cdn-l{font-size:13px;font-weight:600;letter-spacing:2.5px;text-transform:uppercase;color:var(--mute);margin-top:6px}
+.cdn-e{font-size:17px;font-weight:600;margin-top:12px}
+.cdn-d{display:block;font-size:13px;color:var(--mute);font-weight:400;margin-top:2px}
+.cdn-ms{list-style:none;margin:14px auto 0;padding:0;max-width:320px;text-align:left}
+.cdn-ms li{font-size:14px;padding:7px 2px;border-top:1px solid var(--line);color:var(--ink)}
+.calc{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:6px 0}
+.calc-t{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;background:var(--sand);padding:12px 16px;font-weight:700;font-size:15px}
+.calc-t span:last-child{font-size:20px;color:var(--accent);font-variant-numeric:tabular-nums}
+.calc-r{display:flex;justify-content:space-between;padding:10px 16px;border-top:1px solid var(--line);font-size:14.5px}
+.calc-a{font-weight:600;font-variant-numeric:tabular-nums}
+.calc-w{color:var(--mute);font-size:12px;font-weight:400}
+.calc-note{padding:8px 16px;font-size:12px;color:var(--mute);border-top:1px solid var(--line)}
+.calc-in{font:inherit;font-size:15px;font-weight:600;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:2px 6px;text-align:right;font-variant-numeric:tabular-nums;box-sizing:border-box;min-width:48px;max-width:58vw}
+.calc-in:focus{outline:2px solid var(--accent);outline-offset:1px}
+.calc-in-text{width:100%;text-align:left;font-weight:400;font-size:14px;margin-top:4px}
+.calc-ed{padding:8px 16px;border-top:1px solid var(--line)}
+.calc-lb{font-size:12px;color:var(--mute);display:block}
+.calc-reset{display:block;margin:0 16px 12px;padding:4px 12px;font:inherit;font-size:12px;color:var(--accent);background:none;border:1px solid var(--line);border-radius:999px;cursor:pointer}
+@media (prefers-reduced-motion:reduce){.calc-in{transition:none}}
+.cht{padding:8px 4px}
+.cht-t{font-weight:600;font-size:14px;margin:2px 0 8px}
+.cht svg{width:100%;height:auto;display:block}
+.cht-ax{stroke:var(--line);stroke-width:1}.cht-grid{stroke:var(--line);stroke-width:1;stroke-dasharray:2 5;opacity:.7}
+.cht-area{fill:var(--accent);opacity:.12}
+.cht-line{fill:none;stroke:var(--accent);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.cht-dot{fill:var(--accent)}
+.cht-v,.cht-x{fill:var(--mute);font-size:10px}
+.cht-b{display:flex;align-items:center;gap:10px;padding:5px 2px;font-size:13.5px}
+.cht-bl{flex:0 0 34%;text-align:right;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cht-bt{flex:1;height:16px;background:var(--sand);border-radius:8px;overflow:hidden}
+.cht-bt i{display:block;height:100%;background:var(--accent);border-radius:8px}
+.cht-bv{flex:0 0 auto;font-weight:600;font-variant-numeric:tabular-nums}
+.cht-d{display:flex;align-items:center;gap:18px}
+.cht-d svg{flex:0 0 120px;width:120px}
+.cht-lg{font-size:13px;display:grid;gap:5px}
+.cht-lg i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}
 .wx,.scs,.mds,.sts,.rt,.brs,.gal{margin-block:var(--gap,24px)}
 .wx{border-radius:var(--r,20px);overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow);background:var(--paper)}
 .wx-hero{display:flex;justify-content:space-between;align-items:center;padding:26px 28px;color:#fff;background:linear-gradient(160deg,#3B5BA8,#7FA3DC)}
