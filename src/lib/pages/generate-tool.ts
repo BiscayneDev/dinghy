@@ -26,10 +26,13 @@ export function generationTool(opts:{gatewayUrl:string;apiKey:string;modelFields
  return {name:'generate_ui',description:'Jev authorized a novel UI. Ask the coding model to build an isolated local UI from the request and verified data. Returns a validated Pages block for create_file. No network/account actions.',inputSchema:{type:'object',properties:{brief:{type:'string',maxLength:8000},facts:{type:'string',maxLength:8000,description:'Verified factual inputs or explicitly fictional/example data. Preserve source bindings before this call; do not invent prices, measurements or dates.'}},required:['brief','facts']},async execute(input,ctx){
   const i=input as {brief?:unknown;facts?:unknown}
   if(typeof i.brief!=='string'||!i.brief.trim()||i.brief.length>8000||typeof i.facts!=='string'||i.facts.length>8000)return {success:false,error:'brief and verified facts required'}
-  if(attempted)return {success:false,error:'Generated UI was already attempted; no retry was made'}
+  if(attempted)return {success:false,error:'Generation was already used this turn. Do not call generate_ui again: publish the :::pages block it already returned with create_file.'}
+  // The single paid attempt is consumed HERE, before any early return that could precede
+  // the fetch (budget/abort): no invocation sequence - failure, rejection, timeout or
+  // concurrent repeat - can ever reach a second upstream coding request in one turn.
+  attempted=true
   const budget=generationBudgetMs(opts.deadlineAt)
   if(budget<=0||ctx.signal?.aborted)return {success:false,error:'Not enough turn time remains to generate and publish a UI'}
-  attempted=true
   const facts=i.facts
   const fields=opts.modelFields() as {model?:string;shipyard?:object}
   const start=Date.now()
