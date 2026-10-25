@@ -424,7 +424,7 @@ document.querySelectorAll('.calc').forEach(card=>{
  const bad=m=>{if(rows)rows.innerHTML='';if(tot)tot.textContent='';if(note)note.textContent=m};
  const row=(n,a)=>{const d=document.createElement('div');d.className='calc-r';const s1=document.createElement('span');s1.className='calc-n';s1.textContent=n;const s2=document.createElement('span');s2.className='calc-a';s2.textContent=a;d.append(s1,s2);return d};
  const go=()=>{
-  if(op==='split'){const tv=num(F('total').value);const parts=F('shares').value.split(',').map(p=>p.trim()).filter(Boolean).map(p=>{const m=p.match(/^(.+?)(?:\s+x(\d+(?:\.\d+)?))?$/);return{name:(m?m[1]:p).trim(),w:m&&m[2]?parseFloat(m[2]):1}}).filter(p=>p.name&&isFinite(p.w)&&p.w>0);
+  if(op==='split'){const tv=num(F('total').value);const parts=F('shares').value.split(',').map(p=>p.trim()).filter(Boolean).map(p=>{const m=p.match(/^(.+?)(?:\\s+x(\\d+(?:\\.\\d+)?))?$/);return{name:(m?m[1]:p).trim(),w:m&&m[2]?parseFloat(m[2]):1}}).filter(p=>p.name&&isFinite(p.w)&&p.w>0);
    const cnt=card.querySelector('[data-o="count"]');if(cnt)cnt.textContent=parts.length+(parts.length===1?' person':' people');
    if(tv===null||tv<0||!parts.length){bad('Enter a non-negative total and at least one share.');return}
    const totalC=Math.round(tv*100),ws=parts.reduce((a,p)=>a+p.w,0);let as=0;rows.innerHTML='';
