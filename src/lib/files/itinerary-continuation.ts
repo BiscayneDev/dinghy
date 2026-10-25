@@ -40,7 +40,7 @@ export async function decideClarificationReply(opts: { gatewayUrl: string; apiKe
     if (!res.ok) throw new Error('reply decision unavailable')
     const r = (await res.json()) as { provider?: string; model?: string; answers?: { reply?: { type?: string; choice?: string; confidence?: number; probabilities?: Record<string, number> } } }
     const a = r?.answers?.reply
-    if (/stub/i.test(r?.provider ?? '') || /stub/i.test(r?.model ?? '') || a?.type !== 'choice' || !a.choice || !a.probabilities || !Number.isFinite(a.probabilities[a.choice]) || a.probabilities[a.choice] < 0.6) throw new Error('reply decision unavailable or uncertain')
+    if (/stub/i.test(r?.provider ?? '') || /stub/i.test(r?.model ?? '') || a?.type !== 'choice' || !Number.isFinite(a.confidence) || a.confidence! < 0.6 || !a.choice || !a.probabilities || !Number.isFinite(a.probabilities[a.choice]) || a.probabilities[a.choice] < 0.6) throw new Error('reply decision unavailable or uncertain')
     if (a.choice === 'answer' || a.choice === 'new_topic' || a.choice === 'cancel') return a.choice
     throw new Error('unknown reply decision')
 }

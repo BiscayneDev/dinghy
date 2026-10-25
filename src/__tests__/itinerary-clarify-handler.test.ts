@@ -72,6 +72,7 @@ it('question, answer, then the researched itinerary completes: sources, compose,
  
  expect(published).toHaveBeenCalledTimes(1)                                   // composed and published
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
+ if(process.env.DUMP_HTML)(await import('node:fs')).writeFileSync(process.env.DUMP_HTML,html)
  expect(html).toContain('Harborville Inn');expect(html).toContain('Arrival after the event')  // real picks from the researched sources plus the agenda
  expect(texts().join('\n')).not.toMatch(/Unverified itinerary|research and publication did not complete|wasn't completed/)
  expect(texts().filter(t=>t.includes(QUESTION))).toHaveLength(0)
