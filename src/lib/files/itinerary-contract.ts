@@ -1,7 +1,7 @@
 import {ITINERARY_CANDIDATE_NOTE} from './itinerary-candidates'
 /** Itinerary design follows the user's requested sections, not model prose. */
 export function itineraryNeedsResearch(request:string):boolean {
- return /\b(?:recommend(?:ations?)?|suggest(?:ions?)?|hotels?|restaurants?|places? to (?:stay|eat)|things to do|activities|fun things)\b/i.test(request)
+ return /\b(?:recommend(?:ations?)?|suggest(?:ions?)?|hotels?|restaurants?|places? to (?:stay|eat)|things to do|activities|fun things|fun to do|what to do|something to do|activity ideas|places to go)\b/i.test(request)
 }
 const rows=(body:string,name:string,min:number)=>[...body.matchAll(new RegExp(`(?:^|\\n)\\s*:::${name}\\s*\\n([\\s\\S]*?)\\n\\s*:::`, 'gi'))].flatMap(m=>m[1].split('\n')).filter(l=>l.split('|').filter(c=>c.trim()).length>=min).length
 export const ITINERARY_DAY_HEADING_NOTE='For itinerary day/stop sections, use Markdown H2 or H3 headings starting immediately with Day followed by a number, an English weekday (Mon/Tue/Wed/Thu/Fri/Sat/Sun or its full name), a YYYY-MM-DD date already supplied, or Stop followed by a number. Literal example: ## Friday. Do not use H1, H4+, bold text, an emoji or a label before the day/stop. Never invent a calendar date; do not use route rows for an agenda.'
