@@ -110,8 +110,9 @@ it('verification accepts only a bare yes, caches verdicts across retries, and an
   return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:String(n),function:{name,arguments:JSON.stringify(args)}}]}}]}))
  }))
  const tools=gateTools([...toolsFor(ctx),...files.tools],[ask]).active
- await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
- expect(verifies).toBeLessThanOrEqual(1);expect(published).toHaveBeenCalledTimes(1);expect(files.files()[0].markdown).not.toContain('Harbor Inn');expect(stages.filter(s=>s==='invalid:selection:not_verified').length).toBeGreaterThan(0)
+ const out=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'auto',deadlineAt:Date.now()+60000,onStage:async(_s,d)=>{if(d)stages.push(d)}},tools,ctx)
+ // The ask carries no agenda of its own, so there is nothing to preserve: no empty page, an honest text reply, and the unverified pick appears nowhere.
+ expect(verifies).toBeLessThanOrEqual(1);expect(published).not.toHaveBeenCalled();expect(files.files()).toHaveLength(0);expect(out.reply).not.toContain('Harbor Inn');expect(out.deliverable?.state).toBe('unfulfilled');expect(stages.filter(s=>s==='invalid:selection:not_verified').length).toBeGreaterThan(0)
 })
 
 it('verified picks survive later failed attempts and publish as an honest partial with a safe trace',async()=>{

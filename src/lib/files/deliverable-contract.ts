@@ -17,10 +17,14 @@ function classify(request: string): DeliverableContract | null {
 }
 /** Original user asks select work. Assistant prose never selects a contract.
  * Retry referents stop at the immediately previous user ask. */
+/** The user withdrew the request or asked for a plain answer. */
+export function deliverableCancelled(text: string): boolean {
+    return /\b(?:don't|do not|no need to)\s+(?:make|create|send)|\b(?:just|only)\s+(?:answer|text)|\b(?:cancel|never mind)\b/i.test(text)
+}
 export function selectDeliverable(history: Line[]): DeliverableContract | null {
     const users = history.filter(m => m.role === 'user').slice(-2)
     const current = users.at(-1)?.content ?? ''
-    if (/\b(?:don't|do not|no need to)\s+(?:make|create|send)|\b(?:just|only)\s+(?:answer|text)|\b(?:cancel|never mind)\b/i.test(current)) return null
+    if (deliverableCancelled(current)) return null
     if (mapArtifactTurn(history)) return { kind: 'map', request: current }
     const own = classify(current)
     if (own) return own

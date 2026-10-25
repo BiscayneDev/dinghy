@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { wantsPageResend, latestChatFile, verifiedPage, deliverHostedLink } from '@/lib/files/recover'
 import { fileReply } from '@/lib/files/reply'
 import { assertAccountActive, erasureEnabled, isEraseIntent } from '@/lib/data-portability/erasure-state'
@@ -40,6 +41,7 @@ import { allowanceUsedUpMessage, claimLimitNotice, isOverDailyAllowance } from '
 import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
+import { CLARIFY_MARK, stripClarifyMark, pendingItineraryClarification, continueAfterClarification, decideClarificationReply, type ReplyVerdict } from '@/lib/files/itinerary-continuation'
 import { deliverableIntentEnabled, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
@@ -665,7 +667,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
 
     const t0 = Date.now()
     // Memory loads in parallel with history; any failure means no memory.
-    const [memory, history, loadedFacts] = await Promise.all([
+    const [memory, historyRaw, loadedFacts] = await Promise.all([
         loadMemoryContext(chatGuid, text).catch((err) => {
             logErr('memory load failed', err)
             return EMPTY_MEMORY
@@ -679,6 +681,9 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             return [] as DinghyFact[]
         }),
     ])
+    // The pending-question marker is internal state: read it once here, then no other consumer of history ever sees it.
+    const pendingQuestion = pendingItineraryClarification(historyRaw)
+    const history = historyRaw.map((m) => (m.role === 'assistant' && m.content.startsWith(CLARIFY_MARK) ? { ...m, content: stripClarifyMark(m.content) } : m))
     const facts = productFactsFor(role, loadedFacts)
     const memoryBlock = renderMemoryBlock(memory)
     const tContext = Date.now()
@@ -920,7 +925,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
 
     // "thanks" / "ok" / "got it": a tapback, not another message.
     {
-        const recent = await loadHistory(chatGuid, 2).catch(() => [] as HistoryMessage[])
+        const recent = (await loadHistory(chatGuid, 2).catch(() => [] as HistoryMessage[])).map((m) => ({ ...m, content: stripClarifyMark(m.content) }))
         const lastAssistant = [...recent].reverse().find((m) => m.role === 'assistant')?.content ?? null
         // A repeated Y after a completed action is not a new task. Do not let
         // the model reconstruct the old draft from history and send it twice.
@@ -1025,8 +1030,17 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     } else {
         deliverable = selectDeliverable(full)
     }
+    // A pending itinerary question carries the original request forward only when the model judges the new message to be its answer.
+    let replyVerdict: ReplyVerdict | null = null
+    if (pendingQuestion) replyVerdict = await decideClarificationReply({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, pending: pendingQuestion, reply: text, signal: AbortSignal.timeout(8000) }).catch(() => null)
+    // Two answers to the same question must not both start the itinerary: one atomic claim per question (the inbound-dedupe RPC). The loser, or a failed claim, is handled as an ordinary message.
+    if (pendingQuestion && replyVerdict === 'answer' && !(await claimInboundDelivery(`itin-clarify:${createHash('sha256').update(`${chatGuid}\n${pendingQuestion.key}`).digest('hex')}`, chatGuid))) replyVerdict = null
+    deliverable = continueAfterClarification(pendingQuestion, replyVerdict, text, deliverable)
+    let askedQuestion = false
+    const answeredQuestion = Boolean(pendingQuestion && replyVerdict === 'answer' && deliverable?.kind === 'itinerary')
     const itineraryJob = deliverable?.kind === 'itinerary'
-    if(itineraryJob){
+    // The acknowledgement waits until the first model judgment decides to do the work; a clarifying question must not follow a promise.
+    const acknowledgeItinerary = async () => {
         const acknowledgement = 'I am putting the itinerary together. I will send it here when it is ready.'
         const delivered = await sendText(space, chatGuid, 'reply', acknowledgement)
         if(delivered)await saveMessage(chatGuid, 'assistant', acknowledgement).catch((err)=>logErr('itinerary acknowledgement save failed',err))
@@ -1109,6 +1123,8 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         if (tools.length > 0) {
             const toolOpts = {
                 deadlineAt, onStage,
+                ...(itineraryJob ? { onCommit: acknowledgeItinerary } : {}),
+                ...(answeredQuestion ? { clarified: true } : {}),
                 sender: senderAddress(message.sender) ?? undefined,
                 taskClass: classifyUserTurn(selectDeliverable(full)?.request ?? text),
                 gatewayUrl: GATEWAY_URL,
@@ -1145,7 +1161,8 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             }
             const r = await chatWithTools(full, toolOpts, tools, runCtx)
             if (r.deliverable) await onStage('reply_ready', `deliverable:${r.deliverable.kind}:${r.deliverable.state}`)
-            reply = r.reply
+            reply = stripClarifyMark(r.reply)
+            askedQuestion = Boolean(r.clarification)
             replyTainted = Boolean(r.tainted)
             toolCalls = r.toolCalls
             iterations = r.iterations
@@ -1178,7 +1195,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         }))
         const tChatEnd = Date.now()
         clearTimeout(eyesTimer)
-        const recentAfter = await loadHistory(chatGuid, 6).catch(() => [] as HistoryMessage[])
+        const recentAfter = (await loadHistory(chatGuid, 6).catch(() => [] as HistoryMessage[])).map((m) => ({ ...m, content: stripClarifyMark(m.content) }))
         const threaded = activeRuns.length > 0 || shouldThread({ replyTo }, recentAfter, text)
         // A bare URL on the reply's last line goes out as its own rich-link
         // bubble so the preview card unfurls (articles, bookings, pages).
@@ -1200,7 +1217,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         }
         await onStage('reply_attempted', answerDelivered ? 'delivered' : 'not_confirmed')
         await settleWorkingTapback(message, eyes, text)
-        await saveMessage(chatGuid, 'assistant', plainReply, replyTainted).catch((err) => logErr('message save failed', err))
+        await saveMessage(chatGuid, 'assistant', askedQuestion ? CLARIFY_MARK + plainReply : plainReply, replyTainted).catch((err) => logErr('message save failed', err))
         // The exact draft, rendered by the server, as its own bubble.
         const loose = takeLooseProposal(chatGuid)
         const proposal = actions?.proposal() ?? loose

@@ -527,6 +527,8 @@ export interface ToolChatResult {
     /** The turn read Google data (or started with it): save its reply tagged google_derived. */
     tainted?: boolean
     deliverable?: ReturnType<typeof deliverableOutcome>
+    /** The reply is the one question the itinerary work is waiting on (saved as pending state by the handler). */
+    clarification?: boolean
 }
 
 /**
@@ -565,6 +567,10 @@ const PAGE_FINISH =
     'This answer is too long for chat and no page was made. Call create_file once with this answer, using only supported facts and observed source URLs, then give a short verdict. ' +
     'If hosting fails, give the useful result in chat and say the page was not made. Never claim a page exists without a successful tool result.'
 
+const CLARIFY_TOOL='ask_clarifying_question'
+const CLARIFY_DEF={type:'function' as const,function:{name:CLARIFY_TOOL,description:'Ask the user ONE essential question instead of starting research. Use it only when the request cannot be researched or planned without the answer: the destination is unclear, or the dates conflict or are missing in a way that changes the plan. Never guess a named place or a date, and do not ask when the request is enough to proceed; in that case call the research or file tool instead.',parameters:{type:'object',properties:{question:{type:'string',description:'One short question in plain words.'}},required:['question']}}}
+/** Live runs showed itinerary model calls taking 18-28s for tiny outputs; a 25s cap cut two post-search calls with ~200s of the 240s turn left and discarded the research. One slow call may now use up to 60s, always inside the turn deadline. */
+const ITINERARY_CALL_MS=60_000
 export async function chatWithTools(
     history: Message[],
     opts: {
@@ -599,6 +605,10 @@ export async function chatWithTools(
         volatile?: string
         /** One-use catalogue proof claim (handler; durable, at most one success per sender). Proof turns never add the generate tool. */
         uiProofClaim?: (sender: string) => Promise<boolean>
+        /** Fired once, after the first model judgment chose to do the itinerary work (not to ask a question). */
+        onCommit?: () => Promise<void>
+        /** This turn already carries the user's answer to a clarifying question: do not offer to ask again. */
+        clarified?: boolean
     },
     tools: Tool[],
     ctx: UserContext
@@ -655,6 +665,13 @@ export async function chatWithTools(
         if(file&&!pageAttempted){
             await assertAccountActive(ctx.userId,ctx.chatGuid)
             const input={title:'Unverified itinerary',body:apiItineraryBody(currentRequest,[]).replace(/\n\nVenue names, categories and addresses:[^\n]+/,'')+'\n\n## Recommendations not verified\n'+researchNote+' No hotel, restaurant or activity is recommended. The supplied agenda is preserved; hours, prices, bookings and any game remain unverified.',format:'pdf',kind:'itinerary'}
+            // A page that only repeats day names says nothing the user did not already say; it read as a finished itinerary. Say plainly that nothing was planned instead.
+            const agendaPart=input.body.split('## Recommendations not verified')[0]
+            if(!/^\s*-\s+\S/m.test(agendaPart)){
+                await opts.onStage?.('tool','itinerary:no_agenda_content')
+                const links=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
+                                return finish({reply:`I couldn't finish researching this trip: the research step timed out, so I haven't planned or recommended anything yet. Nothing was booked.${links?`\n\nSources found, not verified recommendations:\n${links}`:''}`,toolCalls:toolCallCount,iterations:iteration,tainted})
+            }
             if(!inputSchemaError(input,file.inputSchema)){
                 pageAttempted=true;toolCallCount++
                 await opts.onStage?.('tool','itinerary:agenda_only_fallback')
@@ -697,6 +714,9 @@ export async function chatWithTools(
     let placesMismatch: string | null = null
     let independentTool = false
     let toolCallCount = 0
+    let workCommitted=false
+    let clarifyRetry=false,clarifyRetried=false
+    const commitWork=async()=>{if(workCommitted)return;workCommitted=true;await opts.onCommit?.()}
     let successfulSearches = 0
     let sourceOnly = true
     const foundSources: { title: string; url: string }[] = []
@@ -862,13 +882,17 @@ export async function chatWithTools(
         const toolDefs = defsNow()
         const mapReady = mapSources.length > 0 || (mapResearchRead && foundSources.length > 0)
         const selecting=itineraryResearch&&mapResearchRead&&!selectedCandidates&&viewReady
-        const forceTool = (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
-        const offered = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
+        // First model judgment on an itinerary: it may ask one essential question instead of being forced into research.
+        if(itineraryContract&&iteration>=2&&!clarifyRetry)await commitWork()
+        const clarifying=itineraryContract&&!opts.clarified&&(iteration===1||clarifyRetry)&&!apiPlaces&&!pageAttempted&&!selecting
+        const forceTool = clarifying ? undefined : (selecting?SELECT_CANDIDATES_TOOL:undefined) ?? (itineraryResearch&&!mapResearchRead ? (successfulSearches?'web_fetch':'web_search') : undefined) ?? (fileValidationPending ? 'create_file' : undefined) ?? (itineraryResearch&&selectedCandidates&&!pageAttempted ? 'create_file' : undefined) ?? recoveryTool ?? (contextualResearch && !mapResearchRead ? (successfulSearches>0?'web_fetch':'web_search') : undefined) ?? (pageRetry && !mapArtifact ? 'create_file' : mapArtifact && !pageAttempted ? (mapReady ? 'create_file' : mapResearchRead ? 'web_search' : successfulSearches > 0 ? 'web_fetch' : 'web_search') : retailAvailability ? 'web_search' : opts.forceTool)
+        const offered0 = selecting ? toolDefs.filter(t=>t.function.name===SELECT_CANDIDATES_TOOL) : fileValidationPending ? toolDefs.filter(t=>t.function.name==='create_file') : completionMode ? toolDefs.filter((t) => t.function.name !== 'web_search' && (!pageAttempted || t.function.name !== 'create_file')) : toolDefs
+        const offered = clarifying ? (clarifyRetry ? [CLARIFY_DEF] : [...offered0, CLARIFY_DEF]) : offered0
         const t0 = Date.now()
         // Bound a post-search generation, not tools or actions. Preserve honest
         // source-only progress when the gateway stalls, with transport headroom.
         const rescueEligible = successfulSearches > 0 && sourceOnly && foundSources.length > 0 && opts.deadlineAt !== undefined
-        const callDeadline = itineraryResearch&&opts.deadlineAt!==undefined ? Math.min(opts.deadlineAt-18000,Date.now()+25000) : rescueEligible ? Math.min(opts.deadlineAt! - 8_000, Date.now() + 25_000) : opts.deadlineAt
+        const callDeadline = itineraryResearch&&opts.deadlineAt!==undefined ? Math.min(opts.deadlineAt-18000,Date.now()+ITINERARY_CALL_MS) : rescueEligible ? Math.min(opts.deadlineAt! - 8_000, Date.now() + 25_000) : opts.deadlineAt
         let res: Response
         try {
           res = selecting&&apiPlaces ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-choose',function:{name:SELECT_CANDIDATES_TOOL,arguments:JSON.stringify({candidates:apiPlaces.map(p=>({line:p.line,kind:p.kind}))})}}]}}]})) : itineraryResearch&&apiPlaces&&selectedCandidates ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-file',function:{name:'create_file',arguments:JSON.stringify({title:'Itinerary for '+(destLabel||'your visit'),body:apiItineraryBody(currentRequest,[]),format:'pdf',kind:'itinerary'})}}]}}]})) : await withinTurn(callDeadline, (signal) => fetch(`${opts.gatewayUrl}/v1/chat/completions`, {
@@ -879,7 +903,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), ...(clarifying ? { tool_choice: clarifyRetry ? { type: 'function', function: { name: CLARIFY_TOOL } } : 'required' } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
@@ -913,6 +937,26 @@ export async function chatWithTools(
         const choice = data.choices?.[0]
         const msg = choice?.message
         const calls = msg?.tool_calls ?? []
+        if(clarifying){
+            const askCall=calls.find(c=>c.function.name===CLARIFY_TOOL)
+            let question=''
+            // Only the structured tool counts. A question is used whole or not at all: empty or oversized is rejected, never trimmed.
+            if(askCall){try{const q=(JSON.parse(askCall.function.arguments||'{}') as {question?:unknown}).question;if(typeof q==='string'){const t=q.replace(/\s+/g,' ').trim();if(t&&t.length<=500)question=t}}catch{}}
+            if(question){
+                await opts.onStage?.('tool','itinerary:clarification_asked')
+                // A question is not an artifact: no file, honest unfulfilled state, and the question is the whole reply.
+                return {reply:question,toolCalls:toolCallCount,iterations:iteration,tainted,deliverable:deliverableOutcome(contract,false),clarification:true}
+            }
+            if(askCall){
+                // An unusable question must not turn into guessed work. One bounded retry that can only ask; then an honest stop.
+                if(!clarifyRetried){clarifyRetried=true;clarifyRetry=true;messages.push({role:'system',content:'The question was empty or too long. Ask the one essential question again in a single short sentence.'});await opts.onStage?.('tool','itinerary:clarification_retry');continue}
+                await opts.onStage?.('tool','itinerary:clarification_failed')
+                return finish({reply:"I need one more detail before I can plan this, but I couldn't put the question into words just now. Nothing was planned or booked.",toolCalls:toolCallCount,iterations:iteration,tainted})
+            }
+            // Committed only by a real research step; a premature create_file is blocked later and commits at the next iteration if the work goes on.
+            clarifyRetry=false
+            if(calls.some(c=>c.function.name!=='create_file'))await commitWork()
+        }
         if(itineraryResearch&&forceTool&&!calls.some(c=>c.function.name===forceTool))await opts.onStage?.('tool',`research:choice_missed:${forceTool}`)
 
         if (choice?.finish_reason !== 'tool_calls' || calls.length === 0) {
