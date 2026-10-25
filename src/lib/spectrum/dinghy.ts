@@ -565,6 +565,8 @@ const PAGE_FINISH =
     'This answer is too long for chat and no page was made. Call create_file once with this answer, using only supported facts and observed source URLs, then give a short verdict. ' +
     'If hosting fails, give the useful result in chat and say the page was not made. Never claim a page exists without a successful tool result.'
 
+/** Live runs showed itinerary model calls taking 18-28s for tiny outputs; a 25s cap cut two post-search calls with ~200s of the 240s turn left and discarded the research. One slow call may now use up to 60s, always inside the turn deadline. */
+const ITINERARY_CALL_MS=60_000
 export async function chatWithTools(
     history: Message[],
     opts: {
@@ -655,6 +657,14 @@ export async function chatWithTools(
         if(file&&!pageAttempted){
             await assertAccountActive(ctx.userId,ctx.chatGuid)
             const input={title:'Unverified itinerary',body:apiItineraryBody(currentRequest,[]).replace(/\n\nVenue names, categories and addresses:[^\n]+/,'')+'\n\n## Recommendations not verified\n'+researchNote+' No hotel, restaurant or activity is recommended. The supplied agenda is preserved; hours, prices, bookings and any game remain unverified.',format:'pdf',kind:'itinerary'}
+            // A page that only repeats day names says nothing the user did not already say; it read as a finished itinerary. Say plainly that nothing was planned instead.
+            const agendaPart=input.body.split('## Recommendations not verified')[0]
+            if(!/^\s*-\s+\S/m.test(agendaPart)){
+                await opts.onStage?.('tool','itinerary:no_agenda_content')
+                const links=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
+                const asked=currentRequest.replace(/\s+/g,' ').trim().slice(0,300)
+                return finish({reply:`I couldn't finish researching this trip, so I haven't planned or recommended anything yet. Nothing was booked.\n\nWhat you asked: "${asked}"${links?`\n\nSources found, not verified recommendations:\n${links}`:''}\n\nSay "try again" and I'll rerun it.`,toolCalls:toolCallCount,iterations:iteration,tainted})
+            }
             if(!inputSchemaError(input,file.inputSchema)){
                 pageAttempted=true;toolCallCount++
                 await opts.onStage?.('tool','itinerary:agenda_only_fallback')
@@ -868,7 +878,7 @@ export async function chatWithTools(
         // Bound a post-search generation, not tools or actions. Preserve honest
         // source-only progress when the gateway stalls, with transport headroom.
         const rescueEligible = successfulSearches > 0 && sourceOnly && foundSources.length > 0 && opts.deadlineAt !== undefined
-        const callDeadline = itineraryResearch&&opts.deadlineAt!==undefined ? Math.min(opts.deadlineAt-18000,Date.now()+25000) : rescueEligible ? Math.min(opts.deadlineAt! - 8_000, Date.now() + 25_000) : opts.deadlineAt
+        const callDeadline = itineraryResearch&&opts.deadlineAt!==undefined ? Math.min(opts.deadlineAt-18000,Date.now()+ITINERARY_CALL_MS) : rescueEligible ? Math.min(opts.deadlineAt! - 8_000, Date.now() + 25_000) : opts.deadlineAt
         let res: Response
         try {
           res = selecting&&apiPlaces ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-choose',function:{name:SELECT_CANDIDATES_TOOL,arguments:JSON.stringify({candidates:apiPlaces.map(p=>({line:p.line,kind:p.kind}))})}}]}}]})) : itineraryResearch&&apiPlaces&&selectedCandidates ? new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'server-itinerary-file',function:{name:'create_file',arguments:JSON.stringify({title:'Itinerary for '+(destLabel||'your visit'),body:apiItineraryBody(currentRequest,[]),format:'pdf',kind:'itinerary'})}}]}}]})) : await withinTurn(callDeadline, (signal) => fetch(`${opts.gatewayUrl}/v1/chat/completions`, {

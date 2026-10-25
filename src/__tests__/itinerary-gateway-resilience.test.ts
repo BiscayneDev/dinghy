@@ -9,7 +9,8 @@ const stop=(content:string)=>({choices:[{finish_reason:'stop',message:{content}}
 const err500=()=>new Response('upstream failed',{status:500})
 const itineraryFile={title:'Harbor itinerary',body:'## Day 1\nHarbor museum. Hours unknown.',format:'pdf',kind:'itinerary'}
 function gateway(sequence:unknown[]) {const bodies:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_u,init)=>{const i=bodies.length;bodies.push(init?.body?JSON.parse(init.body):null);const r=sequence[Math.min(i,sequence.length-1)];return r instanceof Response?r:new Response(JSON.stringify(r))}));return bodies}
-const ask='Make me an itinerary for Harbor tomorrow.'
+const ask='Make me an itinerary for Harbor tomorrow. Breakfast at 9am then the harbor tour at 11am.'
+const emptyAsk='Make me an itinerary for Harbor tomorrow.'
 const opts=(stages:string[])=>({gatewayUrl:'https://gateway.test',apiKey:'test',model:'test',deadlineAt:Date.now()+240_000,onStage:async(_s:string,d?:string)=>{if(d)stages.push(d)}})
 describe('itinerary contract gateway resilience',()=>{
  it('one gateway 500 retries once and completes the itinerary file',async()=>{
@@ -43,6 +44,16 @@ describe('itinerary contract gateway resilience',()=>{
   expect(r.reply).toContain('research and publication did not complete')
   expect(r.reply).toContain('Recommendations remain unverified')
   expect(r.deliverable?.state).toBe('unfulfilled')
+ })
+ it('two gateway 500s with nothing the user supplied to preserve send honest text, not an empty page presented as done',async()=>{
+  const stages:string[]=[];const f=file()
+  gateway([err500(),err500()])
+  const r=await chatWithTools([{role:'user',content:emptyAsk}],opts(stages),[f],ctx)
+  expect(stages).toContain('itinerary:no_agenda_content')
+  expect(f.execute).not.toHaveBeenCalled()
+  expect(r.deliverable?.state).toBe('unfulfilled')
+  expect(r.reply).toContain("I couldn't finish researching this trip")
+  expect(r.reply).toContain(emptyAsk)
  })
  it('no third attempt: after one retry the fallback owns the outcome',async()=>{
   const stages:string[]=[];const f=file()
