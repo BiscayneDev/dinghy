@@ -107,6 +107,16 @@ export function matchPlan(next: Plan, existing: PlanRow[]): PlanRow | null {
     return null
 }
 
+const CHOSE = /^\s*Chose:\s*([^:\n]{1,60}):/i
+/** "Chose: <slot>: <venue>" lines record decisions the user made. An update that rewrites details must not drop a decision it does not mention; a newer line for the same slot wins. */
+export function mergeChoices(prev: string, next: string): string {
+    if (!next) return prev
+    const slotOf = (l: string) => CHOSE.exec(l)?.[1].trim().toLowerCase()
+    const nextSlots = new Set(next.split('\n').map(slotOf).filter(Boolean))
+    const kept = prev.split('\n').filter((l) => { const k = slotOf(l); return k && !nextSlots.has(k) })
+    return kept.length ? [...kept, next].join('\n').slice(0, 2000) : next
+}
+
 /** Merge an update into a stored plan: new values win, lists union, details kept unless replaced. */
 export function mergePlan(prev: PlanRow, next: Plan): Plan {
     const union = (a: string[], b: string[]) => {
@@ -120,7 +130,7 @@ export function mergePlan(prev: PlanRow, next: Plan): Plan {
         ends_on: next.ends_on ?? prev.ends_on,
         places: union(prev.places, next.places),
         people: union(prev.people, next.people),
-        details: next.details || prev.details,
+        details: mergeChoices(prev.details, next.details),
         source: next.source || prev.source,
     }
 }

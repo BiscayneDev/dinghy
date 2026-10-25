@@ -256,9 +256,12 @@ const cells = (line: string): string[] => line.split('|').map((c) => decodeSourc
 /** Option cards: "Name | price | why | catch" per line, up to 5. The catch is shown on purpose. */
 function renderOptions(lines: string[]): string {
     const cards = lines.slice(0, 5).map((l) => {
-        const [name, price, why, notes] = cells(l)
+        const [name, price, why, rawNotes] = cells(l)
         if (!name) return ''
-        return `<div class="opt"><div class="opt-top"><span class="opt-name">${esc(name)}</span>${knownValue(price) ? `<span class="opt-price">${esc(price)}</span>` : ''}</div>${why ? `<p class="opt-why">${esc(why)}</p>` : ''}${notes ? `<p class="opt-catch"><span>Catch</span>${esc(notes)}</p>` : ''}</div>`
+        const linkM = (rawNotes ?? '').match(/(?:^|\s)(https?:\/\/[^\s<>"]+)\s*$/)
+        const notes = linkM ? (rawNotes ?? '').slice(0, linkM.index).trim() : rawNotes
+        const link = linkM && hostOf(linkM[1]) ? `<a class="opt-link" href="${esc(linkM[1])}">${esc(hostOf(linkM[1]))}</a>` : ''
+        return `<div class="opt"><div class="opt-top"><span class="opt-name">${esc(name)}</span>${knownValue(price) ? `<span class="opt-price">${esc(price)}</span>` : ''}</div>${why ? `<p class="opt-why">${esc(why)}</p>` : ''}${notes ? `<p class="opt-catch"><span>Catch</span>${esc(notes)}</p>` : ''}${link}</div>`
     })
     return `<div class="opts">${cards.join('')}</div>`
 }
@@ -583,7 +586,7 @@ p{max-width:38em}
 .fact,.opt,.cost,.place{border-radius:var(--r);transition:transform .25s var(--ease),box-shadow .25s var(--ease),border-color .25s var(--ease)}
 .fact{background:linear-gradient(180deg,var(--paper),var(--sand))}
 .opt{box-shadow:var(--shadow)}
-.opt-name{font-size:22px;letter-spacing:-.01em}
+.opt-name{font-size:22px;letter-spacing:-.01em}.opt-link{display:inline-block;margin-top:10px;font-size:14px;color:var(--accent);text-decoration:underline;text-underline-offset:3px}
 @media (hover:hover){.opt:hover,.place:hover{transform:translateY(-2px);border-color:var(--accent)}}
 .heads{background:var(--warn);border-radius:var(--r);border-left-color:var(--accent)}
 .reply{transition:transform .18s var(--ease),filter .18s var(--ease);box-shadow:var(--shadow)}

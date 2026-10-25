@@ -29,7 +29,7 @@ describe('typed itinerary candidate compiler',()=>{
 const tool=(name:string,data:unknown={})=>({name,description:'fictional',inputSchema:{type:'object'},execute:vi.fn(async()=>({success:true,data}))})
 const call=(name:string,i:unknown={})=>({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:name,function:{name,arguments:JSON.stringify(i)}}]}}]})
 const ctx={userId:'',telegramId:0,telegramChatId:0,name:'Fictional',timezone:'UTC',tokens:{}}
-async function run(seq:unknown[]){let n=0;const req:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_u,init)=>{req.push(JSON.parse(init.body));return new Response(JSON.stringify(seq[n++]??{choices:[{finish_reason:'stop',message:{content:'Done'}}]}))}));const file=tool('create_file'),stage=vi.fn(async()=>{}),result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'fictional',onStage:stage},[tool('web_search',{results:[{url,title:'Harbor',content:'lead'}]}),tool('web_fetch',{url,title:'Harbor',content:text}),file],ctx);return{file,stage,result,req}}
+async function run(seq:unknown[],page:string=text,memory?:string){let n=0;const req:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_u,init)=>{req.push(JSON.parse(init.body));return new Response(JSON.stringify(seq[n++]??{choices:[{finish_reason:'stop',message:{content:'Done'}}]}))}));const file=tool('create_file'),stage=vi.fn(async()=>{}),result=await chatWithTools([{role:'user',content:ask}],{gatewayUrl:'https://gateway.test',apiKey:'fictional',model:'fictional',onStage:stage,memory},[tool('web_search',{results:[{url,title:'Harbor',content:'lead'}]}),tool('web_fetch',{url,title:'Harbor',content:page}),file],ctx);return{file,stage,result,req}}
 it('first-attempt typed candidates compile, bind, sourcecompile and pass existing gate',async()=>{const {file,stage,result,req}=await run([call('web_search'),call('create_file',input)]);expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','itinerary:candidates_compiled');expect(stage).toHaveBeenCalledWith('tool','itinerary:sources_compiled');expect(stage).not.toHaveBeenCalledWith('tool','repair:file_once');expect(result.deliverable?.state).toBe('completed');expect(req).toHaveLength(2)})
 it('invalid typed candidate uses exactly onecreate_file repair then succeeds',async()=>{const {file,stage,result,req}=await run([call('web_search'),call('create_file',{...input,itinerary_candidates:[{kind:'unknown',name:ref(0,10)}]}),call('create_file',input)]);expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).toHaveBeenCalledWith('tool','invalid:itinerary_candidates');expect(stage).toHaveBeenCalledWith('tool','repair:file_once');expect(req[2].tools.map((t:any)=>t.function.name)).toEqual(['select_itinerary_candidates']);expect(result.deliverable?.state).toBe('completed')})
 it('second invalid typed call exhausts repair and publishes agenda only',async()=>{const bad={...input,itinerary_candidates:[]};const {file,stage,result}=await run([call('web_search'),call('create_file',bad),call('create_file',bad)]);expectAgendaOnly(file);expect(stage).toHaveBeenCalledWith('tool','repair:file_exhausted');expect(result.deliverable?.state).toBe('completed')})
@@ -61,30 +61,48 @@ function expectAgendaOnly(file:{execute:{mock:{calls:unknown[][]}}}){
  expect(input.body).toContain('10am');expect(input.body).toContain('Working sessions')
 }
 
+const povText='Linden House. Rooms from $210 a night. Rated 4.6 by guests. Two minutes from Alderbrook station. Quiet courtyard rooms face the garden. Harbor Annex. Rooms from $140 a night. Rated 4.1 by guests. Next to the ferry. Marrow dinner room seats twenty. Open Friday at 8:30. Tower Boat Tour runs five hours.'
+const ex=(excerpt:string)=>({source:'src2',field:'content',excerpt})
+const povRegistry=()=>{const r=new SourceRecords();r.capture('web_search',{results:[{url,title:'Stay guide',content:'snippet'}]},'2030-01-01');r.capture('web_fetch',{url,title:'Stay guide',content:povText},'2030-01-01');return r}
+const pov=[
+ {kind:'hotel',name:ex('Linden House'),price:ex('$210'),rating:ex('4.6'),area:ex('Alderbrook station'),reason:'Quiet rooms',catch:'Rates unverified',role:'favorite',slot:'Stay in Alderbrook',fit:'You wanted a calm base for working mornings.',evidence:ex('Quiet courtyard rooms face the garden.')},
+ {kind:'hotel',name:ex('Harbor Annex'),price:ex('$140'),rating:ex('4.1'),reason:'Cheaper',catch:'Further from the station',role:'runner_up',slot:'Stay in Alderbrook',fit:'Wins if you would rather save than be close.',evidence:ex('Next to the ferry.')},
+ {kind:'restaurant',name:ex('Marrow'),reason:'Small dinner room',catch:'Hours unverified',role:'favorite',slot:'Friday dinner',fit:'A table for two fits a first night in.',evidence:ex('Open Friday at 8:30.')},
+ {kind:'activity',name:ex('Tower Boat Tour'),role:'skip',slot:'Saturday',fit:'Too long for a short stay.',evidence:ex('Tower Boat Tour runs five hours.')}
+]
+const compileAll=(cands:unknown[])=>{const r=povRegistry(),c=compileItineraryCandidates({...input,itinerary_candidates:cands},r);if('error'in c)return c;const bound=bindFileSources(c.input,r,true);if('error'in bound)return bound;const sourced=compileItinerarySources(bound.input,bound.usedSources,[url]);return sourced}
 describe('point of view picks',()=>{
- const withRoles=[{...candidates[0],role:'favorite',fit:'Quiet and walkable, which is what you asked for'},{...candidates[1],role:'runner_up',fit:'Easier if the group runs late'},{...candidates[2],role:'skip',fit:'Too long for a short stay'}]
- it('renders labelled picks with bound names before the cards',()=>{
-  const c=compileItineraryCandidates({...input,itinerary_candidates:withRoles},registry());if('error'in c)throw Error(c.error)
+ it('whole journey: bound facts on cards, per-slot take with page evidence, skip has no card, gate passes',()=>{
+  const c=compileAll(pov);if('error'in c)throw Error(c.error)
   const b=(c.input as any).body as string
-  expect(b).toContain('## My take');expect(b).toContain('Stay favorite: {{source:src2.content:0:10}}. Quiet and walkable');expect(b).toContain('Dining runner-up');expect(b).toContain('Activity skip')
-  expect(b.indexOf('## My take')).toBeLessThan(b.indexOf('## Hotels'))
+  expect(b).toContain('## My take');expect(b).toContain('**Stay in Alderbrook**');expect(b).toContain('**Friday dinner**')
+  expect(b).toMatch(/Favorite: Linden House\. For you: You wanted a calm base[^\n]*Their page says: "Quiet courtyard rooms face the garden\."/)
+  expect(b).toMatch(/Runner-up: Harbor Annex\. For you: Wins if/);expect(b).toMatch(/Skip: Tower Boat Tour\./)
+  expect(b).toContain('Linden House | $210 | 4.6 | Alderbrook station | Rates unverified');expect(b).toContain('Harbor Annex | $140 | 4.1')
+  expect(b).not.toMatch(/\|[^\n]*Tower Boat Tour/);expect(b).not.toContain('{{source')
+  expect(b.indexOf('## My take')).toBeLessThan(b.indexOf('## Hotels'));expect(itineraryPageError(b,ask,[url])).toBeNull()
  })
- it('no roles means no take section',()=>{const c=compileItineraryCandidates(input,registry());if('error'in c)throw Error(c.error);expect((c.input as any).body).not.toContain('My take')})
- it.each([['favorite without fit',[{...candidates[0],role:'favorite'}]],['bad role',[{...candidates[0],role:'best'}]],['two favorites',[{...candidates[0],role:'favorite',fit:'a'},{...candidates[0],role:'favorite',fit:'b'}]],['long fit',[{...candidates[0],fit:'x'.repeat(301)}]]])('rejects %s',(_l,v)=>expect(compileItineraryCandidates({...input,itinerary_candidates:v},registry())).toHaveProperty('error'))
- it('escapes controls in fit',()=>{const c=compileItineraryCandidates({...input,itinerary_candidates:[{...candidates[0],role:'favorite',fit:'a|b\n:::stay {{source:src9.url}}'}]},registry());if('error'in c)throw Error(c.error);expect((c.input as any).body).not.toContain('{{source:src9')})
- it('names resolve to the page text through binding and the gate still passes',()=>{
-  const r=registry(),c=compileItineraryCandidates({...input,itinerary_candidates:withRoles},r);if('error'in c)throw Error(c.error)
-  const bound=bindFileSources(c.input,r,true);if('error'in bound)throw Error(bound.error)
-  const sourced=compileItinerarySources(bound.input,bound.usedSources,[url]);if('error'in sourced)throw Error(sourced.error)
-  const b=(sourced.input as any).body as string
-  expect(b).toContain('Stay favorite: Harbor Inn. Quiet');expect(b).not.toContain('{{source');expect(itineraryPageError(b,ask,[url])).toBeNull()
+ it('roles are optional: no filler, no take section',()=>{const c=compileItineraryCandidates(input,registry());if('error'in c)throw Error(c.error);expect((c.input as any).body).not.toContain('My take')})
+ it('several stops keep their own favorite per slot',()=>{
+  const two=[pov[0],{...pov[2],kind:'hotel',name:ex('Harbor Annex'),price:undefined,rating:undefined,slot:'Stay in Ferrybridge'}]
+  const c=compileAll(two);if('error'in c)throw Error(c.error);expect((c.input as any).body).toContain('**Stay in Ferrybridge**')
  })
-})
-it('whole journey with a point of view: favorite, runner-up and skip reach the created file body, still gated',async()=>{
- const roles=[{...candidates[0],role:'favorite',fit:'Quiet and close to the train, which is what you asked for'},{...candidates[1],role:'runner_up',fit:'Better if dinner runs late'},{...candidates[2],role:'skip',fit:'Too long for a short stay'}]
- const {file,result}=await run([call('web_search'),call('create_file',{...input,itinerary_candidates:roles})])
- expect(file.execute).toHaveBeenCalledTimes(1)
- const sent=(file.execute.mock.calls[0] as any[])[0] as {body:string}
- expect(sent.body).toContain('## My take');expect(sent.body).toContain('Stay favorite: Harbor Inn. Quiet');expect(sent.body).toContain('Activity skip: Harbor Museum.');expect(sent.body).toContain('Tickets unverified')
- expect(result.deliverable?.state).toBe('completed')
+ it.each([
+  ['favorite without fit',[{...pov[0],fit:undefined}]],['role without evidence',[{...pov[0],evidence:undefined}]],['evidence not on the page',[{...pov[0],evidence:ex('Beachfront with a spa')}]],['bad role',[{...pov[0],role:'best'}]],
+  ['two favorites in a slot',[pov[0],{...pov[1],role:'favorite'}]],['runner-up without favorite',[pov[1]]],['only skips',[pov[3]]],['fit without role',[{...pov[0],role:undefined}]],['long fit',[{...pov[0],fit:'x'.repeat(301)}]],['long slot',[{...pov[0],slot:'x'.repeat(61)}]]
+ ])('rejects %s',(_l,v)=>expect(compileAll(v as unknown[])).toHaveProperty('error'))
+ it('escapes controls and never lets fit or slot create links or blocks',()=>{const c=compileAll([{...pov[0],fit:'a|b\n:::stay {{source:src9.url}} <b>x</b>',slot:'S|:::stay'}]);if('error'in c)throw Error(c.error);const b=(c.input as any).body as string;expect(b).not.toContain('{{source:src9');expect(b).not.toMatch(/\n:::stay[^\n]*x/)})
+ it('stays inside create_file: roles reach the created body with bound quotes, and the file completes',async()=>{
+  const {file,result,stage}=await run([call('web_search'),call('web_fetch'),call('create_file',{...input,itinerary_candidates:pov})],povText)
+  expect(file.execute).toHaveBeenCalledTimes(1);expect(stage).not.toHaveBeenCalledWith('tool','repair:file_once')
+  const sent=(file.execute.mock.calls[0] as any[])[0] as {body:string}
+  expect(sent.body).toContain('Favorite: Linden House.');expect(sent.body).toContain('Their page says: "Quiet courtyard rooms face the garden."');expect(result.deliverable?.state).toBe('completed')
+ })
+ it('follow-up: saved profile and a settled choice reach the composer; open slots stay open',async()=>{
+  const {renderMemoryBlock}=await import('@/lib/spectrum/memory')
+  const memory=renderMemoryBlock({profile:'- Prefers quiet places',summaries:[],facts:[],plans:['Alderbrook trip (Nov 6) · Chose: Stay in Alderbrook: Linden House [source: user]'],files:[]})
+  const {req}=await run([call('web_search'),call('web_fetch'),call('create_file',{...input,itinerary_candidates:pov})],povText,memory)
+  const sys=JSON.stringify(req[0].messages[0]);expect(sys).toContain('Prefers quiet places');expect(sys).toContain('Chose: Stay in Alderbrook: Linden House')
+  const all=JSON.stringify(req);expect(all).toContain('do not re-pitch that slot')
+ })
 })

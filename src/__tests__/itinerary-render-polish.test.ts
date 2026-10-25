@@ -80,3 +80,7 @@ it('itinerary cover uses the trip title and never a raw country-code suffix',()=
  const c=itineraryCover({title:'Itinerary for Harbor, FL, us',body:'Selection reasons:\n:::stay\nHarbor Inn | unknown | unknown | unknown | unknown | | https://fixture.test/inn\n:::'})
  expect(c?.name).toBe('Itinerary for Harbor, FL');expect(c?.destination).toBe('Hotels, dining and activities')
 })
+it('option cards show their source as a link, not a raw URL in the catch',()=>{
+ const html=renderHtml({title:'Harbor',body:'## Dining\n:::options\nLantern Cafe | unknown | Small room | Hours unverified https://fictional.test/cafe\n:::'} as any)
+ expect(html).toContain('<a class="opt-link" href="https://fictional.test/cafe">fictional.test</a>');expect(html).not.toContain('Hours unverified https://')
+})
