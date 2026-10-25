@@ -99,13 +99,19 @@ describe('calc cents handling', () => {
         expect(toCents('Infinity')).toBeNull()
         expect(toCents('9999999999999.99')).toBe(999999999999999)  // 13-digit dollars: safe
         expect(toCents('99999999999999.99')).toBeNull()            // 14 digits: could overflow 2^53, refused
+        // carry boundary: the +1 rounds up through whole dollars and stays a safe integer
+        expect(toCents('0.999')).toBe(100)
+        expect(toCents('9999999999999.999')).toBe(1000000000000000)
+        // leading zeros are not magnitude
+        expect(toCents('00012.50')).toBe(1250)
+        expect(toCents('007')).toBe(700)
     })
     it('view-time script c2 is exact parity with server toCents on the edge values', () => {
         const html = renderHtml({ title: 'Fictional', subtitle: '', body: ':::calc\nsplit | 100 | Sam, Ana\n:::\n' } as never)
         const m = html.match(/c2=v=>\{([^}]+)\}/)
         expect(m, 'emitted c2 function found').toBeTruthy()
         const c2 = new Function('v', m![1]) as (v: string) => number | null
-        const edges = ['10.005', '1.005', '2.675', '0.125', '0.124', '0.001', '19.999', '0.01', '0', '-5', '-0.005', 'abc', '', 'Infinity', '9999999999999.99', '99999999999999.99', '$1,234.56', ' 7.50 ']
+        const edges = ['10.005', '1.005', '2.675', '0.125', '0.124', '0.001', '19.999', '0.01', '0', '-5', '-0.005', 'abc', '', 'Infinity', '9999999999999.99', '99999999999999.99', '9999999999999.999', '0.999', '00012.50', '007', '$1,234.56', ' 7.50 ']
         for (const e of edges) expect(c2(e), e).toEqual(toCents(e))
     })
     it('half-cent totals split deterministically and the shares sum to the normalized total', () => {

@@ -349,8 +349,9 @@ export const toCents = (s?: string): number | null => {
     const tok = (s ?? '').match(/-?\d+(?:\.\d+)?/)?.[0]
     if (!tok) return null
     const neg = tok[0] === '-'
-    const [ip, fp = ''] = tok.slice(neg ? 1 : 0).split('.')
-    if (ip.length > 13) return null
+    const [rawIp, fp = ''] = tok.slice(neg ? 1 : 0).split('.')
+    const ip = rawIp.replace(/^0+(?=\d)/, '') // leading zeros are not magnitude
+    if (ip.length > 13) return null // conservative pre-check; the isSafeInteger guard below is authoritative, including the +1 rounding carry
     const cents = Number(ip) * 100 + Number((fp[0] ?? '0') + (fp[1] ?? '0')) + (fp.length > 2 && fp[2] >= '5' ? 1 : 0)
     if (!Number.isSafeInteger(cents)) return null
     return neg ? -cents : cents
