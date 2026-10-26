@@ -24,7 +24,9 @@ export async function resolvePendingRedo(chatGuid: string, text: string, replyTo
     const { data } = await createServerClient().from('spectrum_messages').select('content').eq('id', pending.noteId).eq('chat_guid', chatGuid).eq('role', 'user').maybeSingle()
     const complaint = (data as { content?: string } | null)?.content
     if (!complaint) { await closeRedoPending(pending.userId, chatGuid, pending.id, 'dropped').catch(() => false); return null }
-    const reply = await intakeRedo(chatGuid, file.url, complaint, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY ?? '', request: complaint, context: '[]', signal: AbortSignal.timeout(8000) })), { replied: file.url, candidates: [], complaintNoteId: pending.noteId })
+    // The answer may carry a correction ('the hotel one, but 14-17 March'): keep it as an additional note of the user's own.
+    const answerNote = await createServerClient().from('spectrum_messages').select('id').eq('chat_guid', chatGuid).eq('role', 'user').eq('content', text).order('created_at', { ascending: false }).limit(1).then((r) => { const id = (r.data as { id?: string | number }[] | null)?.[0]?.id; return id == null ? null : String(id) }, () => null)
+    const reply = await intakeRedo(chatGuid, file.url, complaint, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY ?? '', request: complaint, context: '[]', signal: AbortSignal.timeout(8000) })), { replied: file.url, candidates: [], complaintNoteId: pending.noteId, ...(answerNote ? { extraNoteId: answerNote } : {}) })
     await closeRedoPending(pending.userId, chatGuid, pending.id, 'resolved').catch(() => false)
     return reply
 }

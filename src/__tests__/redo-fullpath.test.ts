@@ -288,8 +288,8 @@ it('TARGET: two different pages and no native reply: ask which, keep the complai
  expect(await jobs()).toHaveLength(0);expect(texts().join('\n')).toMatch(/Which page do you mean: "Other page" or "Unverified itinerary"/);expect(texts().join('\n')).toMatch(/kept your note for the next hour/);expect(published).not.toHaveBeenCalled()
  const pend=await pgq(`select note_id,state,candidate_file_ids from dinghy_redo_pending`);expect(pend).toHaveLength(1);expect(pend[0].state).toBe('open');expect(pend[0].note_id).toBe(String(await noteOf("That's not good")))
  hoist.sent=[];await complain('the first itinerary one')
- const j=await pgq(`select file_id,state,note_ids from dinghy_redo_jobs`);expect(j).toHaveLength(1);expect(j[0].file_id).toBe(a);expect(j[0].note_ids).toEqual([pend[0].note_id])
- expect(j[0].state).toBe('done');expect(hoist.chatCalls[0].history[0].content).toContain("That's not good");expect(hoist.chatCalls[0].history[0].content).not.toContain('the first itinerary one')
+ const j=await pgq(`select file_id,state,note_ids from dinghy_redo_jobs`);expect(j).toHaveLength(1);expect(j[0].file_id).toBe(a);expect(j[0].note_ids[0]).toBe(pend[0].note_id);expect(j[0].note_ids).toHaveLength(2)
+ expect(j[0].state).toBe('done');expect(hoist.chatCalls[0].history[0].content).toContain("That's not good")
  expect((await pgq(`select state from dinghy_redo_pending`))[0].state).toBe('resolved')
 })
 it('TARGET: a native reply answers the question with the kept complaint; an answer that names neither drops it; an expired one is ignored',async()=>{
@@ -341,7 +341,23 @@ it('PROOF ROUTE: replays a STORED complaint on a STORED page with no new message
  expect((await POST(mk('wrong'))).status).toBe(401)
  const r=await POST(mk('s3cret-fictional'));expect(await r.json()).toMatchObject({verdict:'ran',outcome:'done'})
  expect((await pgq(`select count(*)::int c from spectrum_messages where role='user'`))[0].c).toBe(before)
- expect((await jobs())[0]).toMatchObject({state:'done',note_ids:[nid]});expect(published).toHaveBeenCalledTimes(1)
+ expect((await jobs())[0]).toMatchObject({state:'done',note_ids:[nid]});expect(published).toHaveBeenCalledTimes(1);expect(hoist.decisions).toBeGreaterThanOrEqual(1)
  expect(((globalThis as any).__enq as string[]).join('\n')).toMatch(/rebuilding that page/)
  expect((await POST(mk('s3cret-fictional'))).status).toBe(409);expect(published).toHaveBeenCalledTimes(1)
+})
+
+it('PROOF ROUTE: if recognition says ordinary chat, it reports failed recognition, forces nothing and does not retry',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','proof');vi.stubEnv('DINGHY_REDO_PROOF_CHAT',CHAT);vi.stubEnv('CRON_SECRET','s3cret-fictional');install();const fid=await seed({legacy:true});hoist.verdict='none';(globalThis as any).__enq=[]
+ await pgq(`insert into spectrum_messages(chat_guid,role,content,created_at) values ($1,'user',$2,now()-interval '20 minutes')`,[CHAT,"Hmm, ok"]);const nid=String(await noteOf('Hmm, ok'))
+ await pgq(`insert into dinghy_redo_authorizations(user_id,chat_guid,file_id,note_id) values ($1,$2,$3,$4)`,[U,CHAT,fid,nid])
+ const {POST}=await import('@/app/api/internal/redo-proof/route');const mk=()=>new Request('http://x/p',{method:'POST',headers:{authorization:'Bearer s3cret-fictional'}})
+ expect(await (await POST(mk())).json()).toMatchObject({verdict:'recognition_failed'})
+ expect(await jobs()).toHaveLength(0);expect(published).not.toHaveBeenCalled();expect((globalThis as any).__enq).toHaveLength(0)
+ expect((await pgq(`select state from dinghy_redo_authorizations`))[0].state).toBe('revoked');expect((await POST(mk())).status).toBe(409)
+})
+it('PENDING ANSWER with a correction: the original complaint AND the added constraint both reach the build; pure picks stay harmless; stop/neither launch nothing',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();const {a}=await twoPages();(globalThis as any).__kick=true;(globalThis as any).__pend='orig'
+ await complain("That's not good");await complain('the first itinerary one, but 14-17 March only')
+ const j=(await pgq(`select file_id,note_ids,state from dinghy_redo_jobs`));expect(j).toHaveLength(1);expect(j[0].file_id).toBe(a);expect(j[0].note_ids).toHaveLength(2);expect(j[0].state).toBe('done')
+ const h=hoist.chatCalls[0].history[0].content;expect(h).toContain("That's not good");expect(h).toContain('14-17 March only')
 })

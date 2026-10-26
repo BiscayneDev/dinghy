@@ -25,7 +25,7 @@ const COULD_NOT_START = 'I could not start the redo just now, so nothing was cha
 export const LATE_PHASES = new Set(['publishing', 'published', 'sending', 'sent'])
 
 /** replied: the page the user natively replied to, when the message carries one. candidates: recently delivered page links, latest first. */
-export interface RedoTarget { replied: string | null; candidates: string[]; /** The user's own stored message to use as the complaint (a kept ambiguous complaint, or an operator-run proof of a stored one). */ complaintNoteId?: string }
+export interface RedoTarget { replied: string | null; candidates: string[]; /** The user's own stored message to use as the complaint (a kept ambiguous complaint, or an operator-run proof of a stored one). */ complaintNoteId?: string; /** The user's answer that picked the page, kept as one more note: it may carry a correction. */ extraNoteId?: string }
 
 export async function intakeRedo(chatGuid: string, fileUrl: string | null, text: string, deps: IntakeDeps, target?: RedoTarget): Promise<string> {
     if (target?.replied) fileUrl = target.replied
@@ -73,12 +73,14 @@ export async function intakeRedo(chatGuid: string, fileUrl: string | null, text:
         const r = await deps.upsert(userId, chatGuid, file.id, note)
         if (r.status === 'refused' && r.reason === 'no_authorization') return CAP_TEXT
         if (r.status !== 'appended' && r.status !== 'created') return 'I could not add that to the redo just now, so it is not in it. Nothing was changed.'
+        if (target?.extraNoteId) await deps.upsert(userId, chatGuid, file.id, target.extraNoteId)
         return r.status === 'appended' && r.phase && LATE_PHASES.has(r.phase)
             ? 'Got it. The version in progress is already on its way out without that, so I will make one more version with your note and send it.'
             : 'Got it. I am adding that to the version I am building now.'
     }
     const r = await deps.upsert(userId, chatGuid, file.id, note)
     if (r.status === 'refused' && r.reason === 'no_authorization') return CAP_TEXT
+    if ((r.status === 'created' || r.status === 'appended') && target?.extraNoteId) await deps.upsert(userId, chatGuid, file.id, target.extraNoteId)
     if (r.status === 'created' || r.status === 'appended') return 'On it. I am rebuilding that page and will send it here when it is ready.'
     return COULD_NOT_START
 }
