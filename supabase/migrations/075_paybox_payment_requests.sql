@@ -34,3 +34,7 @@ alter table public.paybox_payment_requests enable row level security;
 -- No anon/authenticated policies: server-only access via the service role.
 
 commit;
+
+-- Supabase default-privileges change enforced 2026-10-30: explicit grant; service-role only
+-- (src/lib/payments/payment-requests.ts: select + upsert + update).
+grant select, insert, update on public.paybox_payment_requests to service_role;
