@@ -54,3 +54,24 @@ export async function selectDeliverableModelOwned(opts: {gatewayUrl:string;apiKe
     const decided: DeliverableContract | null | undefined = await decideDeliverable(decisionOpts).catch(() => undefined)
     return decided === undefined ? legacy() : decided
 }
+
+/** A hosted or attached file was delivered in the last few turns before the latest user message. */
+export function followsDeliveredFile(history: {role: string; content: string}[]): boolean {
+    const lastUser = history.map(m => m.role).lastIndexOf('user')
+    const before = lastUser < 0 ? history : history.slice(0, lastUser)
+    return before.slice(-4).some(m => m.role === 'assistant' && /^\[file: /.test(m.content))
+}
+
+/** The legacy matcher found no deliverable in the latest message, but a file was just delivered. One bounded model judgment decides whether the message asks for more work on it (a complaint, a correction, a redo); if so the earlier request travels with the user's words. Unavailable or uncertain: no change. */
+export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;previous:DeliverableContract|null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<DeliverableContract | null> {
+    const {previous, ...decisionOpts} = opts
+    const decided = await decideDeliverable(decisionOpts).catch(() => null)
+    if (!decided) return null
+    const request = previous ? previous.request + '\n\nLatest user feedback on the result already sent (address it and redo the work): ' + opts.request : opts.request
+    return { kind: decided.kind, request }
+}
+
+/** Stable text of the most recent delivered-file line, used to key one redo job per delivered file. */
+export function lastDeliveredFileLine(history: {role: string; content: string}[]): string {
+    return [...history].reverse().find(m => m.role === 'assistant' && /^\[file: /.test(m.content))?.content ?? ''
+}
