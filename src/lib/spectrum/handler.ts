@@ -1072,6 +1072,16 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     // Two answers to the same question must not both start the itinerary: one atomic claim per question (the inbound-dedupe RPC). The loser, or a failed claim, is handled as an ordinary message.
     if (pendingQuestion && replyVerdict === 'answer' && !(await claimInboundDelivery(`itin-clarify:${createHash('sha256').update(`${chatGuid}\n${pendingQuestion.key}`).digest('hex')}`, chatGuid))) replyVerdict = null
     deliverable = continueAfterClarification(pendingQuestion, replyVerdict, text, deliverable)
+    // A native reply to a delivered page carries that page's own request: the model chose a deliverable for a short answer, so give the work the page's original request as context, not only the bare words.
+    if (deliverable && !deliverable.redo && replyTo?.text) {
+        const repliedUrl = fileUrlOf(replyTo.text)
+        const uid = repliedUrl ? await briefableUserId(chatGuid).catch(() => null) : null
+        if (repliedUrl && uid) {
+            const { data: pageRow } = await createServerClient().from('dinghy_files').select('origin_request').eq('user_id', uid).eq('url', repliedUrl).is('deleted_at', null).is('revoked_at', null).order('created_at', { ascending: false }).limit(1)
+            const origin = (pageRow as { origin_request?: string | null }[] | null)?.[0]?.origin_request
+            if (origin && !deliverable.request.includes(origin)) deliverable = { ...deliverable, request: `${origin}\n\nLatest message from the user about that page: ${deliverable.request}` }
+        }
+    }
     let askedQuestion = false
     const answeredQuestion = Boolean(pendingQuestion && replyVerdict === 'answer' && deliverable?.kind === 'itinerary')
     const itineraryJob = deliverable?.kind === 'itinerary'
