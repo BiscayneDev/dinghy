@@ -7,7 +7,9 @@ import {join} from 'path'
 // -> real renderer (publish mocked at the here.now boundary) -> real sendFile. Only the gateway, search, publish transport and chat transport are fakes.
 const hoist=vi.hoisted(()=>({pg:null as any,sent:[] as string[],decisions:0,verdict:'redo_itinerary' as string|null,held:'new_instruction' as string,chatCalls:[] as any[],memoryQueries:[] as string[]}))
 const {published}=vi.hoisted(()=>({published:vi.fn()}))
-vi.mock('@/lib/files/share',()=>({shareEnabled:()=>true,publishSite:published,revokeSite:vi.fn(),updateSite:vi.fn()}))
+const {revoked}=vi.hoisted(()=>({revoked:vi.fn()}))
+vi.mock('@/lib/files/share',()=>({shareEnabled:()=>true,publishSite:published,revokeSite:revoked,updateSite:vi.fn()}))
+vi.mock('@/lib/spectrum/redo-worker-runtime',async orig=>{const m=await orig<any>();return {...m,kickRedoJobs:(t:number)=>(globalThis as any).__kick?m.kickRedoJobs(t):Promise.resolve({kicked:false})}})
 vi.mock('@/lib/files/imagery',async orig=>({...await orig<any>(),verifyShareMetadata:async()=>true}))
 vi.mock('@/lib/supabase/server',()=>({createServerClient:()=>{
  const pg=()=>hoist.pg
@@ -118,7 +120,7 @@ async function seed(opts:{legacy?:boolean}={}){
   const run='11111111-1111-1111-1111-111111111111'
   await pgq(`insert into dinghy_run_stages(run_id,chat_guid,message_id,stage,detail,created_at) values ($1,$2,'spc-msg-fictional','context','deliverable:itinerary',$3),($1,$2,'spc-msg-fictional','reply_ready','deliverable:itinerary:completed',$4)`,[run,CHAT,t(29.98),t(28.01)])
  } else await pgq(`update dinghy_files set origin_request=$2, origin_kind='itinerary' where id=$1`,[f,ORIGINAL])
- gateway=[];selects=0;hoist.verdict='redo_itinerary';hoist.held='new_instruction';hoist.sent=[];hoist.chatCalls=[];hoist.memoryQueries=[];hoist.decisions=0;published.mockReset();published.mockResolvedValue({url:'https://fictional.here.now/',expiresAt:new Date(Date.now()+86400000).toISOString(),files:[]})
+ gateway=[];selects=0;hoist.verdict='redo_itinerary';hoist.held='new_instruction';hoist.sent=[];hoist.chatCalls=[];hoist.memoryQueries=[];hoist.decisions=0;published.mockReset();revoked.mockReset();revoked.mockResolvedValue({url:'x'});(globalThis as any).__kick=false;published.mockResolvedValue({url:'https://fictional.here.now/',expiresAt:new Date(Date.now()+86400000).toISOString(),files:[]})
  return f as string
 }
 const jobs=()=>pgq(`select state,phase,note_ids,note_revision,consumed_revision,failure from dinghy_redo_jobs`)
@@ -195,12 +197,18 @@ it('INTEGRATION stop arriving while the build runs: nothing published, nothing s
  hoist.sent=[];await drain();expect(published).not.toHaveBeenCalled();expect((await jobs())[0].state).toBe('cancelled')
  expect((await pgq(`select 1 from spectrum_messages where role='assistant' and content like '[file:%fictional.here.now%'`))).toHaveLength(0)
 })
-it('INTEGRATION stop arriving at the publish/send boundary: fenced, the new page is not sent',async()=>{
- vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed();await complain("That's not good")
+for(const removable of [true,false])it(`INTEGRATION stop arriving after the page is published, before send: not sent, says so truthfully, ${removable?'takes only that new page down':'admits it could not take it down'}`,async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();const orig=await seed();await complain("That's not good")
+ if(!removable)revoked.mockRejectedValue(new Error('host down'))
  published.mockImplementation(async()=>{hoist.held='stop';await complain('stop now');return pub()})
  hoist.sent=[];await drain();expect((await jobs())[0].state).toBe('cancelled')
  expect((await pgq(`select 1 from spectrum_messages where role='assistant' and content like '[file:%fictional.here.now%'`))).toHaveLength(0)
- console.log('STOP-AT-PUBLISH',JSON.stringify({publishes:published.mock.calls.length,sent:texts().length}))
+ const ob=(await pgq(`select text from spectrum_outbox`)).map((r:any)=>r.text).join('\n')
+ expect(ob).toMatch(/I did not send it/);expect(ob).not.toMatch(/nothing (new )?(was )?(changed|sent)/i)
+ expect(ob).toMatch(removable?/took that page down/:/could not take that page down, so its link stays live/)
+ const rows=await pgq(`select id,url,revoked_at,redo_op_id from dinghy_files`)
+ const made=rows.find((r:any)=>r.redo_op_id);expect(Boolean(made.revoked_at)).toBe(removable);expect(rows.find((r:any)=>r.id===orig).revoked_at).toBeNull()
+ expect(revoked).toHaveBeenCalledTimes(1);expect(revoked.mock.calls[0][0]).toBe(made.url)
 })
 it('INTEGRATION late note after publish requeues exactly one more pass; a further late note stops at the cap and names the gap',async()=>{
  vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed();await complain("That's not good")
@@ -223,4 +231,36 @@ it('INTEGRATION renders the redo output at 390px (fixture dump)',async()=>{
  vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed();await complain("That's not good");await drain()
  const files=published.mock.calls[0][0];const { mkdirSync, writeFileSync }=await import('fs');mkdirSync('/tmp/redo-fixture',{recursive:true})
  for(const f of files)writeFileSync('/tmp/redo-fixture/'+String(f.path).replace(/\//g,'_'),f.bytes)
+})
+
+it('KICK: the job starts inside the same webhook tail, no cron tick, and still only one job runs',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed();(globalThis as any).__kick=true
+ await complain("That's not good")
+ expect((await jobs())[0]).toMatchObject({state:'done',phase:'sent'});expect(published).toHaveBeenCalledTimes(1)
+ expect(await runOneRedoJob()).toMatchObject({ran:false});expect(published).toHaveBeenCalledTimes(1)
+})
+it('KICK defers to the cron rescue when the webhook window cannot fit a full build, and never runs without the flag',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed();(globalThis as any).__kick=false
+ const {kickRedoJobs}=await vi.importActual<any>('@/lib/spectrum/redo-worker-runtime')
+ await complain("That's not good");expect(await kickRedoJobs(Date.now()-200_000)).toMatchObject({kicked:false});expect((await jobs())[0].state).toBe('queued')
+})
+it('SCOPE owner mode: only the listed chat can create jobs, others stay ordinary chat; daily cap refuses a seventh new rebuild',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','owner');vi.stubEnv('DINGHY_REDO_OWNER_CHATS','some;-;other');install();await seed()
+ await complain("That's not good");expect(await jobs()).toHaveLength(0);expect(hoist.decisions).toBe(0)
+ vi.stubEnv('DINGHY_REDO_OWNER_CHATS',CHAT);hoist.sent=[];await complain("That's not good again");expect(await jobs()).toHaveLength(1)
+ vi.stubEnv('DINGHY_REDO_JOBS','on')
+ await pgq(`update dinghy_redo_jobs set state='done',created_at=now()`);for(let i=0;i<5;i++)await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,origin_request) values ($1,$2,'x','itinerary','page',$3,'r')`,[U,CHAT,'https://x'+i+'.here.now/']),await pgq(`insert into dinghy_redo_jobs(user_id,chat_guid,file_id,lineage_id,state) select $1,$2,id,id,'done' from dinghy_files where url=$3`,[U,CHAT,'https://x'+i+'.here.now/'])
+ hoist.sent=[];await complain('still not right');expect(texts().join('\n')).toMatch(/as many page rebuilds as I will run for you today/);expect((await jobs()).filter((j:any)=>j.state==='queued')).toHaveLength(0)
+})
+it('LINEAGE: a correction about an unrelated page is its own job, queued behind the running one, never appended; a replacement of the same original joins',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();const a=await seed();await complain("That's not good")
+ const b=(await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,markdown,origin_request,origin_kind) values ($1,$2,'Other page','itinerary','page','https://other.here.now/','m','Plan a different fictional trip to Marinaton.','itinerary') returning id`,[U,CHAT]))[0].id
+ const first=(await pgq(`select * from claim_redo_job()`))[0]
+ const upsert=async(f:string)=>(await pgq(`select upsert_redo_job($1,$2,$3,null) r`,[U,CHAT,f]))[0].r
+ const rb=await upsert(b);expect(rb.status).toBe('created');expect(rb.job_id).not.toBe(first.id)
+ expect((await pgq(`select * from claim_redo_job()`))).toHaveLength(0) // serialized behind the running job in the same chat
+ const rep=(await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,markdown,origin_request,origin_kind,lineage_id) values ($1,$2,'Redo of first','itinerary','page','https://redo1.here.now/','m','r','itinerary',$3) returning id`,[U,CHAT,a]))[0].id
+ const rr=await upsert(rep);expect(rr).toMatchObject({status:'appended',job_id:first.id})
+ const cancel=(await pgq(`select redo_cancel($1,$2,$3) r`,[U,CHAT,rep]))[0].r;expect(cancel.status).not.toBe('none')
+ const st=await pgq(`select file_id,state,cancel_requested from dinghy_redo_jobs order by created_at`);expect(st.find((x:any)=>x.file_id===b)).toMatchObject({state:'queued',cancel_requested:false})
 })

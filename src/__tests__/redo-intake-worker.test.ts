@@ -50,7 +50,7 @@ describe('redo intake', () => {
     })
 })
 
-const JOB = { id: 'j1', user_id: 'u1', chat_guid: 'chat', file_id: 'f1', claim_id: 'c1', op_id: 'o1', note_ids: ['m1'], note_revision: 1, consumed_revision: 0, passes: 1, resumes: 0 }
+const JOB = { id: 'j1', user_id: 'u1', chat_guid: 'chat', file_id: 'f1', lineage_id: 'f1', claim_id: 'c1', op_id: 'o1', note_ids: ['m1'], note_revision: 1, consumed_revision: 0, passes: 1, resumes: 0 }
 function workerDeps(over: Partial<WorkerDeps> = {}) {
     const calls: string[] = []
     const base: WorkerDeps = {
@@ -59,7 +59,7 @@ function workerDeps(over: Partial<WorkerDeps> = {}) {
         advance: async (p) => { calls.push('advance:' + p); return 'ok' }, close: async () => { calls.push('close'); return 'done' }, fail: async (r) => { calls.push('fail:' + r); return true },
         notify: async (t) => { calls.push('notify'); void t; return true },
         build: async ({ instruction, gate }) => { calls.push('build'); if ((await gate(false)).cancelled) throw new RedoCancelled(); if ((await gate(true)).cancelled) throw new RedoCancelled(); calls.push('instr:' + instruction.includes('ORIGIN') + instruction.includes('note m1')); return { files: [{ url: 'https://n.here.now/', hosted: true }], tainted: false } },
-        send: async () => { calls.push('send') }, saveOrigin: async () => { calls.push('saveOrigin'); return true },
+        send: async () => { calls.push('send') }, discard: async () => { calls.push('discard'); return 'removed' }, saveOrigin: async () => { calls.push('saveOrigin'); return true },
     }
     return { deps: { ...base, ...over }, calls }
 }
@@ -81,7 +81,7 @@ describe('redo worker', () => {
         const { deps, calls } = workerDeps({ advance: async (p) => (p === 'publishing' ? 'cancelled' : 'ok') }); expect(await executeRedoJob(JOB as never, deps)).toBe('cancelled'); expect(calls).not.toContain('send')
     })
     it('cancel at the send fence: built but not sent, honest notice', async () => {
-        const { deps, calls } = workerDeps({ advance: async (p) => (p === 'sending' ? 'cancelled' : 'ok') }); expect(await executeRedoJob(JOB as never, deps)).toBe('cancelled'); expect(calls).toContain('notify'); expect(calls).not.toContain('send')
+        const { deps, calls } = workerDeps({ advance: async (p) => (p === 'sending' ? 'cancelled' : 'ok') }); expect(await executeRedoJob(JOB as never, deps)).toBe('cancelled'); expect(calls).toContain('discard'); expect(calls).toContain('notify'); expect(calls).not.toContain('send')
     })
     it('a stale claim (lost lease) sends nothing', async () => {
         const { deps, calls } = workerDeps({ advance: async (p) => (p === 'building' ? 'ok' : 'lost') }); expect(await executeRedoJob(JOB as never, deps)).toBe('blocked'); expect(calls).not.toContain('send')

@@ -6,19 +6,20 @@ import type { UpsertResult } from './redo-jobs'
  * A correction after a delivered file. It never runs the redo here and never waits: it records the work as a durable job
  * (or adds to / cancels the active one) and answers truthfully. The job worker does the rest.
  */
-export interface RedoFileRow { id: string; created_at: string; origin_request: string | null; origin_google_derived: boolean; origin_kind: string | null; kind: string | null }
+export interface RedoFileRow { id: string; created_at: string; origin_request: string | null; origin_google_derived: boolean; origin_kind: string | null; kind: string | null; lineage_id?: string | null }
 export interface IntakeDeps {
     userId(chatGuid: string): Promise<string | null>
     file(userId: string, chatGuid: string, url: string): Promise<RedoFileRow | null>
     legacy(file: RedoFileRow, chatGuid: string): Promise<{ origin: LegacyOrigin; google: boolean } | null>
     saveLegacyOrigin(userId: string, chatGuid: string, file: RedoFileRow, request: string, google: boolean, evidence: { runId: string; messageId: string | null }): Promise<boolean>
     noteId(chatGuid: string, text: string): Promise<string | null>
-    active(userId: string, chatGuid: string): Promise<{ id: string; phase: string } | null | 'unknown'>
+    active(userId: string, lineageId: string): Promise<{ id: string; phase: string } | null | 'unknown'>
     upsert(userId: string, chatGuid: string, fileId: string, noteId: string | null): Promise<UpsertResult>
     cancel(userId: string, chatGuid: string, fileId: string): Promise<{ status: string; phase?: string } | null>
     heldVerdict(): Promise<HeldNoteVerdict | null>
 }
 
+const CAP_TEXT = 'I have already started as many page rebuilds as I will run for you today, so I have not started another. Nothing was changed.'
 const COULD_NOT_START = 'I could not start the redo just now, so nothing was changed.'
 export const LATE_PHASES = new Set(['publishing', 'published', 'sending', 'sent'])
 
@@ -35,7 +36,7 @@ export async function intakeRedo(chatGuid: string, fileUrl: string | null, text:
     }
     const note = await deps.noteId(chatGuid, text).catch(() => null)
     if (!note) return COULD_NOT_START
-    const active = await deps.active(userId, chatGuid)
+    const active = await deps.active(userId, file.lineage_id ?? file.id)
     if (active === 'unknown') return COULD_NOT_START
     if (active) {
         const verdict = (await deps.heldVerdict().catch(() => null)) ?? 'new_instruction'
@@ -49,12 +50,14 @@ export async function intakeRedo(chatGuid: string, fileUrl: string | null, text:
             return 'Stopping it now. Nothing more will be sent from it.'
         }
         const r = await deps.upsert(userId, chatGuid, file.id, note)
+        if (r.status === 'refused' && r.reason === 'cap') return CAP_TEXT
         if (r.status !== 'appended' && r.status !== 'created') return 'I could not add that to the redo just now, so it is not in it. Nothing was changed.'
         return r.status === 'appended' && r.phase && LATE_PHASES.has(r.phase)
             ? 'Got it. The version in progress is already on its way out without that, so I will make one more version with your note and send it.'
             : 'Got it. I am adding that to the version I am building now.'
     }
     const r = await deps.upsert(userId, chatGuid, file.id, note)
+    if (r.status === 'refused' && r.reason === 'cap') return CAP_TEXT
     if (r.status === 'created' || r.status === 'appended') return 'On it. I am rebuilding that page and will send it here when it is ready.'
     return COULD_NOT_START
 }

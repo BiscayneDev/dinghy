@@ -6,12 +6,12 @@ import { createServerClient } from '@/lib/supabase/server'
  */
 export type UpsertResult =
     | { status: 'created' | 'appended'; jobId: string; revision: number; phase?: string }
-    | { status: 'refused'; reason: 'file' | 'chat' | 'note' | 'no_origin' | 'race' }
+    | { status: 'refused'; reason: 'file' | 'chat' | 'note' | 'no_origin' | 'race' | 'cap' }
     | { status: 'unknown' }
 export type FenceResult = 'ok' | 'cancelled' | 'stale' | 'lost' | 'unknown'
 export type CloseResult = 'done' | 'requeued' | 'note_unapplied' | 'lost' | 'unknown'
 export interface ClaimedJob {
-    id: string; user_id: string; chat_guid: string; file_id: string; claim_id: string; op_id: string
+    id: string; user_id: string; chat_guid: string; file_id: string; lineage_id: string; claim_id: string; op_id: string
     note_ids: string[]; note_revision: number; consumed_revision: number; passes: number; resumes: number
 }
 
@@ -57,16 +57,25 @@ export async function redoFileForOp(userId: string, jobId: string): Promise<stri
 export async function failRedoJob(jobId: string, claimId: string, reason: string): Promise<boolean> {
     return (await rpc<boolean>('redo_fail', { p_job: jobId, p_claim: claimId, p_reason: reason })) === true
 }
-export async function activeRedoJobFor(userId: string, chatGuid: string): Promise<{ id: string; phase: string } | null | 'unknown'> {
+export async function activeRedoJobFor(userId: string, lineageId: string): Promise<{ id: string; phase: string } | null | 'unknown'> {
     try {
-        const { data, error } = await createServerClient().from('dinghy_redo_jobs').select('id, phase').eq('user_id', userId).eq('chat_guid', chatGuid).in('state', ['queued', 'running']).limit(1)
+        const { data, error } = await createServerClient().from('dinghy_redo_jobs').select('id, phase').eq('user_id', userId).eq('lineage_id', lineageId).in('state', ['queued', 'running']).limit(1)
         if (error) return 'unknown'
         return (data?.[0] as { id: string; phase: string } | undefined) ?? null
     } catch { return 'unknown' }
 }
 
 /** Off by default. While off, no job is ever created (a job nobody runs would be a promise nobody keeps). */
-export const redoJobsEnabled = (): boolean => process.env.DINGHY_REDO_JOBS === 'on'
+export const redoMode = (): 'off' | 'owner' | 'on' => (process.env.DINGHY_REDO_JOBS === 'on' ? 'on' : process.env.DINGHY_REDO_JOBS === 'owner' ? 'owner' : 'off')
+/** Worker and cron run in 'owner' and 'on'. */
+export const redoJobsEnabled = (): boolean => redoMode() !== 'off'
+/** Who may create jobs: 'on' is everyone, 'owner' only the chats listed (comma separated) in DINGHY_REDO_OWNER_CHATS, anything else nobody. */
+export function redoJobsEnabledFor(chatGuid: string): boolean {
+    const m = redoMode()
+    if (m === 'on') return true
+    if (m !== 'owner') return false
+    return (process.env.DINGHY_REDO_OWNER_CHATS ?? '').split(',').map((x) => x.trim()).filter(Boolean).includes(chatGuid)
+}
 
 export const TERMINAL_TEXT: Record<string, string> = {
     outcome_unknown: 'I could not confirm whether the redo of that page went out. I have not retried it, so it may or may not reach you. The earlier version is unchanged.',

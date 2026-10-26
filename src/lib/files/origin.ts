@@ -6,12 +6,12 @@ import { createServerClient } from '@/lib/supabase/server'
  * is erased and retained with the file. Google-derived requests are flagged so retention nulls them.
  * Best-effort: a failed save only means a later correction cannot be bound, and it says so.
  */
-export async function saveFileOrigin(opts: { userId: string; chatGuid: string; url: string; request: string; googleDerived: boolean; kind?: string | null; messageId?: string | null; runId?: string | null }): Promise<boolean> {
+export async function saveFileOrigin(opts: { userId: string; chatGuid: string; url: string; request: string; googleDerived: boolean; kind?: string | null; messageId?: string | null; runId?: string | null; lineageId?: string | null }): Promise<boolean> {
     if (!opts.request.trim() || opts.request.length > 12_000) return false
     const { data, error } = await createServerClient().from('dinghy_files')
         .update({
             origin_request: opts.request, origin_google_derived: opts.googleDerived,
-            ...(opts.kind ? { origin_kind: opts.kind } : {}), ...(opts.messageId ? { origin_message_id: opts.messageId } : {}), ...(opts.runId ? { origin_run_id: opts.runId } : {}),
+            ...(opts.kind ? { origin_kind: opts.kind } : {}), ...(opts.messageId ? { origin_message_id: opts.messageId } : {}), ...(opts.runId ? { origin_run_id: opts.runId } : {}), ...(opts.lineageId ? { lineage_id: opts.lineageId } : {}),
         })
         .eq('user_id', opts.userId).eq('chat_guid', opts.chatGuid).eq('url', opts.url).is('origin_request', null)
         .select('id')

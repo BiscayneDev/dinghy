@@ -1,5 +1,5 @@
 -- Durable redo continuation. BRANCH ONLY: not applied to any database.
--- A correction after a delivered file becomes one job row per file. Jobs hold ids, never text:
+-- A correction after a delivered file becomes one active job per lineage (the original file and its redo versions). Jobs hold ids, never text:
 -- note text stays in the user's own stored messages. The original request lives on the file row
 -- (erased/exported with it, never in chat history), and Google retention nulls it.
 
@@ -11,7 +11,9 @@ alter table public.dinghy_files
   add column if not exists origin_kind text check (origin_kind is null or origin_kind in ('map','comparison','list','itinerary','note')),
   -- New redo artifacts only: which job attempt made this file, and whether it was built from Google-derived input.
   add column if not exists redo_op_id uuid,
-  add column if not exists redo_google_derived boolean not null default false;
+  add column if not exists redo_google_derived boolean not null default false,
+  -- Lineage: the original file a chain of redo versions descends from. Null means the file is its own root.
+  add column if not exists lineage_id uuid;
 create index if not exists dinghy_files_redo_op on public.dinghy_files (redo_op_id) where redo_op_id is not null;
 
 create table public.dinghy_redo_jobs (
@@ -19,6 +21,7 @@ create table public.dinghy_redo_jobs (
   user_id uuid not null references public.users(id) on delete cascade,
   chat_guid text not null,
   file_id uuid not null references public.dinghy_files(id) on delete cascade,
+  lineage_id uuid not null,
   state text not null default 'queued' check (state in ('queued','running','done','failed','cancelled','blocked')),
   phase text not null default 'queued' check (phase in ('queued','building','publishing','published','sending','sent')),
   note_ids text[] not null default '{}',
@@ -36,7 +39,7 @@ create table public.dinghy_redo_jobs (
   updated_at timestamptz not null default now(),
   closed_at timestamptz
 );
-create unique index dinghy_redo_jobs_one_active on public.dinghy_redo_jobs (user_id, chat_guid) where state in ('queued','running');
+create unique index dinghy_redo_jobs_one_active on public.dinghy_redo_jobs (user_id, lineage_id) where state in ('queued','running');
 create index dinghy_redo_jobs_claimable on public.dinghy_redo_jobs (state, lease_until);
 alter table public.dinghy_redo_jobs enable row level security;
 revoke all on public.dinghy_redo_jobs from anon, authenticated, public;
@@ -46,7 +49,7 @@ comment on table public.dinghy_redo_jobs is 'Ids and states only. No message tex
 -- Create the job or add a note to the active one. Ownership: the file and the note must belong to this user and chat.
 create or replace function public.upsert_redo_job(p_user uuid, p_chat text, p_file uuid, p_note text default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare f record; j public.dinghy_redo_jobs;
+declare f record; j public.dinghy_redo_jobs; lin uuid;
 begin
   select * into f from public.dinghy_files
    where id = p_file and user_id = p_user and deleted_at is null and revoked_at is null
@@ -60,9 +63,15 @@ begin
     select 1 from public.spectrum_messages where id::text = p_note and chat_guid = p_chat and role = 'user') then
     return jsonb_build_object('status','refused','reason','note');
   end if;
+  lin := coalesce(f.lineage_id, f.id);
+  -- Bounded cost: a few new rebuilds per user per day. Notes on an active job are never refused by this.
+  if not exists (select 1 from public.dinghy_redo_jobs where user_id = p_user and lineage_id = lin and state in ('queued','running'))
+     and (select count(*) from public.dinghy_redo_jobs where user_id = p_user and created_at > now() - interval '24 hours') >= 6 then
+    return jsonb_build_object('status','refused','reason','cap');
+  end if;
   begin
-    insert into public.dinghy_redo_jobs (user_id, chat_guid, file_id, note_ids, note_revision)
-    values (p_user, p_chat, p_file, case when p_note is null then '{}' else array[p_note] end, case when p_note is null then 0 else 1 end)
+    insert into public.dinghy_redo_jobs (user_id, chat_guid, file_id, lineage_id, note_ids, note_revision)
+    values (p_user, p_chat, p_file, lin, case when p_note is null then '{}' else array[p_note] end, case when p_note is null then 0 else 1 end)
     returning * into j;
     return jsonb_build_object('status','created','job_id',j.id,'revision',j.note_revision);
   exception when unique_violation then
@@ -70,7 +79,7 @@ begin
        set note_ids = case when p_note is null or p_note = any(note_ids) then note_ids else array_append(note_ids, p_note) end,
            note_revision = case when p_note is null or p_note = any(note_ids) then note_revision else note_revision + 1 end,
            updated_at = now()
-     where chat_guid = p_chat and user_id = p_user and state in ('queued','running')
+     where lineage_id = lin and user_id = p_user and state in ('queued','running')
      returning * into j;
     if not found then return jsonb_build_object('status','refused','reason','race'); end if;
     return jsonb_build_object('status','appended','job_id',j.id,'revision',j.note_revision,'phase',j.phase);
@@ -89,6 +98,8 @@ begin
    where state = 'running' and lease_until < now() and phase in ('queued','building') and resumes >= 1;
   select * into j from public.dinghy_redo_jobs
    where (state = 'queued' or (state = 'running' and lease_until < now() and phase in ('queued','building') and resumes < 1))
+     -- One job at a time per chat: a queued job waits behind a live one, it is never merged into it.
+     and not exists (select 1 from public.dinghy_redo_jobs r where r.chat_guid = dinghy_redo_jobs.chat_guid and r.id <> dinghy_redo_jobs.id and r.state = 'running' and r.lease_until >= now())
    order by created_at limit 1 for update skip locked;
   if not found then return; end if;
   update public.dinghy_redo_jobs
@@ -159,6 +170,7 @@ begin
          state = case when state = 'queued' then 'cancelled' else state end,
          closed_at = case when state = 'queued' then now() else closed_at end, updated_at = now()
    where user_id = p_user and chat_guid = p_chat and state in ('queued','running')
+     and lineage_id = (select coalesce(lineage_id, id) from public.dinghy_files where id = p_file and user_id = p_user)
    returning * into j;
   if not found then return jsonb_build_object('status','none'); end if;
   return jsonb_build_object('status', j.state, 'phase', j.phase);

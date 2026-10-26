@@ -7,6 +7,7 @@ import { RedoCancelled as DinghyRedoCancelled, chatWithTools, productFactsFor } 
 import { capabilitiesFor, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { fileToolsFor } from '@/lib/files/tool'
 import { saveFileOrigin } from '@/lib/files/origin'
+import { revokeSite } from '@/lib/files/share'
 import { briefableUserId } from './briefing'
 import { getBetaRole } from './beta-gate'
 import { routingFor } from './routing'
@@ -18,17 +19,28 @@ import { demoSpace, isDemoGuid } from './demo-chat'
 import { sendFile, type InboundSpace } from './handler'
 
 const BUDGET_MS = 240_000
+/** The webhook function lives 300s from its start. A kick only runs a job when a full build still fits, otherwise the cron rescue takes it. */
+const HOST_WINDOW_MS = 285_000
+const MIN_KICK_BUDGET_MS = 150_000
 
 /** Claims and runs at most one job. Unknown external outcomes are never retried here; the database blocks or fails them by phase. */
-export async function runOneRedoJob(): Promise<{ ran: boolean; outcome?: WorkerOutcome }> {
+export async function runOneRedoJob(budgetMs = BUDGET_MS): Promise<{ ran: boolean; outcome?: WorkerOutcome }> {
     // Claiming also moves crashed jobs to blocked/failed in the database, so report after it: one deduped status per terminal job.
     const job = await claimRedoJob()
     for (const j of await unreportedTerminalJobs()) await notifyRedoOutcome(j.id, TERMINAL_TEXT[j.failure ?? ''] ?? 'I could not finish the redo of that page. Nothing new was sent.')
     if (!job) return { ran: false }
-    return { ran: true, outcome: await executeRedoJob(job, realDeps(job)) }
+    return { ran: true, outcome: await executeRedoJob(job, realDeps(job, budgetMs)) }
 }
 
-function realDeps(job: ClaimedJob): WorkerDeps {
+/** Immediate start from the webhook tail. Claims through the same lease as the cron route, so the two can never run one job twice. */
+export async function kickRedoJobs(handlerStartedAt: number): Promise<{ kicked: boolean; reason?: string }> {
+    const remaining = HOST_WINDOW_MS - (Date.now() - handlerStartedAt)
+    if (remaining < MIN_KICK_BUDGET_MS + 30_000) return { kicked: false, reason: 'not_enough_time_left_cron_will_run_it' }
+    await runOneRedoJob(Math.min(BUDGET_MS, remaining - 30_000))
+    return { kicked: true }
+}
+
+function realDeps(job: ClaimedJob, budgetMs: number): WorkerDeps {
     const db = createServerClient()
     let madeFull: ReturnType<ReturnType<typeof fileToolsFor>['files']> = []
     return {
@@ -67,7 +79,7 @@ function realDeps(job: ClaimedJob): WorkerDeps {
             const memory = await loadMemoryContext(job.chat_guid, instruction.slice(0, 2000)).catch(() => EMPTY_MEMORY)
             try {
                 const r = await chatWithTools([{ role: 'user', content: instruction }], {
-                    deadlineAt: Date.now() + BUDGET_MS, gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY ?? '', model: SHIPYARD_MODEL, routing: routingFor(),
+                    deadlineAt: Date.now() + budgetMs, gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY ?? '', model: SHIPYARD_MODEL, routing: routingFor(),
                     deliverable: { kind: kind as DeliverableKind, request: instruction }, facts: productFactsFor(role, loaded), clarified: true,
                     capabilities: capabilitiesFor(toolCtx), memory: renderMemoryBlock(memory), onUsage: (u: GatewayUsage) => usage.push(u), redoGate: gate,
                 }, [...toolsFor(toolCtx), ...files.tools], toolCtx)
@@ -86,6 +98,15 @@ function realDeps(job: ClaimedJob): WorkerDeps {
             if (!full) throw new Error('made file not found for send')
             await sendFile(space as unknown as InboundSpace, job.chat_guid, full)
         },
-        saveOrigin: (url, request, google, kind) => saveFileOrigin({ userId: job.user_id, chatGuid: job.chat_guid, url, request, googleDerived: google, kind }),
+        saveOrigin: (url, request, google, kind) => saveFileOrigin({ userId: job.user_id, chatGuid: job.chat_guid, url, request, googleDerived: google, kind, lineageId: job.lineage_id }),
+        async discard(url) {
+            // Only the page this very job attempt made (bound by its op id) and never sent. Nothing else is touched.
+            const { data } = await db.from('dinghy_files').select('id').eq('user_id', job.user_id).eq('redo_op_id', job.op_id).eq('url', url).is('revoked_at', null).maybeSingle()
+            const id = (data as { id?: string } | null)?.id
+            if (!id) return 'failed'
+            try { await revokeSite(url, job.user_id) } catch { return 'failed' }
+            await db.from('dinghy_files').update({ revoked_at: new Date().toISOString() }).eq('id', id).eq('user_id', job.user_id)
+            return 'removed'
+        },
     }
 }

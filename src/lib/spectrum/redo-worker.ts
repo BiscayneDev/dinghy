@@ -25,6 +25,8 @@ export interface WorkerDeps {
     /** Runs the model job with the gate. Returns the files it made (already stored with redo_op_id) and whether input was Google-derived. */
     build(args: { instruction: string; kind: string; google: boolean; gate: (close: boolean) => Promise<{ notes: string[]; cancelled: boolean }> }): Promise<{ files: MadeRedoFile[]; tainted: boolean }>
     send(file: MadeRedoFile): Promise<void>
+    /** Takes down only the page this job made and never sent. 'removed' only when the host confirmed it. */
+    discard(url: string): Promise<'removed' | 'failed'>
     saveOrigin(url: string, request: string, google: boolean, kind: string): Promise<boolean>
 }
 
@@ -79,7 +81,13 @@ export async function executeRedoJob(job: ClaimedJob, deps: WorkerDeps): Promise
         const ok1 = await deps.advance('published', consumedRev)
         if (ok1 !== 'ok') throw new RedoLost()
         const ok2 = await deps.advance('sending', consumedRev)
-        if (ok2 === 'cancelled') { await deps.notify('A new version was built but you asked me to stop, so I did not send it.'); return 'cancelled' }
+        if (ok2 === 'cancelled') {
+            const gone = await deps.discard(made.url).catch(() => 'failed' as const)
+            await deps.notify(gone === 'removed'
+                ? 'A new version was built before your stop reached it. I did not send it and I took that page down. The earlier version is unchanged.'
+                : 'A new version was built before your stop reached it. I did not send it, but I could not take that page down, so its link stays live until it expires. The earlier version is unchanged.')
+            return 'cancelled'
+        }
         if (ok2 !== 'ok') throw new RedoLost()
         // Stored before the send so a later correction can bind to this version.
         await deps.saveOrigin(made.url, redoInstruction(file.origin_request, noteTexts), google, kind).catch(() => false)
