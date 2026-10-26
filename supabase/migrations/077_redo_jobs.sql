@@ -36,7 +36,7 @@ create table public.dinghy_redo_jobs (
   updated_at timestamptz not null default now(),
   closed_at timestamptz
 );
-create unique index dinghy_redo_jobs_one_active on public.dinghy_redo_jobs (file_id) where state in ('queued','running');
+create unique index dinghy_redo_jobs_one_active on public.dinghy_redo_jobs (user_id, chat_guid) where state in ('queued','running');
 create index dinghy_redo_jobs_claimable on public.dinghy_redo_jobs (state, lease_until);
 alter table public.dinghy_redo_jobs enable row level security;
 revoke all on public.dinghy_redo_jobs from anon, authenticated, public;
@@ -70,7 +70,7 @@ begin
        set note_ids = case when p_note is null or p_note = any(note_ids) then note_ids else array_append(note_ids, p_note) end,
            note_revision = case when p_note is null or p_note = any(note_ids) then note_revision else note_revision + 1 end,
            updated_at = now()
-     where file_id = p_file and user_id = p_user and state in ('queued','running')
+     where chat_guid = p_chat and user_id = p_user and state in ('queued','running')
      returning * into j;
     if not found then return jsonb_build_object('status','refused','reason','race'); end if;
     return jsonb_build_object('status','appended','job_id',j.id,'revision',j.note_revision,'phase',j.phase);
@@ -158,7 +158,7 @@ begin
      set cancel_requested = true,
          state = case when state = 'queued' then 'cancelled' else state end,
          closed_at = case when state = 'queued' then now() else closed_at end, updated_at = now()
-   where file_id = p_file and user_id = p_user and chat_guid = p_chat and state in ('queued','running')
+   where user_id = p_user and chat_guid = p_chat and state in ('queued','running')
    returning * into j;
   if not found then return jsonb_build_object('status','none'); end if;
   return jsonb_build_object('status', j.state, 'phase', j.phase);

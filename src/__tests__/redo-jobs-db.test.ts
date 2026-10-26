@@ -42,12 +42,14 @@ async function note(chat = 'chat-a') { return String((await one<{ id: string }>(
 const upsert = async (u: string, c: string, f: string, n: string | null) => (await one<{ r: any }>(`select upsert_redo_job($1,$2,$3,$4) r`, [u, c, f, n])).r
 
 describe('redo jobs, DB semantics', () => {
-    it('one active job per file; later notes append once and bump the revision', async () => {
+    it('one active job per chat (a note on any page of the chat joins it); later notes append once and bump the revision', async () => {
         const f = await file(); const n1 = await note(), n2 = await note()
         expect((await upsert(A, 'chat-a', f, null)).status).toBe('created')
         expect((await upsert(A, 'chat-a', f, n1)).revision).toBe(1)
         expect((await upsert(A, 'chat-a', f, n1)).revision).toBe(1)
         expect((await upsert(A, 'chat-a', f, n2)).revision).toBe(2)
+        const other = await file(), n3 = await note()
+        expect(await upsert(A, 'chat-a', other, n3)).toMatchObject({ status: 'appended', revision: 3 })
         expect((await one<{ c: number }>(`select count(*)::int c from dinghy_redo_jobs`)).c).toBe(1)
     })
     it('refuses cross-user file, chat and note ids', async () => {
@@ -119,7 +121,7 @@ describe('redo jobs, DB semantics', () => {
     })
     it('Google retention nulls the origin and deletes its job; non-Google origins and the old counts are untouched', async () => {
         const g = await file(A, 'chat-a', 'GOOGLE-DERIVED', true), p = await file(A, 'chat-a', 'PLAIN', false)
-        await upsert(A, 'chat-a', g, null); await upsert(A, 'chat-a', p, null)
+        await upsert(A, 'chat-a', g, null); await db.exec(`update dinghy_redo_jobs set state='done'`); await upsert(A, 'chat-a', p, null)
         await db.exec(`update dinghy_files set created_at = now() - interval '40 days'`)
         await db.exec(`insert into spectrum_messages(chat_guid,role,content,google_derived,created_at) values ('chat-a','user','g',true, now() - interval '40 days'),('chat-a','user','k',false, now() - interval '40 days')`)
         const r = (await one<any>(`select expire_google_derived(30) r`)).r

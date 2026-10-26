@@ -86,7 +86,7 @@ export async function executeRedoJob(job: ClaimedJob, deps: WorkerDeps): Promise
         await deps.send(made)
         if ((await deps.advance('sent', consumedRev)) !== 'ok') throw new RedoLost()
         const closed = await deps.close()
-        if (closed === 'note_unapplied') { await deps.notify('I sent a new version, but a later note of yours is not in it and I ran out of passes. Send that note once more and I will fold it in.'); return 'note_unapplied' }
+        if (closed === 'note_unapplied') { await deps.notify('I sent a new version, but a later note of yours is not in it. I stopped after two passes, so that note was not applied and nothing more is queued.'); return 'note_unapplied' }
         return closed === 'requeued' ? 'requeued' : 'done'
     } catch (err) {
         if (err instanceof RedoCancelled) { await deps.notify('Stopped that redo. Nothing new was sent from it.'); return 'cancelled' }

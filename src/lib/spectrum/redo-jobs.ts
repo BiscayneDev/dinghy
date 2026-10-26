@@ -57,9 +57,9 @@ export async function redoFileForOp(userId: string, jobId: string): Promise<stri
 export async function failRedoJob(jobId: string, claimId: string, reason: string): Promise<boolean> {
     return (await rpc<boolean>('redo_fail', { p_job: jobId, p_claim: claimId, p_reason: reason })) === true
 }
-export async function activeRedoJobFor(userId: string, fileId: string): Promise<{ id: string; phase: string } | null | 'unknown'> {
+export async function activeRedoJobFor(userId: string, chatGuid: string): Promise<{ id: string; phase: string } | null | 'unknown'> {
     try {
-        const { data, error } = await createServerClient().from('dinghy_redo_jobs').select('id, phase').eq('user_id', userId).eq('file_id', fileId).in('state', ['queued', 'running']).limit(1)
+        const { data, error } = await createServerClient().from('dinghy_redo_jobs').select('id, phase').eq('user_id', userId).eq('chat_guid', chatGuid).in('state', ['queued', 'running']).limit(1)
         if (error) return 'unknown'
         return (data?.[0] as { id: string; phase: string } | undefined) ?? null
     } catch { return 'unknown' }

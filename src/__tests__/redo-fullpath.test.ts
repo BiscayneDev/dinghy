@@ -180,3 +180,47 @@ it('legacy file whose request cannot be bound reliably: specific gap, no job, no
  vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed({legacy:true});await pgq(`insert into spectrum_messages(chat_guid,role,content,created_at) values ($1,'user','another request in the same window',now()-interval '29 minutes')`,[CHAT])
  await complain("That's not good");expect(await jobs()).toHaveLength(0);expect(texts().join('\n')).toMatch(/tie that page back/)
 })
+const pub=()=>({url:'https://fictional.here.now/',expiresAt:new Date(Date.now()+86400000).toISOString(),files:[]})
+async function drain(max=5){const out:any[]=[];for(let i=0;i<max;i++){const r=await runOneRedoJob();out.push(r);if(!r.ran)break}return out}
+it('INTEGRATION note arriving during the active build is applied before anything is published',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install({onGateway:async()=>{await complain('also add a rooftop bar')}});const fid=await seed();await complain("That's not good")
+ const runs=await drain();expect(runs.some(r=>r.outcome==='done')).toBe(true)
+ const j=(await jobs())[0];expect(j.state).toBe('done');expect(j.note_ids).toHaveLength(2)
+ const seen=gateway.filter(b=>JSON.stringify(b.messages).includes('also add a rooftop bar')).length;console.log('NOTE-SEEN',seen,gateway.length)
+ console.log('NOTE-DURING',JSON.stringify({runs,publishes:published.mock.calls.length,chatCalls:hoist.chatCalls.length,j}))
+ void fid
+})
+it('INTEGRATION stop arriving while the build runs: nothing published, nothing sent, honest state',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install({onGateway:async()=>{hoist.held='stop';await complain('actually stop');}});await seed();await complain("That's not good")
+ hoist.sent=[];await drain();expect(published).not.toHaveBeenCalled();expect((await jobs())[0].state).toBe('cancelled')
+ expect((await pgq(`select 1 from spectrum_messages where role='assistant' and content like '[file:%fictional.here.now%'`))).toHaveLength(0)
+})
+it('INTEGRATION stop arriving at the publish/send boundary: fenced, the new page is not sent',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed();await complain("That's not good")
+ published.mockImplementation(async()=>{hoist.held='stop';await complain('stop now');return pub()})
+ hoist.sent=[];await drain();expect((await jobs())[0].state).toBe('cancelled')
+ expect((await pgq(`select 1 from spectrum_messages where role='assistant' and content like '[file:%fictional.here.now%'`))).toHaveLength(0)
+ console.log('STOP-AT-PUBLISH',JSON.stringify({publishes:published.mock.calls.length,sent:texts().length}))
+})
+it('INTEGRATION late note after publish requeues exactly one more pass; a further late note stops at the cap and names the gap',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed();await complain("That's not good")
+ let n=0;published.mockImplementation(async()=>{n++;selects=0;if(n<=2)await complain('late tweak '+n);return pub()})
+ hoist.sent=[];const runs=await drain(6)
+ const all=await jobs();expect(all).toHaveLength(1);expect(all[0]).toMatchObject({state:'failed',failure:'note_unapplied'})
+ expect(runs.map((r:any)=>r.outcome)).toEqual(['requeued','note_unapplied',undefined])
+ const ob=(await pgq(`select text from spectrum_outbox`)).map((r:any)=>r.text).join('\n')
+ expect(published).toHaveBeenCalledTimes(2);expect(ob).toMatch(/not applied and nothing more is queued/);expect(ob).not.toMatch(/once more|tell me again|next time/i)
+})
+it('INTEGRATION Google-derived origin: new artifact and its origin are tagged and expire; plain files are untouched',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();const fid=await seed();await pgq(`update dinghy_files set origin_google_derived=true where id=$1`,[fid]);await complain("That's not good")
+ await drain();const nf=(await pgq(`select id,redo_google_derived,origin_google_derived,markdown from dinghy_files where url='https://fictional.here.now/'`))[0]
+ expect(nf).toMatchObject({redo_google_derived:true,origin_google_derived:true});expect(nf.markdown).not.toBe('')
+ await pgq(`update dinghy_files set created_at=now()-interval '40 days'`);const r=(await pgq(`select expire_google_derived(30) r`))[0].r
+ const after=(await pgq(`select markdown,origin_request from dinghy_files where id=$1`,[nf.id]))[0];expect(after).toMatchObject({markdown:'',origin_request:null});expect(r.redo_documents).toBe(1)
+ expect((await jobs())).toHaveLength(0)
+})
+it('INTEGRATION renders the redo output at 390px (fixture dump)',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed();await complain("That's not good");await drain()
+ const files=published.mock.calls[0][0];const { mkdirSync, writeFileSync }=await import('fs');mkdirSync('/tmp/redo-fixture',{recursive:true})
+ for(const f of files)writeFileSync('/tmp/redo-fixture/'+String(f.path).replace(/\//g,'_'),f.bytes)
+})

@@ -13,7 +13,7 @@ export interface IntakeDeps {
     legacy(file: RedoFileRow, chatGuid: string): Promise<{ origin: LegacyOrigin; google: boolean } | null>
     saveLegacyOrigin(userId: string, chatGuid: string, file: RedoFileRow, request: string, google: boolean, evidence: { runId: string; messageId: string | null }): Promise<boolean>
     noteId(chatGuid: string, text: string): Promise<string | null>
-    active(userId: string, fileId: string): Promise<{ id: string; phase: string } | null | 'unknown'>
+    active(userId: string, chatGuid: string): Promise<{ id: string; phase: string } | null | 'unknown'>
     upsert(userId: string, chatGuid: string, fileId: string, noteId: string | null): Promise<UpsertResult>
     cancel(userId: string, chatGuid: string, fileId: string): Promise<{ status: string; phase?: string } | null>
     heldVerdict(): Promise<HeldNoteVerdict | null>
@@ -35,7 +35,7 @@ export async function intakeRedo(chatGuid: string, fileUrl: string | null, text:
     }
     const note = await deps.noteId(chatGuid, text).catch(() => null)
     if (!note) return COULD_NOT_START
-    const active = await deps.active(userId, file.id)
+    const active = await deps.active(userId, chatGuid)
     if (active === 'unknown') return COULD_NOT_START
     if (active) {
         const verdict = (await deps.heldVerdict().catch(() => null)) ?? 'new_instruction'
