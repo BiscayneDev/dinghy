@@ -46,6 +46,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.11",
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/heic-convert": "^2.1.1",

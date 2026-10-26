@@ -79,3 +79,30 @@ export async function loadActiveRuns(chatGuid: string, currentMessageId?: string
         return []
     }
 }
+
+/** A redo job for this delivered file (breadcrumb `redo:<hash>`) is still running: its run has no terminal stage and wrote something recently. Itinerary jobs may run up to 240s, so the look-back is longer than the general steer window. Fails open (nothing running) when the lookup fails. */
+export async function redoJobRunning(chatGuid: string, hash: string, now = Date.now()): Promise<boolean> {
+    try {
+        const since = new Date(now - 250_000).toISOString()
+        const query = createServerClient()
+            .from('dinghy_run_stages')
+            .select('run_id,message_id,stage,detail,created_at')
+            .eq('chat_guid', chatGuid)
+            .gte('created_at', since)
+            .order('created_at', { ascending: false })
+            .limit(200)
+            .then((res: { data: (StageRow & { detail: string | null })[] | null; error: unknown }) => {
+                if (res.error || !res.data) return false
+                const runs = new Set(res.data.filter((r) => r.stage === 'context' && r.detail === `redo:${hash}`).map((r) => r.run_id))
+                for (const id of runs) {
+                    const rows = res.data.filter((r) => r.run_id === id)
+                    const newest = rows.reduce((a, b) => (Date.parse(b.created_at) >= Date.parse(a.created_at) ? b : a))
+                    if (!TERMINAL.has(newest.stage) && now - Date.parse(newest.created_at) <= 150_000) return true
+                }
+                return false
+            })
+        return await Promise.race([query, new Promise<boolean>((r) => setTimeout(() => r(false), LOOKUP_TIMEOUT_MS))])
+    } catch {
+        return false
+    }
+}

@@ -42,7 +42,7 @@ import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
 import { CLARIFY_MARK, stripClarifyMark, pendingItineraryClarification, continueAfterClarification, decideClarificationReply, type ReplyVerdict } from '@/lib/files/itinerary-continuation'
-import { deliverableIntentEnabled, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
+import { decideHeldNote, deliveredFileContext, deliveredFileUrls } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -71,6 +71,12 @@ import {
     type BetaRole,
 } from './beta-gate'
 import { earlierUserText, loadActiveRuns, steerNote } from './active-run'
+import { fileUrlOf, saveFileOrigin } from '@/lib/files/origin'
+import { intakeRedo } from './redo-intake'
+import { realIntakeDeps } from './redo-intake-runtime'
+import { loadPendingRedo, redoJobsAllowed, redoMode } from './redo-jobs'
+import { resolvePendingRedo } from './redo-pending'
+import { decideTurnDeliverable } from './deliverable-turn'
 import { claimInboundDelivery, enqueueOutbox, markOutboxFailed, markOutboxSent, type OutboxKind } from './outbox'
 import { briefableUserId, handleMuteIntent } from './briefing'
 import { chooseCurrentPlace, isPlaceOnlyMessage, placeStatement, travelAck } from './place'
@@ -209,7 +215,7 @@ async function sendIcsAttachment(space: InboundSpace, payload: Record<string, un
 /** Enqueue-then-send: the row exists before the attempt, so a kill or a
  *  send failure is always retried by the sweep. */
 /** Native attachment; on failure, fall back to the signed link as text. */
-async function sendFile(space: InboundSpace, chatGuid: string, file: MadeFile): Promise<void> {
+export async function sendFile(space: InboundSpace, chatGuid: string, file: MadeFile): Promise<void> {
     if (file.hosted) {
         const hosted = { ...file, hosted: file.hosted }
         const line = hostedHistoryLine(hosted)
@@ -394,7 +400,8 @@ async function handleInboundTapback(space: InboundSpace, message: InboundMessage
 }
 
 export async function handleSpectrumMessage(space: InboundSpace, message: InboundMessage): Promise<void> {
-    const turnStartedAt = Date.now()
+    let turnStartedAt = Date.now()
+    const handlerEntryAt = Date.now()
     const inbound = normalizeInbound(message)
     const isAttachment = !inbound && message.content.type === 'attachment'
     if (!inbound && !isAttachment) return
@@ -1024,11 +1031,40 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     // Model-owned deliverable intent: with the flag on, one bounded Jev judgment decides
     // what (if any) deliverable every turn asks for. The keyword matcher is only the outage
     // fallback when the decision is unavailable or uncertain; with the flag off it stays the selector.
-    let deliverable: DeliverableContract | null
-    if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
-        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full) })
-    } else {
-        deliverable = selectDeliverable(full)
+    let deliverable: (DeliverableContract & { redo?: true }) | null
+    let redoRefusal: string | null = null
+    const afterFile = deliveredFileContext(full)
+    // Whether redo jobs may start for this chat right now (flag mode and, in proof mode, an armed one-shot authorization). Read once, only when a page was recently delivered.
+    const pendingRedo = redoMode() !== 'off' ? await loadPendingRedo(chatGuid) : null
+    const redoAllowed = afterFile || pendingRedo ? await redoJobsAllowed(chatGuid) : false
+    if (pendingRedo && redoAllowed) {
+        // The user was asked which page their complaint was about; this message may be the answer. The kept complaint continues automatically.
+        const pendingReply = await resolvePendingRedo(chatGuid, text, replyTo, pendingRedo).catch((err) => { logErr('redo pending failed', err); return null })
+        if (pendingReply) {
+            const delivered = await sendText(space, chatGuid, 'reply', pendingReply)
+            if (delivered) await saveMessage(chatGuid, 'assistant', pendingReply).catch((err) => logErr('redo reply save failed', err))
+            await import('./redo-worker-runtime').then((m) => m.kickRedoJobs(handlerEntryAt)).catch((err) => logErr('redo kick failed', err))
+            return
+        }
+    }
+    deliverable = await decideTurnDeliverable({ text, full, afterFile: Boolean(afterFile), redoAllowed, sender: senderAddress(message.sender) ?? undefined })
+    if (deliverable?.redo) {
+        if (!redoAllowed) {
+            // Redo jobs are not active: a correction is ordinary chat, never a promise nobody runs.
+            deliverable = null
+        } else {
+            const complaint: string = text
+            const heldContext = JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
+            redoRefusal = await intakeRedo(chatGuid, afterFile ? fileUrlOf(afterFile.line) : null, complaint, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY ?? "", request: complaint, context: heldContext, signal: AbortSignal.timeout(8000) })), { replied: replyTo?.text ? fileUrlOf(replyTo.text) : null, candidates: deliveredFileUrls(full) })
+            deliverable = null
+        }
+    }
+    if (redoRefusal) {
+        const delivered = await sendText(space, chatGuid, 'reply', redoRefusal)
+        if (delivered) await saveMessage(chatGuid, 'assistant', redoRefusal).catch((err) => logErr('redo reply save failed', err))
+        // Start the queued job now, inside this webhook's own execution window, so the user does not wait for a cron tick. The cron route rescues anything this misses.
+        if (redoAllowed) await import('./redo-worker-runtime').then((m) => m.kickRedoJobs(handlerEntryAt)).catch((err) => logErr('redo kick failed', err))
+        return
     }
     // A pending itinerary question carries the original request forward only when the model judges the new message to be its answer.
     let replyVerdict: ReplyVerdict | null = null
@@ -1171,6 +1207,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             const made = fileTools?.files().length ?? 0
             reply = cleaned.text || (made > 0 ? 'here you go.' : "I couldn't make that file just now. Ask me again in a moment.")
             if (cleaned.hadMarker && made === 0) reply = "I couldn't make that file just now. Ask me again in a moment."
+            else if (!cleaned.text && made === 0) reply = 'I ran out of time before I had an answer I would stand behind.'
         } else {
             replyTainted = full.some((m) => m.googleDerived)
             reply = await chat(full, {
@@ -1232,6 +1269,8 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         if (queuedLink && !plainReply.includes(queuedLink)) {
             await sendLink(space as LinkSender, chatGuid, 'connect_link', queuedLink).catch((err) => logErr('queued connect link failed', err))
         }
+        // Remember the exact request each shipped page was made from on the file's own row (not chat history), before it is sent.
+        if (deliverable && toolCtx?.userId) for (const file of fileTools?.files() ?? []) if (file.hosted?.url) await saveFileOrigin({ userId: toolCtx.userId, chatGuid, url: file.hosted.url, request: deliverable.request, googleDerived: replyTainted, kind: deliverable.kind }).catch((err) => logErr('file origin save failed', err))
         // Files made this turn go out after the text: a file link, or an attachment.
         for (const file of fileTools?.files() ?? []) await sendFile(space, chatGuid, file)
         // All useful links go first. No detached work after the response lifecycle.

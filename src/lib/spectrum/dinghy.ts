@@ -54,6 +54,9 @@ export interface DinghyFact {
 
 export const MAX_HISTORY = 20
 
+/** A redo was cancelled by the user while it ran: stop new work and send nothing from it. */
+export class RedoCancelled extends Error {}
+
 /** Dinghy's own site. Search engines barely know it yet, and "dinghy" search hits are other companies. */
 export const SITE_LINE =
     "Your own website is getdinghy.sh: the landing page for you, with the beta waitlist, 'join the beta', and a sign-in " +
@@ -405,6 +408,8 @@ export function wantsWallet(text: string): boolean {
 export async function chat(
     history: Message[],
     opts: {
+        /** Gate for a running redo: read later notes and cancellation. close=true is the last look before publishing. */
+        redoGate?: (close: boolean) => Promise<{ notes: string[]; cancelled: boolean }>
         gatewayUrl: string
         apiKey: string
         model: string
@@ -510,6 +515,7 @@ function reportUsage(
 
 // Research takes several rounds: search, re-search, check dates.
 const MAX_TOOL_ITERATIONS = 8
+const EMPTY_REPLY_NOTE = 'Your last turn produced no text. Answer now in plain text from what you have already read or recalled: say plainly what was wrong with the earlier result if you can tell, what you found, and what is still unverified. If you can build the corrected document, call create_file instead. Keep any reasoning short.'
 const TOOL_TIMEOUT_MS = 15_000
 /** Keep single tool results small enough for the model + the latency budget. */
 const TOOL_RESULT_CHAR_CAP = 4000
@@ -609,6 +615,8 @@ export async function chatWithTools(
         onCommit?: () => Promise<void>
         /** This turn already carries the user's answer to a clarifying question: do not offer to ask again. */
         clarified?: boolean
+        /** Gate for a running redo: read later notes and cancellation. close=true is the last look before publishing. */
+        redoGate?: (close: boolean) => Promise<{ notes: string[]; cancelled: boolean }>
     },
     tools: Tool[],
     ctx: UserContext
@@ -730,6 +738,7 @@ export async function chatWithTools(
     let pageRetry = false
     let gatewayRetried = false
     let completionMode = false
+    let emptyRetried = false
     let tainted = Boolean(opts.startTainted) || history.some((m) => m.googleDerived)
     // Enforced + tainted: private allowlist only, fail closed (throws, never falls back).
     // Shadow: log once per turn what would have gone private, route as before.
@@ -808,6 +817,11 @@ export async function chatWithTools(
         }
     }
     toolLoop: for (let iteration = 1; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
+        if (opts.redoGate) {
+            const gate = await opts.redoGate(false)
+            if (gate.cancelled) throw new RedoCancelled()
+            if (gate.notes.length) messages.push({ role: 'system', content: 'The user added this while you were working. Apply it to the result, together with the original request: ' + gate.notes.join(' | ') })
+        }
         await opts.onStage?.('gateway', String(iteration))
         const remaining = opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now()
         // The production miss spent ~70s on gateway turns and ~8s searching.
@@ -903,7 +917,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), ...(clarifying ? { tool_choice: clarifyRetry ? { type: 'function', function: { name: CLARIFY_TOOL } } : 'required' } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), ...(clarifying ? { tool_choice: clarifyRetry ? { type: 'function', function: { name: CLARIFY_TOOL } } : 'required' } : {}), stream: false, ...(completionMode ? { max_tokens: emptyRetried ? 2500 : 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
@@ -968,6 +982,15 @@ export async function chatWithTools(
             if(selecting&&selectionFailures<3){
                 selectionFailures++;await opts.onStage?.('tool','invalid:selection:no_call')
                 messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with {kind,line} using the candidate line numbers. Do not answer in text.'});continue
+            }
+            // A reasoning model can spend the whole completion budget before writing any text. Blank is not an answer: one bounded retry with room, then an honest line that never talks about a file.
+            if(!selecting&&!clarifying&&!msg?.content?.trim()){
+                if(!emptyRetried&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=15000)){
+                    emptyRetried=true;await opts.onStage?.('tool','repair:empty_reply');messages.push({role:'system',content:EMPTY_REPLY_NOTE});continue
+                }
+                await opts.onStage?.('reply_ready','empty:honest_fallback')
+                const leads=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
+                return finish({reply:leads?`I found pages on this but ran out of time before I could write it up properly. Nothing here is checked yet:\n${leads}`:'I ran out of time before I had an answer I would stand behind.',toolCalls:toolCallCount,iterations:iteration,tainted})
             }
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
             if(contextualResearch&&!recoveryUsed&&(!mapResearchRead||prematureResearchReply(reply))&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=20000)){
@@ -1206,6 +1229,11 @@ export async function chatWithTools(
                 messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,next:'Recommendations are attached server-side. Now call create_file with title, body (agenda and day headings only), format and kind itinerary. Do not include candidates, stay, options or sources blocks. Do not name any hotel, restaurant or attraction other than the selected ones.'})});continue
             }
             if(call.function.name==='create_file'&&deliverableCompleted){await opts.onStage?.('tool','create_file:duplicate_ignored');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,note:'The file was already created and queued. No second file was made.'})});continue}
+            if (call.function.name === 'create_file' && opts.redoGate) {
+                const gate = await opts.redoGate(true)
+                if (gate.cancelled) throw new RedoCancelled()
+                if (gate.notes.length) { messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: 'The user added a note before this file was made. The file was not made. Apply it with the original request, then call create_file again: ' + gate.notes.join(' | ') }) }); continue }
+            }
             const tool = tools.find((t) => t.name === call.function.name)
             let content: string
             if ((fileRepairAttempted&&pageAttempted&&call.function.name==='create_file') || completionMode && (call.function.name === 'web_search' || (pageAttempted && call.function.name === 'create_file'))) {
