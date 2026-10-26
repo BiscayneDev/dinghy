@@ -69,7 +69,9 @@ const stop=(c:string)=>new Response(JSON.stringify({choices:[{finish_reason:'sto
 const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Candidate lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' | ')[0].slice(1)):0}
 let gateway:any[]=[],selects=0
 const inbound=(id:string,text:string)=>({id,direction:'inbound',content:{type:'text',text},sender:{handle:'+15550000000'},timestamp:new Date()}) as any
-function install(opts:{searchOnly?:boolean;blank?:boolean;onGateway?:()=>Promise<void>}={}){
+let researched=0
+function install(opts:{searchOnly?:boolean;blank?:boolean;research?:boolean;onGateway?:()=>Promise<void>}={}){
+ researched=0
  vi.stubEnv('TAVILY_API_KEY','fictional-key')
  vi.stubGlobal('fetch',vi.fn(async(u:any,init:any)=>{
   const url=String(u)
@@ -85,6 +87,7 @@ function install(opts:{searchOnly?:boolean;blank?:boolean;onGateway?:()=>Promise
   const names=(b.tools??[]).map((t:any)=>t.function.name)
   const forced=b.tool_choice?.function?.name
   if(opts.blank)return new Response(JSON.stringify({choices:[{finish_reason:'length',message:{content:''}}]}))
+  if(opts.research&&!forced&&researched++<1)return call('web_search',{query:'fictional harborville listings'})
   if(opts.searchOnly)return call('web_search',{query:'fictional harborville listings'})
   if(forced==='select_itinerary_candidates'){selects++;return call(forced,{candidates:(selects===1?[['hotel','Harborville Inn']]:[['restaurant','Harborville Cafe'],['activity','Harborville Museum']]).map(([kind,nm])=>({kind,line:lineOf(b,nm as string)}))})}
   if(forced==='create_file'||(selects>=2&&names.includes('create_file')))return call('create_file',{title:'Harborville itinerary',body:'## Day 1\n- Arrival.\n## Sunday\n- Evening departure.',format:'pdf',kind:'itinerary'})
@@ -141,6 +144,10 @@ for(const legacy of [false,true])it(`${legacy?'LEGACY file (no stored origin, bo
  expect(call.history[0].content).not.toContain('Unverified itinerary');expect(call.opts.deliverable.kind).toBe('itinerary')
  expect(call.opts.memory).toContain('Chose: Stay in Harborville');expect(hoist.memoryQueries.at(-1)).toContain('Harborville')
  for(const banned of ['spend','set_reminder','create_reminder','invite'])expect(call.tools.join(',')).not.toContain(banned)
+ // Path regression: the recovered request takes the itinerary research path (the one with the 60s per-call cap), the bare words would not (that put the real turn on the generic 25s path).
+ const {itineraryNeedsResearch}=await import('@/lib/files/itinerary-contract')
+ expect(itineraryNeedsResearch(hoist.chatCalls[0].opts.deliverable.request)).toBe(true);expect(itineraryNeedsResearch('This one')).toBe(false)
+ const forced=gateway.map(b=>b.tool_choice?.function?.name).filter(Boolean);expect(forced).toContain('select_itinerary_candidates');expect(forced).toContain('create_file')
  expect(published).toHaveBeenCalledTimes(1)
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString();expect(html).toContain('Harborville Inn');expect(html).toContain('Evening departure')
  expect(hoist.sent.length).toBeGreaterThan(0);expect((await pgq(`select content from spectrum_messages where role='assistant' and content like '[file:%fictional.here.now%'`)).length).toBe(1)
@@ -360,4 +367,42 @@ it('PENDING ANSWER with a correction: the original complaint AND the added const
  await complain("That's not good");await complain('the first itinerary one, but 14-17 March only')
  const j=(await pgq(`select file_id,note_ids,state from dinghy_redo_jobs`));expect(j).toHaveLength(1);expect(j[0].file_id).toBe(a);expect(j[0].note_ids).toHaveLength(2);expect(j[0].state).toBe('done')
  const h=hoist.chatCalls[0].history[0].content;expect(h).toContain("That's not good");expect(h).toContain('14-17 March only')
+})
+// Production reply structure (normalizeInbound): a 'reply' content whose target is the outbound page message. All fictional.
+const nativeReply=(id:string,text:string,targetText:string)=>({id,direction:'inbound',content:{type:'reply',content:{type:'text',text},target:{id:'t1',direction:'outbound',content:{type:'text',text:targetText}}},sender:{handle:'+15550000000'},timestamp:new Date()}) as any
+const PAGE_MSG='[file: Unverified itinerary] https://empty.here.now/'
+const gatewayText=()=>gateway.map(b=>JSON.stringify(b.messages)).join('\n')
+for(const legacy of [true,false])it(`NATIVE reply "This one" to a ${legacy?'LEGACY (null origin)':'stored-origin'} page, redo off: the work runs on the page's original request, researched facts reach the rendered page`,async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','off');vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install({research:true});await seed({legacy});hoist.verdict='itinerary'
+ await handleSpectrumMessage(space,nativeReply('n'+(++seq),'This one',PAGE_MSG))
+ expect(await jobs()).toHaveLength(0)
+ const g=gatewayText();expect(gateway.length).toBeGreaterThan(0)
+ expect(g).toContain('Harborville');expect(g).toContain('Hotel and restaurant recommendations please')
+ expect(hoist.chatCalls[0].opts.deliverable.request).toContain(ORIGINAL);expect(hoist.chatCalls[0].opts.deliverable.request).toContain('This one')
+ expect(published).toHaveBeenCalledTimes(1)
+ const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
+ if(process.env.DUMP_HTML&&legacy)(await import('fs')).writeFileSync(process.env.DUMP_HTML,html)
+ expect(html).toContain('Harborville Inn');expect(html).toContain('Harborville Cafe');expect(html).not.toContain('Recommendations not verified')
+ if(legacy)expect((await pgq(`select origin_request from dinghy_files where url='https://empty.here.now/'`))[0].origin_request).toBe(ORIGINAL)
+})
+it('NATIVE reply to a legacy page whose request cannot be bound: honest stop before any research, nothing published',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','off');vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();await seed({legacy:true});hoist.verdict='itinerary'
+ await pgq(`insert into spectrum_messages(chat_guid,role,content,created_at) values ($1,'user','another request in the same window',now()-interval '29 minutes')`,[CHAT])
+ await handleSpectrumMessage(space,nativeReply('n'+(++seq),'This one',PAGE_MSG))
+ expect(gateway).toHaveLength(0);expect(published).not.toHaveBeenCalled();expect(texts().join('\n')).toMatch(/could not tell what that page was meant to be from/)
+})
+it('NATIVE reply to another user\'s or a revoked page: no origin recovered, no research',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','off');vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();await seed({legacy:false});hoist.verdict='itinerary'
+ await pgq(`update dinghy_files set revoked_at=now()`)
+ await handleSpectrumMessage(space,nativeReply('n'+(++seq),'This one',PAGE_MSG))
+ expect(gateway).toHaveLength(0);expect(published).not.toHaveBeenCalled();expect(texts().join('\n')).toMatch(/could not tell what that page was meant to be from/)
+})
+it('NATIVE reply while a kept redo note exists and redo is paused (proof revoked): no paid run, note kept',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','proof');vi.stubEnv('DINGHY_REDO_PROOF_CHAT',CHAT);vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();const fid=await seed({legacy:false});hoist.verdict='itinerary'
+ const note=(await pgq(`select id from spectrum_messages order by id limit 1`))[0].id
+ const f2=(await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,markdown,created_at) values ($1,$2,'Itinerary for Fictionville','itinerary','page','https://other.here.now/','x',now()-interval '20 minutes') returning id`,[U,CHAT]))[0].id
+ await pgq(`select redo_pending_open($1,$2,$3,$4)`,[U,CHAT,String(note),[fid,f2]])
+ await handleSpectrumMessage(space,nativeReply('n'+(++seq),'This one',PAGE_MSG))
+ expect(gateway).toHaveLength(0);expect(published).not.toHaveBeenCalled();expect(texts().join('\n')).toMatch(/earlier note is kept, but rebuilding pages is paused/)
+ expect((await pgq(`select 1 from dinghy_redo_pending where state='open'`)).length).toBe(1)
 })

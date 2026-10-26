@@ -7,7 +7,7 @@ import { realIntakeDeps } from '@/lib/spectrum/redo-intake-runtime'
 import { runOneRedoJob } from '@/lib/spectrum/redo-worker-runtime'
 import { enqueueOutbox } from '@/lib/spectrum/outbox'
 import { decideTurnDeliverable } from '@/lib/spectrum/deliverable-turn'
-import { deliveredFileContext, deliveredFileUrls } from '@/lib/files/deliverable-intent'
+import { deliveredFileContext } from '@/lib/files/deliverable-intent'
 import { fileUrlOf } from '@/lib/files/origin'
 
 export const runtime = 'nodejs'
@@ -48,8 +48,11 @@ export async function POST(req: Request): Promise<Response> {
     const deliverable = await decideTurnDeliverable({ text: complaint, full, afterFile: true, redoAllowed: true, sender: (ident as { handle?: string } | null)?.handle ?? undefined })
     // The authorization is spent by this model call whatever it says: never a second automatic try.
     if (!deliverable?.redo) { await retire('revoked'); return NextResponse.json({ verdict: 'recognition_failed', recognized: deliverable ? deliverable.kind : null }, { status: 200, headers }) }
-    const reply = await intakeRedo(chat, url, complaint, realIntakeDeps(async () => 'new_instruction'), { replied: null, candidates: deliveredFileUrls(full), complaintNoteId: a.note_id })
+    const reply = await intakeRedo(chat, url, complaint, realIntakeDeps(async () => 'new_instruction'), { replied: url, candidates: [], complaintNoteId: a.note_id })
     await enqueueOutbox(chat, 'reply', reply)
+    const { data: queued } = await db.from('dinghy_redo_jobs').select('id').eq('authorization_id', a.id).limit(1)
+    // Never claim a job exists when intake made none (it asked, refused, or could not start): say so, and leave the authorization for the operator to revoke.
+    if (!((queued as unknown[] | null)?.length)) return NextResponse.json({ verdict: 'no_job_created', outcome: null }, { status: 200, headers })
     const ran = await runOneRedoJob()
     return NextResponse.json({ verdict: ran.ran ? 'ran' : 'queued_for_cron_rescue', outcome: ran.outcome ?? null }, { headers })
 }

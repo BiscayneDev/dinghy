@@ -72,6 +72,7 @@ import {
 } from './beta-gate'
 import { earlierUserText, loadActiveRuns, steerNote } from './active-run'
 import { fileUrlOf, saveFileOrigin } from '@/lib/files/origin'
+import { recoverRepliedPageRequest, withPageRequest, REPLY_ORIGIN_REFUSAL, PENDING_PAUSED_REPLY } from './reply-origin'
 import { intakeRedo } from './redo-intake'
 import { realIntakeDeps } from './redo-intake-runtime'
 import { loadPendingRedo, redoJobsAllowed, redoMode } from './redo-jobs'
@@ -1072,6 +1073,23 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     // Two answers to the same question must not both start the itinerary: one atomic claim per question (the inbound-dedupe RPC). The loser, or a failed claim, is handled as an ordinary message.
     if (pendingQuestion && replyVerdict === 'answer' && !(await claimInboundDelivery(`itin-clarify:${createHash('sha256').update(`${chatGuid}\n${pendingQuestion.key}`).digest('hex')}`, chatGuid))) replyVerdict = null
     deliverable = continueAfterClarification(pendingQuestion, replyVerdict, text, deliverable)
+    // A native reply to a delivered page is about that page. Recover its own original request (strict, same checks as redo) so the work never runs on the bare words;
+    // when it cannot be recovered, say so and stop before any research. A kept redo note with redo paused is never turned into a paid run.
+    const repliedPage = replyTo?.text ? fileUrlOf(replyTo.text) : null
+    if (repliedPage && pendingRedo && !redoAllowed) {
+        const delivered = await sendText(space, chatGuid, 'reply', PENDING_PAUSED_REPLY)
+        if (delivered) await saveMessage(chatGuid, 'assistant', PENDING_PAUSED_REPLY).catch((err) => logErr('pending paused reply save failed', err))
+        return
+    }
+    if (repliedPage && deliverable && !deliverable.redo) {
+        const got = await recoverRepliedPageRequest(realIntakeDeps(async () => null), chatGuid, repliedPage)
+        if (got.ok) deliverable = { ...deliverable, request: withPageRequest(got.request, deliverable.request) }
+        else {
+            const delivered = await sendText(space, chatGuid, 'reply', REPLY_ORIGIN_REFUSAL)
+            if (delivered) await saveMessage(chatGuid, 'assistant', REPLY_ORIGIN_REFUSAL).catch((err) => logErr('reply origin refusal save failed', err))
+            return
+        }
+    }
     let askedQuestion = false
     const answeredQuestion = Boolean(pendingQuestion && replyVerdict === 'answer' && deliverable?.kind === 'itinerary')
     const itineraryJob = deliverable?.kind === 'itinerary'

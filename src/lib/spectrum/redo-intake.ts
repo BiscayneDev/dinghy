@@ -6,7 +6,7 @@ import type { UpsertResult } from './redo-jobs'
  * A correction after a delivered file. It never runs the redo here and never waits: it records the work as a durable job
  * (or adds to / cancels the active one) and answers truthfully. The job worker does the rest.
  */
-export interface RedoFileRow { id: string; created_at: string; origin_request: string | null; origin_google_derived: boolean; origin_kind: string | null; kind: string | null; lineage_id?: string | null; title?: string | null }
+export interface RedoFileRow { id: string; created_at: string; origin_request: string | null; origin_google_derived: boolean; origin_kind: string | null; kind: string | null; lineage_id?: string | null; title?: string | null; expires_at?: string | null }
 export interface IntakeDeps {
     userId(chatGuid: string): Promise<string | null>
     file(userId: string, chatGuid: string, url: string): Promise<RedoFileRow | null>
