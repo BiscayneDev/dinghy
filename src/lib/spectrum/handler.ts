@@ -42,7 +42,7 @@ import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
 import { CLARIFY_MARK, stripClarifyMark, pendingItineraryClarification, continueAfterClarification, decideClarificationReply, type ReplyVerdict } from '@/lib/files/itinerary-continuation'
-import { decideFollowUpDeliverable, deliverableIntentEnabled, deliveredFileContext, originalContract, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
+import { decideFollowUpDeliverable, deliverableIntentEnabled, artifactConversation, deliveredFileContext, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -70,7 +70,7 @@ import {
     GATE_WELCOME,
     type BetaRole,
 } from './beta-gate'
-import { earlierUserText, loadActiveRuns, steerNote } from './active-run'
+import { earlierUserText, loadActiveRuns, redoJobRunning, steerNote } from './active-run'
 import { claimInboundDelivery, enqueueOutbox, markOutboxFailed, markOutboxSent, type OutboxKind } from './outbox'
 import { briefableUserId, handleMuteIntent } from './briefing'
 import { chooseCurrentPlace, isPlaceOnlyMessage, placeStatement, travelAck } from './place'
@@ -1028,22 +1028,24 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     let redoFollowUp = false
     let redoHeldForRunningJob = false
     const afterFile = deliveredFileContext(full)
-    const previousContract = afterFile ? originalContract(full, selectDeliverable) : null
+    const conversationOfFile = afterFile ? artifactConversation(afterFile) : ''
+    const redoHash = afterFile ? createHash('sha1').update(`${chatGuid}\n${afterFile.line}`).digest('hex').slice(0, 16) : ''
     const decisionContext = JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
     if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
         // Flag on: the model already judges every turn; after a delivered file the same call also offers "redo" (no extra call).
-        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: afterFile ? JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000) : decisionContext, signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full), afterFile: Boolean(afterFile), previous: previousContract })
+        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: afterFile ? JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000) : decisionContext, signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full), afterFile: Boolean(afterFile), artifactConversation: conversationOfFile })
     } else {
         deliverable = selectDeliverable(full)
         // Flag off: when a delivered file is in recent history and the keyword matcher saw nothing, one bounded model call decides whether this is a redo request. Only a redo acts; any other answer leaves the turn as ordinary chat.
         if (!deliverable && afterFile) {
-            deliverable = await decideFollowUpDeliverable({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), previous: previousContract, signal: AbortSignal.timeout(8000) })
+            deliverable = await decideFollowUpDeliverable({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), artifactConversation: conversationOfFile, signal: AbortSignal.timeout(8000) })
         }
     }
     if (deliverable?.redo && afterFile) {
-        // One redo job per delivered file and reply generation: a second complaint during a running job is held, a retry after a failed redo (a new reply) or a revision after a new file is a new claim.
-        const key = `redo:${createHash('sha256').update(`${chatGuid}\n${afterFile.line}\n${afterFile.generation}`).digest('hex')}`
-        if (await claimInboundDelivery(key, chatGuid)) redoFollowUp = true
+        // One redo job per delivered file. Held when the job-state breadcrumbs show a redo for this file still running (the in-flight evidence), or when another turn wins the atomic claim in the same minute.
+        const running = await redoJobRunning(chatGuid, redoHash)
+        const claimed = !running && (await claimInboundDelivery(`redo:${redoHash}:${Math.floor(Date.now() / 60_000)}`, chatGuid))
+        if (claimed) redoFollowUp = true
         else {
             deliverable = null
             redoHeldForRunningJob = true
@@ -1086,6 +1088,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         // Read tools only for chats bound to a user with Google/PayBox connected;
         // everyone else gets the plain conversational path.
         await onStage('context', `preflight_ms=${Date.now() - turnStartedAt}`)
+        if (redoFollowUp) await onStage('context', `redo:${redoHash}`)
         const toolCtx = await withinTurn(deadlineAt, () => loadImessageToolContext(chatGuid)).catch((err) => {
             if (err instanceof TurnDeadlineExceeded) throw err
             logErr('tool context load failed', err)

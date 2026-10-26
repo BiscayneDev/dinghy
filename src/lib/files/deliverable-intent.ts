@@ -27,13 +27,13 @@ export function deliverableChoiceQuestion(afterFile = false) {
             comparison: 'Named options weighed side by side.',
             list: 'An enumerated list or checklist.',
             note: 'Another requested document body.',
-            ...(afterFile ? { redo: 'The message asks to fix, redo or improve the file that was just delivered, including a complaint about it. Not venting with no ask, a question, a cancellation, a request not to redo it, or a new unrelated topic.' } : {}),
+            ...(afterFile ? Object.fromEntries(KINDS.map((k) => [`redo_${k}`, `The message asks to fix, redo or improve the ${k} file that was just delivered, including a complaint about it. Not venting with no ask, a question, a cancellation, a request not to redo it, or a new unrelated topic.`])) : {}),
         },
     }
 }
 
 /** One bounded Jev judgment; throws on an unavailable or uncertain decision. */
-export async function decideDeliverable(opts: {afterFile?:boolean;gatewayUrl:string;apiKey:string;request:string;context:string;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<DeliverableContract | null> {
+export async function decideDeliverable(opts: {afterFile?:boolean;gatewayUrl:string;apiKey:string;request:string;context:string;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true }) | null> {
     const start = Date.now()
     const res = await (opts.fetch ?? fetch)(`${opts.gatewayUrl}/v1/decisions`, { method: 'POST', signal: opts.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ state: { request: opts.request, context: opts.context }, questions: { deliverable: deliverableChoiceQuestion(opts.afterFile) } }) })
     if (!res.ok) throw new Error('Jev deliverable decision service unavailable')
@@ -43,7 +43,7 @@ export async function decideDeliverable(opts: {afterFile?:boolean;gatewayUrl:str
     const a = r?.answers?.deliverable
     if (/stub/i.test(r?.provider ?? '') || /stub/i.test(r?.model ?? '') || a?.type !== 'choice' || !Number.isFinite(a.confidence) || a.confidence! < 0.6 || !a.choice || !a.probabilities || !Number.isFinite(a.probabilities[a.choice]) || a.probabilities[a.choice] < 0.6) throw new Error('Jev deliverable decision unavailable or uncertain')
     if (a.choice === 'none') return null
-    if (a.choice === 'redo' && opts.afterFile) return { kind: 'redo' as DeliverableKind, request: opts.request }
+    if (opts.afterFile && a.choice.startsWith('redo_') && (KINDS as string[]).includes(a.choice.slice(5))) return { kind: a.choice.slice(5) as DeliverableKind, request: opts.request, redo: true }
     if ((KINDS as string[]).includes(a.choice)) return { kind: a.choice as DeliverableKind, request: opts.request }
     throw new Error('Jev selected an unknown deliverable kind')
 }
@@ -51,60 +51,51 @@ export async function decideDeliverable(opts: {afterFile?:boolean;gatewayUrl:str
 /** The ownership policy: Jev decides on every turn when the flag is on. The legacy matcher
  * runs only as the outage fallback when the decision is unavailable or uncertain — a model
  * answer of "none" or a different kind overrides it. */
-export async function selectDeliverableModelOwned(opts: {afterFile?:boolean;previous?:DeliverableContract|null;gatewayUrl:string;apiKey:string;request:string;context:string;legacy:()=>DeliverableContract|null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true }) | null> {
-    const { legacy, previous, ...decisionOpts } = opts
-    const decided: DeliverableContract | null | undefined = await decideDeliverable(decisionOpts).catch(() => undefined)
-    if (decided && (decided.kind as string) === 'redo') return previous ? { kind: previous.kind, request: redoRequest(previous, opts.request), redo: true } : null
+export async function selectDeliverableModelOwned(opts: {afterFile?:boolean;artifactConversation?:string;gatewayUrl:string;apiKey:string;request:string;context:string;legacy:()=>DeliverableContract|null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true }) | null> {
+    const { legacy, artifactConversation, ...decisionOpts } = opts
+    let decided: (DeliverableContract & { redo?: true }) | null | undefined = await decideDeliverable(decisionOpts).catch(() => undefined)
+    // If the redo-bearing question is ever rejected, the ordinary question still runs so a turn after a file never loses model judgment.
+    if (decided === undefined && opts.afterFile) decided = await decideDeliverable({ ...decisionOpts, afterFile: false }).catch(() => undefined)
+    if (decided?.redo) return artifactConversation ? { kind: decided.kind, request: redoRequest(artifactConversation, opts.request), redo: true } : null
     return decided === undefined ? legacy() : decided
 }
 
 const FILE_LINE = /^\[file: /
 const FILE_WINDOW = 16
 const ACK_LINE = /^I am putting the itinerary together\./
+const HOLD_LINE = /^I am already redoing that\./
 
-/** The most recent delivered file in the recent history before the latest user turn, found by position, not by a clock: complaints can come hours later, after errors or other chat. `generation` counts assistant replies since that file, excluding the job acknowledgement, so a retry after a failed redo is a new generation while a second complaint during a running job is not. */
-export function deliveredFileContext(history: {role: string; content: string}[]): {line: string; generation: number} | null {
+/** The most recent delivered file in the recent history before the latest user turn, found by position, not by a clock: complaints can come hours later, after errors or other chat. */
+export function deliveredFileContext(history: {role: string; content: string}[]): {line: string; index: number; historyBefore: {role: string; content: string}[]} | null {
     const lastUser = history.map(m => m.role).lastIndexOf('user')
-    const before = (lastUser < 0 ? history : history.slice(0, lastUser)).slice(-FILE_WINDOW)
-    for (let i = before.length - 1; i >= 0; i--) {
-        const m = before[i]
-        if (m.role === 'assistant' && FILE_LINE.test(m.content)) {
-            const generation = before.slice(i + 1).filter(x => x.role === 'assistant' && !ACK_LINE.test(x.content)).length
-            return { line: m.content, generation }
-        }
+    const before = lastUser < 0 ? history : history.slice(0, lastUser)
+    const window = before.slice(-FILE_WINDOW)
+    for (let i = window.length - 1; i >= 0; i--) {
+        const m = window[i]
+        if (m.role === 'assistant' && FILE_LINE.test(m.content)) return { line: m.content, index: before.length - window.length + i, historyBefore: before }
     }
     return null
 }
 
-export function followsDeliveredFile(history: {role: string; content: string}[]): boolean {
-    return deliveredFileContext(history) !== null
+/** The conversation that produced the delivered file: every turn after the previous delivered file (or the start of history) up to and including this one, minus job acknowledgements and holding lines. It carries the full original request, clarifications and settled choices without keyword matching. Complaints and error replies are included as they are part of that exchange. */
+export function artifactConversation(file: {index: number; historyBefore: {role: string; content: string}[]}): string {
+    const h = file.historyBefore
+    let start = 0
+    for (let i = file.index - 1; i >= 0; i--) if (h[i].role === 'assistant' && FILE_LINE.test(h[i].content)) { start = i + 1; break }
+    return h.slice(start, file.index + 1)
+        .filter(m => !(m.role === 'assistant' && (ACK_LINE.test(m.content) || HOLD_LINE.test(m.content))))
+        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content).replace(/\s+/g, ' ').trim().slice(0, 700)}`)
+        .join('\n').slice(-3500)
 }
 
-export function lastDeliveredFileLine(history: {role: string; content: string}[]): string {
-    return deliveredFileContext(history)?.line ?? ''
-}
-
-export function redoRequest(previous: DeliverableContract | null, feedback: string): string {
-    return previous ? previous.request + '\n\nLatest user feedback on the result already sent (address it and redo the work): ' + feedback : feedback
+export function redoRequest(conversation: string, feedback: string): string {
+    return 'Conversation that produced the file already sent:\n' + conversation + '\n\nLatest user feedback on that file (address it and redo the work, keeping every request detail and settled choice above): ' + feedback
 }
 
 /** After a delivered file, one bounded model judgment (the same call the flag-on path already makes every turn) says whether the latest message asks to redo that file. Only a clear redo with a recoverable original request returns a contract; everything else (venting, question, cancel, don't-redo, unrelated, outage) returns null and the turn is ordinary chat. */
-export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;previous:DeliverableContract | null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true }) | null> {
-    const {previous, ...decisionOpts} = opts
-    if (!previous) return null
+export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;artifactConversation:string;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true }) | null> {
+    const {artifactConversation: conversation, ...decisionOpts} = opts
     const decided = await decideDeliverable({...decisionOpts, afterFile: true}).catch(() => null)
-    if (!decided || (decided.kind as string) !== 'redo') return null
-    return { kind: previous.kind, request: redoRequest(previous, opts.request), redo: true } as DeliverableContract & { redo: true }
-}
-
-/** The deliverable the delivered file answered: the nearest earlier user message whose own context the matcher reads as a deliverable request, skipping complaints and error replies in between. */
-export function originalContract(history: {role: string; content: string}[], select: (h: {role: string; content: string}[]) => DeliverableContract | null): DeliverableContract | null {
-    let seen = 0
-    for (let end = history.length - 1; end > 0 && seen < 8; end--) {
-        if (history[end - 1].role !== 'user') continue
-        seen++
-        const c = select(history.slice(0, end))
-        if (c) return c
-    }
-    return null
+    if (!decided?.redo) return null
+    return { kind: decided.kind, request: redoRequest(conversation, opts.request), redo: true }
 }

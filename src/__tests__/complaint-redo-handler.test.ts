@@ -4,7 +4,7 @@ const state=vi.hoisted(()=>({messages:[] as {role:string;content:string;at?:stri
 const {published}=vi.hoisted(()=>({published:vi.fn()}))
 vi.mock('@/lib/files/share',()=>({shareEnabled:()=>true,publishSite:published,revokeSite:vi.fn(),updateSite:vi.fn()}))
 vi.mock('@/lib/files/imagery',async orig=>({...await orig<any>(),verifyShareMetadata:async()=>true}))
-vi.mock('@/lib/supabase/server',()=>{const chain:any=new Proxy(function(){},{get:(_t,k)=>k==='then'?(r:any)=>r({data:[],error:null,count:0}):chain,apply:()=>chain});return {createServerClient:()=>chain}})
+vi.mock('@/lib/supabase/server',()=>{const chain:any=new Proxy(function(){},{get:(_t,k)=>k==='then'?(r:any)=>r({data:(globalThis as any).__rows??[],error:null,count:0}):chain,apply:()=>chain});return {createServerClient:()=>chain}})
 vi.mock('@/spectrum/store',async orig=>({...await orig<any>(),ensureIdentity:async()=>{},isGoogleConnected:async()=>false,isPayboxConnected:async()=>false,isGithubConnected:async()=>false,isHealthConnected:async()=>false,loadFacts:async()=>[],loadHistory:async()=>(state.freeze??state.messages).map((m:any)=>({...m})),saveMessage:async(_g:string,role:string,content:string)=>{state.messages.push({role,content,at:new Date().toISOString()})},saveMessageReturningId:async()=>'id',updateMessageContent:async()=>{},createConnectLink:async()=>'https://x.test'}))
 vi.mock('@/lib/spectrum/beta-gate',async orig=>({...await orig<any>(),getBetaRole:async()=>'owner'}))
 vi.mock('@/lib/spectrum/outbox',async orig=>({...await orig<any>(),claimInboundDelivery:async(id:string)=>{if(state.claims.has(id))return false;state.claims.add(id);return true},enqueueOutbox:async()=>'o',markOutboxSent:async()=>{},markOutboxFailed:async()=>{}}))
@@ -26,8 +26,8 @@ const call=(name:string,args:unknown)=>new Response(JSON.stringify({choices:[{fi
 const stop=(c:string)=>new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:c}}]}))
 const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Candidate lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' | ')[0].slice(1)):0}
 let gateway:any[]=[],selects=0
-beforeEach(()=>{state.claims=new Set();state.freeze=null;state.messages=[];state.sent=[];state.chatCalls=[];gateway=[];selects=0;state.decisions=0;state.verdict2='redo';published.mockReset();published.mockResolvedValue({url:'https://fictional.here.now/',expiresAt:new Date(Date.now()+86400000).toISOString(),files:[]})})
-afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs()})
+beforeEach(()=>{state.claims=new Set();state.freeze=null;state.messages=[];state.sent=[];state.chatCalls=[];gateway=[];selects=0;state.decisions=0;state.verdict2='redo_itinerary';published.mockReset();published.mockResolvedValue({url:'https://fictional.here.now/',expiresAt:new Date(Date.now()+86400000).toISOString(),files:[]})})
+afterEach(()=>{(globalThis as any).__rows=undefined;(globalThis as any).__rejectRedo=false;vi.unstubAllGlobals();vi.unstubAllEnvs()})
 const space={id:'any;-;+15550000000',send:async(t:any)=>{state.sent.push(t)}}
 const texts=()=>state.sent.filter((x:any)=>typeof x==='string') as string[]
 const inbound=(id:string,text:string)=>({id,direction:'inbound',content:{type:'text',text},sender:{handle:'+15550000000'},timestamp:new Date()}) as any
@@ -39,7 +39,7 @@ function install(opts:{searchOnly?:boolean;blank?:boolean}={}){
   const url=String(u)
   if(url.includes('tavily'))return new Response(JSON.stringify({results:[{title:'Fictional listings',url:'https://harbor.test/v',content:'Hotel, dining and museum public listings.'}]}))
   if(url==='https://harbor.test/v')return new Response('<html><title>listings</title><body>public listings. Harborville Inn rooms. Harborville Cafe dinner. Harborville Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
-  if(url.endsWith('/v1/decisions')){state.decisions++;if(state.verdict2===null)return new Response('no',{status:500});const v=state.verdict2;return new Response(JSON.stringify({provider:'jev',model:'jev',answers:{deliverable:{type:'choice',choice:v,confidence:0.9,probabilities:{[v]:0.9,none:0.05,itinerary:v==='itinerary'?0.9:0.05}}}}))}
+  if(url.endsWith('/v1/decisions')){state.decisions++;if((globalThis as any).__rejectRedo&&String(init.body).includes('redo_'))return new Response('bad',{status:400});if(state.verdict2===null)return new Response('no',{status:500});const v=state.verdict2;return new Response(JSON.stringify({provider:'jev',model:'jev',answers:{deliverable:{type:'choice',choice:v,confidence:0.9,probabilities:{none:0.05,itinerary:0.05,[v]:0.9}}}}))}
   if(!url.includes('gateway.test'))return new Response('{}')
   const b=JSON.parse(init.body);if(b.max_tokens===8)return stop('yes')
   gateway.push(b)
@@ -63,6 +63,7 @@ it('"That\'s not good" after an empty page: the model judges it a redo, the orig
  expect(texts()[0]).toBe('I am putting the itinerary together. I will send it here when it is ready.')
  expect(published).toHaveBeenCalledTimes(1)
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
+ if(process.env.REDO_FIXTURE_OUT)(await import('fs')).writeFileSync(process.env.REDO_FIXTURE_OUT,html)
  expect(html).toContain('Harborville Inn');expect(html).toContain('Evening departure')
  expect(texts().join('\n')).not.toMatch(/couldn.t make that file|Ask me again|Unverified itinerary/)
 })
@@ -129,4 +130,45 @@ it('flag on: venting is none, ordinary turn',async()=>{
  vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();state.verdict2='none';state.messages=delivered() as any
  await handleSpectrumMessage(space,inbound('f2','ugh'))
  expect(state.decisions).toBe(1);expect(state.chatCalls[0]?.opts.deliverable??null).toBeNull();expect(published).not.toHaveBeenCalled()
+})
+
+const ago=(ms:number)=>new Date(Date.now()-ms).toISOString()
+it('request that never matched the keyword matcher: the model-originated request, clarification and artifact travel in full',async()=>{
+ install();const ask='Surprise the Ortegas with a fun Saturday near the harbour.'
+ state.messages=[{role:'user',content:ask,at:ago(9e6)},{role:'assistant',content:'Quick one: do they like museums?',at:ago(9e6)},{role:'user',content:'Yes, and no seafood.',at:ago(9e6)},{role:'assistant',content:'[file: Saturday plan] https://a.here.now/',at:ago(9e6)}] as any
+ await handleSpectrumMessage(space,inbound('n1',"That's not good"))
+ const r=state.chatCalls[0].opts.deliverable.request as string
+ expect(r).toContain(ask);expect(r).toContain('Yes, and no seafood.');expect(r).toContain('Saturday plan');expect(r).toContain("That's not good")
+})
+it('two different deliverables in history: the redo is bound to the latest file, not the earlier one',async()=>{
+ install();const mapAsk='Drop the fictional cafes on a map of Harborville.',planAsk='Plan a quiet Sunday for the fictional Ortegas.'
+ state.messages=[{role:'user',content:mapAsk,at:ago(9e6)},{role:'assistant',content:'[file: Cafe map] https://m.here.now/',at:ago(9e6)},{role:'user',content:'thanks',at:ago(8e6)},{role:'assistant',content:'Anytime.',at:ago(8e6)},{role:'user',content:planAsk,at:ago(7e6)},{role:'assistant',content:'[file: Sunday plan] https://p.here.now/',at:ago(7e6)}] as any
+ await handleSpectrumMessage(space,inbound('t1','this is wrong'))
+ const r=state.chatCalls[0].opts.deliverable.request as string
+ expect(r).toContain(planAsk);expect(r).not.toContain(mapAsk);expect(r).not.toContain('Cafe map')
+})
+it('a redo still running (job-state breadcrumbs): second and third complaints are held, no second job, the holding reply does not open a new claim',async()=>{
+ install();state.messages=delivered() as any
+ const {createHash}=await import('crypto');const line=(delivered() as any[]).at(-1).content
+ const hash=createHash('sha1').update(`${space.id}\n${line}`).digest('hex').slice(0,16)
+ ;(globalThis as any).__rows=[{run_id:'r1',message_id:'x',stage:'context',detail:`redo:${hash}`,created_at:ago(40e3)},{run_id:'r1',message_id:'x',stage:'tool',detail:'web_search',created_at:ago(5e3)}]
+ await handleSpectrumMessage(space,inbound('p1',"That's not good"))
+ state.messages=[...delivered(),{role:'user',content:"That's not good",at:ago(3e3)},{role:'assistant',content:'I am already redoing that. The new version will land here when it is ready.',at:ago(2e3)}] as any
+ await handleSpectrumMessage(space,inbound('p2','hello?? the page is bad'))
+ expect(state.chatCalls).toHaveLength(0);expect(published).not.toHaveBeenCalled()
+ expect(texts().filter(t=>t.includes('already redoing that'))).toHaveLength(2)
+})
+it('a finished redo run (terminal stage) does not hold a later complaint',async()=>{
+ install();state.messages=delivered() as any
+ const {createHash}=await import('crypto');const line=(delivered() as any[]).at(-1).content
+ const hash=createHash('sha1').update(`${space.id}\n${line}`).digest('hex').slice(0,16)
+ ;(globalThis as any).__rows=[{run_id:'r1',message_id:'x',stage:'context',detail:`redo:${hash}`,created_at:ago(100e3)},{run_id:'r1',message_id:'x',stage:'failed',detail:null,created_at:ago(90e3)}]
+ await handleSpectrumMessage(space,inbound('q1',"That's not good"))
+ expect(published).toHaveBeenCalledTimes(1)
+})
+
+it('flag on, redo-bearing question rejected by the service: the ordinary question still runs (two calls only on that failure)',async()=>{
+ vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();(globalThis as any).__rejectRedo=true;state.verdict2='itinerary';state.messages=delivered() as any
+ await handleSpectrumMessage(space,inbound('j1','Make me a new itinerary for fictional travellers to Harborville with hotel and restaurant recommendations'))
+ expect(state.decisions).toBe(2);expect(state.chatCalls[0].opts.deliverable.kind).toBe('itinerary')
 })
