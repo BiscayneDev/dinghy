@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase/server'
 import { briefableUserId } from './briefing'
-import { activeRedoJobFor, cancelRedoJob, upsertRedoJob } from './redo-jobs'
+import { activeRedoJobFor, cancelRedoJob, openRedoPending, upsertRedoJob } from './redo-jobs'
 import { bindLegacyOrigin, loadLegacyEvidence, type IntakeDeps } from './redo-intake'
 import type { HeldNoteVerdict } from '@/lib/files/deliverable-intent'
 
@@ -29,6 +29,6 @@ export function realIntakeDeps(heldVerdict: () => Promise<HeldNoteVerdict | null
             const id = (data as { id?: string | number }[] | null)?.[0]?.id
             return id == null ? null : String(id)
         },
-        active: activeRedoJobFor, upsert: upsertRedoJob, cancel: cancelRedoJob, heldVerdict,
+        active: activeRedoJobFor, upsert: upsertRedoJob, cancel: cancelRedoJob, heldVerdict, openPending: openRedoPending,
     }
 }

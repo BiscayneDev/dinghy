@@ -98,6 +98,23 @@ export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:
     return decided?.redo ? { kind: decided.kind, request: opts.request, redo: true } : null
 }
 
+/** The user was asked which page a complaint is about and answered in words. One bounded judgment picks a candidate by number, or says the answer names none of them. Unclear returns null and the answer is treated as ordinary chat; the kept complaint stays until it expires. */
+export async function decidePendingTarget(opts: {gatewayUrl:string;apiKey:string;answer:string;pages:string[];signal?:AbortSignal;fetch?:typeof fetch}): Promise<number | 'neither' | null> {
+    try {
+        const choices: Record<string, string> = {}
+        opts.pages.forEach((t, i) => { choices['page_' + i] = 'The page titled "' + t.replace(/"/g, "'") + '".' })
+        choices.neither = 'The answer does not pick one of these pages (a new topic, or it says never mind).'
+        const res = await (opts.fetch ?? fetch)(`${opts.gatewayUrl}/v1/decisions`, { method: 'POST', signal: opts.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ state: { answer: opts.answer, pages: opts.pages }, questions: { pendingTarget: { type: 'choice', instructions: 'The user complained about a delivered page and was asked which page they meant. Decide which page their latest message picks.', choices } } }) })
+        if (!res.ok) return null
+        const r = (await res.json()) as { provider?: string; model?: string; answers?: { pendingTarget?: { type?: string; choice?: string; confidence?: number; probabilities?: Record<string, number> } } }
+        const a = r?.answers?.pendingTarget
+        if (/stub/i.test(r?.provider ?? '') || /stub/i.test(r?.model ?? '') || a?.type !== 'choice' || !a.choice || !Number.isFinite(a.confidence) || a.confidence! < 0.7 || !a.probabilities || !(a.probabilities[a.choice] >= 0.7)) return null
+        if (a.choice === 'neither') return 'neither'
+        const m = /^page_(\d+)$/.exec(a.choice)
+        return m && Number(m[1]) < opts.pages.length ? Number(m[1]) : null
+    } catch { return null }
+}
+
 export type HeldNoteVerdict = 'repeat' | 'new_instruction' | 'stop'
 
 /** A redo is already running and the user wrote again. One bounded judgment: the same complaint again, a changed or added instruction (must survive into the next result), or a cancel / do-not-redo. Unavailable or uncertain returns null and the caller keeps the note (never drops a possible correction). */

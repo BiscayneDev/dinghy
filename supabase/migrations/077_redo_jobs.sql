@@ -49,6 +49,9 @@ create table public.dinghy_redo_authorizations (
   scope text not null default 'single_proof' check (scope = 'single_proof'),
   state text not null default 'armed' check (state in ('armed','consumed','revoked')),
   job_id uuid,
+  -- Optional binding for an operator-run proof: the exact stored page and stored complaint to act on. Ids only.
+  file_id uuid references public.dinghy_files(id) on delete cascade,
+  note_id text,
   created_at timestamptz not null default now(),
   consumed_at timestamptz
 );
@@ -103,6 +106,47 @@ begin
     return jsonb_build_object('status','appended','job_id',j.id,'revision',j.note_revision,'phase',j.phase);
   end;
 end $$;
+
+-- A complaint that could belong to more than one page is kept (as the id of the user's own stored message) until the user says which page.
+-- Ids only, owner and chat scoped, one open per chat, expires on its own, and is dropped when the user says it was neither.
+create table public.dinghy_redo_pending (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  chat_guid text not null,
+  note_id text not null,
+  candidate_file_ids uuid[] not null,
+  state text not null default 'open' check (state in ('open','resolved','dropped')),
+  expires_at timestamptz not null default now() + interval '60 minutes',
+  created_at timestamptz not null default now()
+);
+create unique index dinghy_redo_pending_one_open on public.dinghy_redo_pending (user_id, chat_guid) where state = 'open';
+alter table public.dinghy_redo_pending enable row level security;
+revoke all on public.dinghy_redo_pending from anon, authenticated, public;
+grant select on public.dinghy_redo_pending to service_role;
+
+create or replace function public.redo_pending_open(p_user uuid, p_chat text, p_note text, p_files uuid[])
+returns uuid language plpgsql security definer set search_path = public as $$
+declare pid uuid;
+begin
+  if not exists (select 1 from public.spectrum_identities where user_id = p_user and chat_guid = p_chat) then return null; end if;
+  if not exists (select 1 from public.spectrum_messages where id::text = p_note and chat_guid = p_chat and role = 'user') then return null; end if;
+  if (select count(*) from public.dinghy_files where id = any(p_files) and user_id = p_user and deleted_at is null and revoked_at is null) <> coalesce(array_length(p_files, 1), 0) then return null; end if;
+  delete from public.dinghy_redo_pending where created_at < now() - interval '1 day';
+  update public.dinghy_redo_pending set state = 'dropped' where user_id = p_user and chat_guid = p_chat and state = 'open';
+  insert into public.dinghy_redo_pending (user_id, chat_guid, note_id, candidate_file_ids) values (p_user, p_chat, p_note, p_files) returning id into pid;
+  return pid;
+end $$;
+
+create or replace function public.redo_pending_close(p_user uuid, p_chat text, p_id uuid, p_state text)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if p_state not in ('resolved','dropped') then return false; end if;
+  update public.dinghy_redo_pending set state = p_state where id = p_id and user_id = p_user and chat_guid = p_chat and state = 'open';
+  return found;
+end $$;
+revoke all on function public.redo_pending_open(uuid,text,text,uuid[]) from public, anon, authenticated;
+revoke all on function public.redo_pending_close(uuid,text,uuid,text) from public, anon, authenticated;
+grant execute on function public.redo_pending_open(uuid,text,text,uuid[]), public.redo_pending_close(uuid,text,uuid,text) to service_role;
 
 -- Lease claim. A lease that expired before any external step (queued/building) is resumed once.
 -- A lease that expired at or after publishing is NOT retried: the outcome is unknown, so the job becomes blocked.

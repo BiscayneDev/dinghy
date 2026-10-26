@@ -74,7 +74,8 @@ import { earlierUserText, loadActiveRuns, steerNote } from './active-run'
 import { fileUrlOf, saveFileOrigin } from '@/lib/files/origin'
 import { intakeRedo } from './redo-intake'
 import { realIntakeDeps } from './redo-intake-runtime'
-import { redoJobsAllowed } from './redo-jobs'
+import { loadPendingRedo, redoJobsAllowed, redoMode } from './redo-jobs'
+import { resolvePendingRedo } from './redo-pending'
 import { claimInboundDelivery, enqueueOutbox, markOutboxFailed, markOutboxSent, type OutboxKind } from './outbox'
 import { briefableUserId, handleMuteIntent } from './briefing'
 import { chooseCurrentPlace, isPlaceOnlyMessage, placeStatement, travelAck } from './place'
@@ -1033,7 +1034,18 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     let redoRefusal: string | null = null
     const afterFile = deliveredFileContext(full)
     // Whether redo jobs may start for this chat right now (flag mode and, in proof mode, an armed one-shot authorization). Read once, only when a page was recently delivered.
-    const redoAllowed = afterFile ? await redoJobsAllowed(chatGuid) : false
+    const pendingRedo = redoMode() !== 'off' ? await loadPendingRedo(chatGuid) : null
+    const redoAllowed = afterFile || pendingRedo ? await redoJobsAllowed(chatGuid) : false
+    if (pendingRedo && redoAllowed) {
+        // The user was asked which page their complaint was about; this message may be the answer. The kept complaint continues automatically.
+        const pendingReply = await resolvePendingRedo(chatGuid, text, replyTo, pendingRedo).catch((err) => { logErr('redo pending failed', err); return null })
+        if (pendingReply) {
+            const delivered = await sendText(space, chatGuid, 'reply', pendingReply)
+            if (delivered) await saveMessage(chatGuid, 'assistant', pendingReply).catch((err) => logErr('redo reply save failed', err))
+            await import('./redo-worker-runtime').then((m) => m.kickRedoJobs(handlerEntryAt)).catch((err) => logErr('redo kick failed', err))
+            return
+        }
+    }
     const decisionContext = JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
     if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
         // Flag on: the model already judges every turn; after a delivered file the same call also offers "redo" (no extra call).

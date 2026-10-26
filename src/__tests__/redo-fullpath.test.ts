@@ -20,7 +20,7 @@ vi.mock('@/lib/supabase/server',()=>({createServerClient:()=>{
   const add=(s:string,...v:any[])=>{const base=q.p.length;q.w.push(s.replace(/\$\$/g,()=>'$'+(base+1)));q.p.push(...v)}
   const b:any={select:(c?:string)=>{if(c)q.cols=c;return b},insert:(r:any)=>{q.op='insert';q.payload=r;return b},update:(r:any)=>{q.op='update';q.payload=r;return b},
    eq:(k:string,v:any)=>{add(`${k} = $$`,v);return b},in:(k:string,v:any[])=>{add(`${k} = any($$)`,v.map(String));return b},is:(k:string,v:any)=>{q.w.push(v===null?`${k} is null`:`${k} is ${v}`);return b},
-   like:(k:string,v:string)=>{add(`${k} like $$`,v);return b},gte:(k:string,v:any)=>{add(`${k} >= $$`,v);return b},lte:(k:string,v:any)=>{add(`${k} <= $$`,v);return b},
+   like:(k:string,v:string)=>{add(`${k} like $$`,v);return b},gte:(k:string,v:any)=>{add(`${k} >= $$`,v);return b},gt:(k:string,v:any)=>{add(`${k} > $$`,v);return b},lte:(k:string,v:any)=>{add(`${k} <= $$`,v);return b},
    or:(s:string)=>{const parts=s.split(',').map(x=>{const [c,op,...r]=x.split('.');const val=r.join('.');if(op==='is')return `${c} is null`;q.p.push(val);return `${c} = $${q.p.length}`});q.w.push('('+parts.join(' or ')+')');return b},
    not:()=>b,order:(c:string,o?:any)=>{q.ord=` order by ${c} ${o?.ascending===false?'desc':'asc'}`;return b},limit:(n:number)=>{q.lim=` limit ${n}`;return b},
    maybeSingle:()=>{q.single=true;return b},single:()=>{q.single=true;return b}}
@@ -45,7 +45,7 @@ vi.mock('@/spectrum/store',async orig=>({...await orig<any>(),ensureIdentity:asy
  saveMessage:async(_g:string,role:string,content:string)=>{await hoist.pg.query(`insert into spectrum_messages(chat_guid,role,content) values ($1,$2,$3)`,[CHAT,role,content])},saveMessageReturningId:async()=>'id',updateMessageContent:async()=>{},createConnectLink:async()=>'https://x.test'}))
 vi.mock('@/lib/spectrum/briefing',async orig=>({...await orig<any>(),briefableUserId:async()=>'00000000-0000-0000-0000-0000000000a1'}))
 vi.mock('@/lib/spectrum/beta-gate',async orig=>({...await orig<any>(),getBetaRole:async()=>'owner'}))
-vi.mock('@/lib/spectrum/outbox',async orig=>({...await orig<any>(),claimInboundDelivery:async()=>true,enqueueOutbox:async()=>'o',markOutboxSent:async()=>{},markOutboxFailed:async()=>{}}))
+vi.mock('@/lib/spectrum/outbox',async orig=>({...await orig<any>(),claimInboundDelivery:async()=>true,enqueueOutbox:async(_c:any,_k:any,t:string)=>{((globalThis as any).__enq??=[]).push(t);return 'o'},markOutboxSent:async()=>{},markOutboxFailed:async()=>{}}))
 vi.mock('@/lib/data-portability/erasure-state',async orig=>({...await orig<any>(),assertAccountActive:async()=>{},erasureEnabled:()=>false,isEraseIntent:()=>false}))
 vi.mock('@/lib/allowance',async orig=>({...await orig<any>(),allowanceUsedUpMessage:()=>'',claimLimitNotice:async()=>false,isOverDailyAllowance:async()=>({over:false})}))
 vi.mock('@/lib/spectrum/rate-limit',async orig=>({...await orig<any>(),hitRateLimit:async()=>false}))
@@ -75,6 +75,7 @@ function install(opts:{searchOnly?:boolean;blank?:boolean;onGateway?:()=>Promise
   const url=String(u)
   if(url.includes('tavily'))return new Response(JSON.stringify({results:[{title:'Fictional listings',url:'https://harbor.test/v',content:'Hotel, dining and museum public listings.'}]}))
   if(url==='https://harbor.test/v')return new Response('<html><title>listings</title><body>public listings. Harborville Inn rooms. Harborville Cafe dinner. Harborville Museum tickets. Rooms $200. Menu served. Hours, prices and availability unverified.</body></html>')
+  if(url.endsWith('/v1/decisions')&&String(init.body).includes('pendingTarget')){let c=(globalThis as any).__pend??'page_0';if(c==='orig')c='page_'+JSON.parse(init.body).state.pages.indexOf('Unverified itinerary');return new Response(JSON.stringify({provider:'jev',model:'jev',answers:{pendingTarget:{type:'choice',choice:c,confidence:0.9,probabilities:{[c]:0.9}}}}))}
   if(url.endsWith('/v1/decisions')&&String(init.body).includes('heldNote')){const nv=hoist.held;return new Response(JSON.stringify({provider:'jev',model:'jev',answers:{heldNote:{type:'choice',choice:nv,confidence:0.9,probabilities:{repeat:0.05,new_instruction:0.05,stop:0.05,[nv]:0.9}}}}))}
   if(url.endsWith('/v1/decisions')){hoist.decisions++;if((globalThis as any).__rejectRedo&&String(init.body).includes('redo_'))return new Response('bad',{status:400});if(hoist.verdict===null)return new Response('no',{status:500});const v=hoist.verdict;return new Response(JSON.stringify({provider:'jev',model:'jev',answers:{deliverable:{type:'choice',choice:v,confidence:0.9,probabilities:{none:0.05,itinerary:0.05,[v]:0.9}}}}))}
   if(!url.includes('gateway.test'))return new Response('{}')
@@ -274,12 +275,35 @@ it('PROOF: a crash before any external step fails the job, it is never resumed o
  expect(published).not.toHaveBeenCalled();expect((await pgq(`select state from dinghy_redo_authorizations`))[0].state).toBe('consumed')
  const ob=(await pgq(`select text from spectrum_outbox`)).map((r:any)=>r.text).join('\n');expect(ob).toMatch(/Nothing new was sent/)
 })
-it('TARGET: two different pages in the recent chat and no native reply: ask which page, change and cancel nothing',async()=>{
- vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed()
- await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,markdown,origin_request,origin_kind) values ($1,$2,'Other page','itinerary','page','https://other.here.now/','m','Plan a different fictional trip.','itinerary')`,[U,CHAT])
+async function twoPages(){
+ const a=await seed()
+ const o=(await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,markdown,origin_request,origin_kind) values ($1,$2,'Other page','itinerary','page','https://other.here.now/','m','Plan a different fictional trip.','itinerary') returning id`,[U,CHAT]))[0].id
  await pgq(`insert into spectrum_messages(chat_guid,role,content) values ($1,'assistant','[file: Other page] https://other.here.now/')`,[CHAT])
+ return {a,o}
+}
+const noteOf=async(text:string)=>(await pgq(`select id from spectrum_messages where role='user' and content=$1 order by id desc limit 1`,[text]))[0].id
+it('TARGET: two different pages and no native reply: ask which, keep the complaint, change nothing; the answer in words continues it automatically with the original complaint',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();const {a}=await twoPages();(globalThis as any).__kick=true;(globalThis as any).__pend='orig'
  hoist.sent=[];await complain("That's not good")
- expect(await jobs()).toHaveLength(0);expect(texts().join('\n')).toMatch(/Which page do you mean: "Other page" or "Unverified itinerary"/);expect(published).not.toHaveBeenCalled()
+ expect(await jobs()).toHaveLength(0);expect(texts().join('\n')).toMatch(/Which page do you mean: "Other page" or "Unverified itinerary"/);expect(texts().join('\n')).toMatch(/kept your note for the next hour/);expect(published).not.toHaveBeenCalled()
+ const pend=await pgq(`select note_id,state,candidate_file_ids from dinghy_redo_pending`);expect(pend).toHaveLength(1);expect(pend[0].state).toBe('open');expect(pend[0].note_id).toBe(String(await noteOf("That's not good")))
+ hoist.sent=[];await complain('the first itinerary one')
+ const j=await pgq(`select file_id,state,note_ids from dinghy_redo_jobs`);expect(j).toHaveLength(1);expect(j[0].file_id).toBe(a);expect(j[0].note_ids).toEqual([pend[0].note_id])
+ expect(j[0].state).toBe('done');expect(hoist.chatCalls[0].history[0].content).toContain("That's not good");expect(hoist.chatCalls[0].history[0].content).not.toContain('the first itinerary one')
+ expect((await pgq(`select state from dinghy_redo_pending`))[0].state).toBe('resolved')
+})
+it('TARGET: a native reply answers the question with the kept complaint; an answer that names neither drops it; an expired one is ignored',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();const {a}=await twoPages();(globalThis as any).__kick=false
+ await complain("That's not good")
+ await handleSpectrumMessage(space,{id:'rp9',direction:'inbound',content:{type:'reply',content:{type:'text',text:'this one'},target:{id:'t1',direction:'outbound',content:{type:'text',text:'Here: https://empty.here.now/'}}},sender:{handle:'+15550000000'},timestamp:new Date()} as any)
+ const j=await pgq(`select file_id,note_ids from dinghy_redo_jobs`);expect(j).toHaveLength(1);expect(j[0].file_id).toBe(a);expect(hoist.decisions).toBe(1)
+})
+it('TARGET: neither drops the kept complaint; an expired kept complaint is not used',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();await twoPages();(globalThis as any).__kick=false;(globalThis as any).__pend='neither'
+ await complain("That's not good");expect(await pgq(`select 1 from dinghy_redo_pending where state='open'`)).toHaveLength(1)
+ hoist.verdict='none';await complain('actually never mind, something else');expect((await pgq(`select state from dinghy_redo_pending`))[0].state).toBe('dropped');expect(await jobs()).toHaveLength(0)
+ ;(globalThis as any).__pend='page_0';await complain("That's not good");await pgq(`update dinghy_redo_pending set expires_at=now()-interval '1 minute' where state='open'`)
+ await complain('the first one');expect(await jobs()).toHaveLength(0)
 })
 it('TARGET: a native reply to an earlier page picks exactly that page',async()=>{
  vi.stubEnv('DINGHY_REDO_JOBS','on');install();const a=await seed()
@@ -307,3 +331,17 @@ it('LINEAGE: a correction about an unrelated page is its own job, queued behind 
  const st=await pgq(`select file_id,state,cancel_requested from dinghy_redo_jobs order by created_at`);expect(st.find((x:any)=>x.file_id===b)).toMatchObject({state:'queued',cancel_requested:false})
 })
 
+
+it('PROOF ROUTE: replays a STORED complaint on a STORED page with no new message in the chat; one run, then the route refuses',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','proof');vi.stubEnv('DINGHY_REDO_PROOF_CHAT',CHAT);vi.stubEnv('CRON_SECRET','s3cret-fictional');install();const fid=await seed({legacy:true})
+ await pgq(`insert into spectrum_messages(chat_guid,role,content,created_at) values ($1,'user',$2,now()-interval '20 minutes')`,[CHAT,"That's not good"]);const nid=String(await noteOf("That's not good"))
+ await pgq(`insert into dinghy_redo_authorizations(user_id,chat_guid,file_id,note_id) values ($1,$2,$3,$4)`,[U,CHAT,fid,nid])
+ const {POST}=await import('@/app/api/internal/redo-proof/route');const before=(await pgq(`select count(*)::int c from spectrum_messages where role='user'`))[0].c
+ const mk=(t:string)=>new Request('http://x/api/internal/redo-proof',{method:'POST',headers:{authorization:'Bearer '+t}})
+ expect((await POST(mk('wrong'))).status).toBe(401)
+ const r=await POST(mk('s3cret-fictional'));expect(await r.json()).toMatchObject({verdict:'ran',outcome:'done'})
+ expect((await pgq(`select count(*)::int c from spectrum_messages where role='user'`))[0].c).toBe(before)
+ expect((await jobs())[0]).toMatchObject({state:'done',note_ids:[nid]});expect(published).toHaveBeenCalledTimes(1)
+ expect(((globalThis as any).__enq as string[]).join('\n')).toMatch(/rebuilding that page/)
+ expect((await POST(mk('s3cret-fictional'))).status).toBe(409);expect(published).toHaveBeenCalledTimes(1)
+})

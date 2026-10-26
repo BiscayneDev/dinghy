@@ -9,7 +9,7 @@ function intakeDeps(over: Partial<IntakeDeps> = {}): IntakeDeps {
     return {
         userId: async () => 'u1', file: async () => FILE, legacy: async () => null, saveLegacyOrigin: async () => true, noteId: async () => 'm9',
         active: async () => null, upsert: vi.fn(async () => ({ status: 'created' as const, jobId: 'j1', revision: 1 })), cancel: vi.fn(async () => ({ status: 'running', phase: 'building' })),
-        heldVerdict: async () => 'new_instruction', ...over,
+        heldVerdict: async () => 'new_instruction', openPending: async () => 'p1', ...over,
     }
 }
 describe('redo intake', () => {

@@ -17,6 +17,7 @@ export interface IntakeDeps {
     upsert(userId: string, chatGuid: string, fileId: string, noteId: string | null): Promise<UpsertResult>
     cancel(userId: string, chatGuid: string, fileId: string): Promise<{ status: string; phase?: string } | null>
     heldVerdict(): Promise<HeldNoteVerdict | null>
+    openPending(userId: string, chatGuid: string, noteId: string, fileIds: string[]): Promise<string | null>
 }
 
 const CAP_TEXT = 'Automatic page rebuilds are not authorized for you right now, so I have not started one. Nothing was changed.'
@@ -24,7 +25,7 @@ const COULD_NOT_START = 'I could not start the redo just now, so nothing was cha
 export const LATE_PHASES = new Set(['publishing', 'published', 'sending', 'sent'])
 
 /** replied: the page the user natively replied to, when the message carries one. candidates: recently delivered page links, latest first. */
-export interface RedoTarget { replied: string | null; candidates: string[] }
+export interface RedoTarget { replied: string | null; candidates: string[]; /** The user's own stored message to use as the complaint (a kept ambiguous complaint, or an operator-run proof of a stored one). */ complaintNoteId?: string }
 
 export async function intakeRedo(chatGuid: string, fileUrl: string | null, text: string, deps: IntakeDeps, target?: RedoTarget): Promise<string> {
     if (target?.replied) fileUrl = target.replied
@@ -37,9 +38,15 @@ export async function intakeRedo(chatGuid: string, fileUrl: string | null, text:
         const rows = (await Promise.all(target!.candidates.slice(0, 4).map((u) => deps.file(userId, chatGuid, u).catch(() => null)))).filter((r): r is RedoFileRow => Boolean(r))
         const lineages = new Set(rows.map((r) => r.lineage_id ?? r.id))
         if (lineages.size > 1) {
-            const seen = new Set<string>(); const names: string[] = []
-            for (const r of rows) { const l = r.lineage_id ?? r.id; if (seen.has(l)) continue; seen.add(l); names.push('"' + (r.title?.trim() || 'Untitled page') + '"') }
-            return `Which page do you mean: ${names.slice(0, 3).join(' or ')}? Reply to the one you mean and I will rebuild it. I have not changed anything.`
+            const seen = new Set<string>(); const names: string[] = []; const ids: string[] = []
+            for (const r of rows) { const l = r.lineage_id ?? r.id; if (seen.has(l)) continue; seen.add(l); ids.push(r.id); names.push('"' + (r.title?.trim() || 'Untitled page') + '"') }
+            // Keep the complaint (as the id of the user's own stored message) so the answer can use it. It expires and can be dropped.
+            const keep = target!.complaintNoteId ?? (await deps.noteId(chatGuid, text).catch(() => null))
+            const pid = keep ? await deps.openPending(userId, chatGuid, keep, ids.slice(0, 3)).catch(() => null) : null
+            const which = `Which page do you mean: ${names.slice(0, 3).join(' or ')}?`
+            return pid
+                ? `${which} Tell me, or reply to that page, and I will rebuild it with what you just said. I have kept your note for the next hour. Nothing has been changed.`
+                : `${which} I could not keep your note, so reply to the page you mean and say it again. Nothing has been changed.`
         }
     }
     if (!file.origin_request) {
@@ -48,7 +55,7 @@ export async function intakeRedo(chatGuid: string, fileUrl: string | null, text:
         const saved = await deps.saveLegacyOrigin(userId, chatGuid, file, found.origin.request, found.google, { runId: found.origin.evidence.runId, messageId: found.origin.evidence.messageId }).catch(() => false)
         if (!saved) return COULD_NOT_START
     }
-    const note = await deps.noteId(chatGuid, text).catch(() => null)
+    const note = target?.complaintNoteId ?? (await deps.noteId(chatGuid, text).catch(() => null))
     if (!note) return COULD_NOT_START
     const active = await deps.active(userId, file.lineage_id ?? file.id)
     if (active === 'unknown') return COULD_NOT_START

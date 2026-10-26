@@ -57,6 +57,25 @@ export async function redoFileForOp(userId: string, jobId: string): Promise<stri
 export async function failRedoJob(jobId: string, claimId: string, reason: string): Promise<boolean> {
     return (await rpc<boolean>('redo_fail', { p_job: jobId, p_claim: claimId, p_reason: reason })) === true
 }
+export async function openRedoPending(userId: string, chatGuid: string, noteId: string, fileIds: string[]): Promise<string | null> {
+    return (await rpc<string | null>('redo_pending_open', { p_user: userId, p_chat: chatGuid, p_note: noteId, p_files: fileIds })) ?? null
+}
+export async function closeRedoPending(userId: string, chatGuid: string, id: string, state: 'resolved' | 'dropped'): Promise<boolean> {
+    return (await rpc<boolean>('redo_pending_close', { p_user: userId, p_chat: chatGuid, p_id: id, p_state: state })) === true
+}
+export interface PendingRedo { id: string; userId: string; noteId: string; files: { id: string; url: string; title: string }[] }
+/** The one open, unexpired, owner-matched ambiguity for this chat, or null. Any read problem is null (the message is then ordinary chat). */
+export async function loadPendingRedo(chatGuid: string): Promise<PendingRedo | null> {
+    try {
+        const db = createServerClient()
+        const { data, error } = await db.from('dinghy_redo_pending').select('id, user_id, note_id, candidate_file_ids').eq('chat_guid', chatGuid).eq('state', 'open').gt('expires_at', new Date().toISOString()).limit(1)
+        const p = (data as { id: string; user_id: string; note_id: string; candidate_file_ids: string[] }[] | null)?.[0]
+        if (error || !p) return null
+        const f = await db.from('dinghy_files').select('id, url, title').eq('user_id', p.user_id).in('id', p.candidate_file_ids).is('deleted_at', null).is('revoked_at', null)
+        const files = ((f.data ?? []) as { id: string; url: string | null; title: string | null }[]).filter((x) => x.url).map((x) => ({ id: x.id, url: x.url as string, title: x.title ?? 'Untitled page' }))
+        return files.length >= 2 ? { id: p.id, userId: p.user_id, noteId: p.note_id, files } : null
+    } catch { return null }
+}
 export async function activeRedoJobFor(userId: string, lineageId: string): Promise<{ id: string; phase: string } | null | 'unknown'> {
     try {
         const { data, error } = await createServerClient().from('dinghy_redo_jobs').select('id, phase').eq('user_id', userId).eq('lineage_id', lineageId).in('state', ['queued', 'running']).limit(1)
