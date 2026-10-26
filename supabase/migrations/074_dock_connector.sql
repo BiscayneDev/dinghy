@@ -92,3 +92,13 @@ create policy dock_approvals_select_owner on public.dock_approvals for select to
 commit;
 
 notify pgrst, 'reload schema';
+
+-- Supabase default-privileges change enforced 2026-10-30: explicit least-privilege grants so
+-- this migration still works when applied or replayed after automatic Data API grants stop.
+-- Privileges mirror the verified callers in src/lib/dock/store.ts (service role only;
+-- dock_links unlink is a soft update, so no delete needed there).
+grant select, insert, update on public.dock_links to service_role;
+grant insert, delete on public.dock_pair_codes to service_role;
+grant select, insert, update on public.dock_approvals to service_role;
+grant insert on public.dock_events to service_role;
+grant select, insert, update on public.dock_outbound to service_role;
