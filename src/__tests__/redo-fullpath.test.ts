@@ -144,6 +144,10 @@ for(const legacy of [false,true])it(`${legacy?'LEGACY file (no stored origin, bo
  expect(call.history[0].content).not.toContain('Unverified itinerary');expect(call.opts.deliverable.kind).toBe('itinerary')
  expect(call.opts.memory).toContain('Chose: Stay in Harborville');expect(hoist.memoryQueries.at(-1)).toContain('Harborville')
  for(const banned of ['spend','set_reminder','create_reminder','invite'])expect(call.tools.join(',')).not.toContain(banned)
+ // Path regression: the recovered request takes the itinerary research path (the one with the 60s per-call cap), the bare words would not (that put the real turn on the generic 25s path).
+ const {itineraryNeedsResearch}=await import('@/lib/files/itinerary-contract')
+ expect(itineraryNeedsResearch(hoist.chatCalls[0].opts.deliverable.request)).toBe(true);expect(itineraryNeedsResearch('This one')).toBe(false)
+ const forced=gateway.map(b=>b.tool_choice?.function?.name).filter(Boolean);expect(forced).toContain('select_itinerary_candidates');expect(forced).toContain('create_file')
  expect(published).toHaveBeenCalledTimes(1)
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString();expect(html).toContain('Harborville Inn');expect(html).toContain('Evening departure')
  expect(hoist.sent.length).toBeGreaterThan(0);expect((await pgq(`select content from spectrum_messages where role='assistant' and content like '[file:%fictional.here.now%'`)).length).toBe(1)
