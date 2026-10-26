@@ -615,6 +615,8 @@ export async function chatWithTools(
         onCommit?: () => Promise<void>
         /** This turn already carries the user's answer to a clarifying question: do not offer to ask again. */
         clarified?: boolean
+        /** Gate for a running redo: read later notes and cancellation. close=true is the last look before publishing. */
+        redoGate?: (close: boolean) => Promise<{ notes: string[]; cancelled: boolean }>
     },
     tools: Tool[],
     ctx: UserContext
