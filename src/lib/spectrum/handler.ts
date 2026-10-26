@@ -395,7 +395,7 @@ async function handleInboundTapback(space: InboundSpace, message: InboundMessage
 }
 
 export async function handleSpectrumMessage(space: InboundSpace, message: InboundMessage): Promise<void> {
-    const turnStartedAt = Date.now()
+    let turnStartedAt = Date.now()
     const inbound = normalizeInbound(message)
     const isAttachment = !inbound && message.content.type === 'attachment'
     if (!inbound && !isAttachment) return
@@ -1108,7 +1108,9 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         const delivered = await sendText(space, chatGuid, 'reply', acknowledgement)
         if(delivered)await saveMessage(chatGuid, 'assistant', acknowledgement).catch((err)=>logErr('itinerary acknowledgement save failed',err))
     }
-    const deadlineAt = redoWaitedUntil ? Math.min(redoWaitedUntil + 200_000, turnStartedAt + 285_000) : turnStartedAt + (itineraryJob ? 240_000 : TURN_WORK_MS)
+    // After waiting for a running redo (at most 60s) the job budget restarts 45s before the wait ended, which keeps the whole invocation under the route's 300s limit.
+    if (redoWaitedUntil) turnStartedAt = Math.max(turnStartedAt, redoWaitedUntil - 45_000)
+    const deadlineAt = turnStartedAt + (itineraryJob ? 240_000 : TURN_WORK_MS)
     const onStage = runStageRecorder(chatGuid, message.id)
     const tChatStart = Date.now()
     const typingHandle = startTypingReTap(space)
