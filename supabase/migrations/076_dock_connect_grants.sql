@@ -25,3 +25,7 @@ create policy dock_connect_grants_select_owner on public.dock_connect_grants for
 commit;
 
 notify pgrst, 'reload schema';
+
+-- Supabase default-privileges change enforced 2026-10-30: explicit grant; service-role only
+-- (src/lib/dock/store.ts: select + upsert + delete).
+grant select, insert, update, delete on public.dock_connect_grants to service_role;
