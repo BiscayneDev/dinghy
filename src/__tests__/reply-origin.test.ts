@@ -26,7 +26,7 @@ describe('request behind a natively replied page', () => {
         expect(combined).toContain('9am coffee'); expect(combined).toContain('This one'); expect(combined.startsWith(ORIGINAL)).toBe(true)
     })
     it('Google-derived binding is saved flagged so retention expiry applies', async () => {
-        const save = vi.fn(async () => true); const d = deps({ legacy: async (f) => ({ origin: bindLegacyOrigin({ id: f.id, createdAt: Date.parse(f.created_at) }, stages, rows), google: true }), saveLegacyOrigin: save })
+        const save = vi.fn(async (..._a: unknown[]) => true); const d = deps({ legacy: async (f) => ({ origin: bindLegacyOrigin({ id: f.id, createdAt: Date.parse(f.created_at) }, stages, rows), google: true }), saveLegacyOrigin: save })
         await recoverRepliedPageRequest(d, 'chat', 'https://p.example/a'); expect(save.mock.calls[0][4]).toBe(true)
     })
     it('stored origin is used verbatim without touching the binder', async () => {
