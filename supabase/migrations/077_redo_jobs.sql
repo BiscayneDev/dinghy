@@ -8,6 +8,7 @@ alter table public.dinghy_files
   add column if not exists origin_google_derived boolean not null default false,
   add column if not exists origin_run_id uuid,
   add column if not exists origin_message_id text,
+  add column if not exists origin_kind text check (origin_kind is null or origin_kind in ('map','comparison','list','itinerary','note')),
   -- New redo artifacts only: which job attempt made this file, and whether it was built from Google-derived input.
   add column if not exists redo_op_id uuid,
   add column if not exists redo_google_derived boolean not null default false;
@@ -139,6 +140,15 @@ begin
   return 'done';
 end $$;
 
+-- Terminal failure on the current claim, with a short reason. Never overwrites a finished job.
+create or replace function public.redo_fail(p_job uuid, p_claim uuid, p_reason text)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  update public.dinghy_redo_jobs set state = 'failed', failure = left(p_reason, 200), closed_at = now(), updated_at = now()
+   where id = p_job and state = 'running' and claim_id = p_claim;
+  return found;
+end $$;
+
 -- Cancel. Queued work stops now; running work stops before the next external step.
 create or replace function public.redo_cancel(p_user uuid, p_chat text, p_file uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
@@ -204,9 +214,10 @@ revoke all on function public.claim_redo_job(int) from public, anon, authenticat
 revoke all on function public.redo_advance(uuid,uuid,text,int) from public, anon, authenticated;
 revoke all on function public.redo_close(uuid,uuid) from public, anon, authenticated;
 revoke all on function public.redo_cancel(uuid,text,uuid) from public, anon, authenticated;
+revoke all on function public.redo_fail(uuid,uuid,text) from public, anon, authenticated;
 revoke all on function public.redo_notify(uuid,text) from public, anon, authenticated;
 revoke all on function public.redo_file_for_op(uuid,uuid) from public, anon, authenticated;
 revoke all on function public.expire_google_derived(int) from public, anon, authenticated;
 grant execute on function public.upsert_redo_job(uuid,text,uuid,text), public.claim_redo_job(int), public.redo_advance(uuid,uuid,text,int),
-  public.redo_close(uuid,uuid), public.redo_cancel(uuid,text,uuid), public.redo_notify(uuid,text), public.redo_file_for_op(uuid,uuid), public.expire_google_derived(int) to service_role;
+  public.redo_close(uuid,uuid), public.redo_cancel(uuid,text,uuid), public.redo_fail(uuid,uuid,text), public.redo_notify(uuid,text), public.redo_file_for_op(uuid,uuid), public.expire_google_derived(int) to service_role;
 notify pgrst, 'reload schema';

@@ -1,31 +1,21 @@
-import { createHash } from 'crypto'
 import { createServerClient } from '@/lib/supabase/server'
 
 /**
- * Artifact -> originating request association on existing durable storage, no schema change.
- * When a deliverable job ships a hosted file, one hidden marker row is saved in the chat history table in the form the history loader already filters out ("[sent file: ...]", see isFileMarker): "[sent file: origin <hash of url> <base64 of the exact request the job ran on>]".
- * A later redo of that file reads the exact request back by url, so it does not guess it from the chat.
+ * The request a hosted file was made from, stored on that file's own dinghy_files row (migration 077):
+ * not in chat history, so it never reaches the model, the memory summarizer or the chat export, and it
+ * is erased and retained with the file. Google-derived requests are flagged so retention nulls them.
+ * Best-effort: a failed save only means a later correction cannot be bound, and it says so.
  */
-const urlHash = (url: string) => createHash('sha1').update(url).digest('hex').slice(0, 16)
-export const fileUrlOf = (historyLine: string): string | null => historyLine.match(/https?:\/\/[^\s)]+/)?.[0] ?? null
-export const originMarker = (url: string, request: string) => `[sent file: origin ${urlHash(url)} ${Buffer.from(request, 'utf8').toString('base64')}]`
-
-export async function loadFileOrigin(chatGuid: string, url: string): Promise<string | null> {
-    try {
-        const { data, error } = await createServerClient()
-            .from('spectrum_messages')
-            .select('content')
-            .eq('chat_guid', chatGuid)
-            .eq('role', 'assistant')
-            .like('content', `[sent file: origin ${urlHash(url)} %`)
-            .order('created_at', { ascending: false })
-            .limit(1)
-        const content = (data as { content?: string }[] | null)?.[0]?.content
-        if (error || !content) return null
-        const b64 = content.trim().replace(/^\[sent file: origin \S+ /, '').replace(/\]$/, '')
-        const text = Buffer.from(b64, 'base64').toString('utf8')
-        return text.trim() ? text : null
-    } catch {
-        return null
-    }
+export async function saveFileOrigin(opts: { userId: string; chatGuid: string; url: string; request: string; googleDerived: boolean; kind?: string | null; messageId?: string | null; runId?: string | null }): Promise<boolean> {
+    if (!opts.request.trim() || opts.request.length > 12_000) return false
+    const { data, error } = await createServerClient().from('dinghy_files')
+        .update({
+            origin_request: opts.request, origin_google_derived: opts.googleDerived,
+            ...(opts.kind ? { origin_kind: opts.kind } : {}), ...(opts.messageId ? { origin_message_id: opts.messageId } : {}), ...(opts.runId ? { origin_run_id: opts.runId } : {}),
+        })
+        .eq('user_id', opts.userId).eq('chat_guid', opts.chatGuid).eq('url', opts.url).is('origin_request', null)
+        .select('id')
+    return !error && (data?.length ?? 0) > 0
 }
+
+export const fileUrlOf = (historyLine: string): string | null => historyLine.match(/https?:\/\/[^\s)]+/)?.[0] ?? null

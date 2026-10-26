@@ -65,7 +65,7 @@ export interface MadeFile extends RenderedFile {
 }
 
 /** Save the file to memory (dinghy_files). Best-effort: never blocks the reply. */
-async function remember(ctx: UserContext, f: MadeFile): Promise<void> {
+async function remember(ctx: UserContext, f: MadeFile, redo?: { opId: string; googleDerived: boolean }): Promise<void> {
     if (!ctx.userId) return
     await rememberFile(ctx.userId, ctx.chatGuid ?? null, {
         title: f.title,
@@ -74,6 +74,7 @@ async function remember(ctx: UserContext, f: MadeFile): Promise<void> {
         url: f.hosted?.url ?? f.link,
         markdown: f.markdown ?? '',
         expires_at: f.hosted?.expiresAt ?? (f.link ? new Date(Date.now() + LINK_TTL_SECONDS * 1000).toISOString() : null),
+        ...(redo ? { redo_op_id: redo.opId, redo_google_derived: redo.googleDerived } : {}),
     }).catch((err) => console.error('[dinghy] file memory failed', err instanceof Error ? err.message : err))
 }
 
@@ -180,7 +181,7 @@ async function host(input: DinghyDoc, format: FileFormat, userId: string, replyL
     return {hosted,pdf,imagery,previews,enrichImagery,prepareChat}
 }
 
-export function fileToolsFor(): FileToolset {
+export function fileToolsFor(redo?: { opId: string; googleDerived: boolean }): FileToolset {
     const made: MadeFile[] = []
     let closed = false
 
@@ -220,7 +221,7 @@ export function fileToolsFor(): FileToolset {
                     const { hosted, pdf, enrichImagery, imagery, previews, prepareChat } = await host(parsed.doc, parsed.format, ctx.userId, await replyLineFor(ctx.chatGuid), ctx.photosOk === true, ctx.signal)
                     const file = pdf ?? (await renderFile(parsed.doc, 'html'))
                     const entry: MadeFile = { ...file, format: parsed.format, kind, title: parsed.doc.title, subtitle: parsed.doc.subtitle, link: null, hosted, imagery, enrichImagery, markdown: parsed.doc.body }
-                    await remember(ctx, entry)
+                    await remember(ctx, entry, redo)
                     if (closed || ctx.signal?.aborted) return { success: false, error: 'Publication completed after the turn ended; the saved page can be recovered.' }
                     made.push(entry)
                     const card=await prepareChat()
@@ -255,7 +256,7 @@ export function fileToolsFor(): FileToolset {
                 console.error('[dinghy] file upload failed', err instanceof Error ? err.message : err)
             }
             const entry: MadeFile = { ...file, format, kind, title: parsed.doc.title, subtitle: parsed.doc.subtitle, link, markdown: parsed.doc.body }
-            await remember(ctx, entry)
+            await remember(ctx, entry, redo)
             if (closed || ctx.signal?.aborted) return { success: false, error: 'Turn ended; the saved file can be recovered.' }
             made.push(entry)
             return {

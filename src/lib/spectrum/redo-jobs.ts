@@ -54,3 +54,28 @@ export async function notifyRedoOutcome(jobId: string, text: string): Promise<bo
 export async function redoFileForOp(userId: string, jobId: string): Promise<string | null> {
     return (await rpc<string | null>('redo_file_for_op', { p_user: userId, p_job: jobId })) ?? null
 }
+export async function failRedoJob(jobId: string, claimId: string, reason: string): Promise<boolean> {
+    return (await rpc<boolean>('redo_fail', { p_job: jobId, p_claim: claimId, p_reason: reason })) === true
+}
+export async function activeRedoJobFor(userId: string, fileId: string): Promise<{ id: string; phase: string } | null | 'unknown'> {
+    try {
+        const { data, error } = await createServerClient().from('dinghy_redo_jobs').select('id, phase').eq('user_id', userId).eq('file_id', fileId).in('state', ['queued', 'running']).limit(1)
+        if (error) return 'unknown'
+        return (data?.[0] as { id: string; phase: string } | undefined) ?? null
+    } catch { return 'unknown' }
+}
+
+/** Off by default. While off, no job is ever created (a job nobody runs would be a promise nobody keeps). */
+export const redoJobsEnabled = (): boolean => process.env.DINGHY_REDO_JOBS === 'on'
+
+export const TERMINAL_TEXT: Record<string, string> = {
+    outcome_unknown: 'I could not confirm whether the redo of that page went out. I have not retried it, so it may or may not reach you. The earlier version is unchanged.',
+    resume_exhausted: 'I could not finish the redo of that page. Nothing new was sent.',
+}
+/** Blocked or failed jobs that no one has told the user about yet. Deduped again inside redo_notify. */
+export async function unreportedTerminalJobs(): Promise<{ id: string; failure: string | null }[]> {
+    try {
+        const { data, error } = await createServerClient().from('dinghy_redo_jobs').select('id, failure').in('state', ['blocked', 'failed']).is('notified_key', null).limit(20)
+        return error ? [] : ((data ?? []) as { id: string; failure: string | null }[])
+    } catch { return [] }
+}

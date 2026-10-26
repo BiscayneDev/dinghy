@@ -160,4 +160,12 @@ describe('redo jobs, DB semantics', () => {
         expect((await one<any>(`select markdown from dinghy_files where id=$1`, [p])).markdown).toBe('DOC')
         expect((await one<any>(`select markdown from dinghy_files where id=$1`, [old])).markdown).toBe('DOC')
     })
+    it('redo_fail ends only the running job on the current claim', async () => {
+        const f = await file(); await upsert(A, 'chat-a', f, null)
+        const j = await one<any>(`select * from claim_redo_job()`)
+        expect((await one<any>(`select redo_fail($1,$2,'x') r`, [j.id, '00000000-0000-0000-0000-000000000099'])).r).toBe(false)
+        expect((await one<any>(`select redo_fail($1,$2,'note_unavailable') r`, [j.id, j.claim_id])).r).toBe(true)
+        expect((await one<any>(`select redo_fail($1,$2,'again') r`, [j.id, j.claim_id])).r).toBe(false)
+        expect((await one<any>(`select state, failure from dinghy_redo_jobs`))).toMatchObject({ state: 'failed', failure: 'note_unavailable' })
+    })
 })

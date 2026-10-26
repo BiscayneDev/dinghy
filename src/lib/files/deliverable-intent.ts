@@ -51,23 +51,17 @@ export async function decideDeliverable(opts: {afterFile?:boolean;gatewayUrl:str
 /** The ownership policy: Jev decides on every turn when the flag is on. The legacy matcher
  * runs only as the outage fallback when the decision is unavailable or uncertain — a model
  * answer of "none" or a different kind overrides it. */
-export async function selectDeliverableModelOwned(opts: {afterFile?:boolean;artifactConversation?:()=>Promise<string|null>;gatewayUrl:string;apiKey:string;request:string;context:string;legacy:()=>DeliverableContract|null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true; incomplete?: true }) | null> {
-    const { legacy, artifactConversation, ...decisionOpts } = opts
+export async function selectDeliverableModelOwned(opts: {afterFile?:boolean;gatewayUrl:string;apiKey:string;request:string;context:string;legacy:()=>DeliverableContract|null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true; incomplete?: true }) | null> {
+    const { legacy, ...decisionOpts } = opts
     let decided: (DeliverableContract & { redo?: true; incomplete?: true }) | null | undefined = await decideDeliverable(decisionOpts).catch(() => undefined)
     // If the redo-bearing question is ever rejected, the ordinary question still runs so a turn after a file never loses model judgment.
     if (decided === undefined && opts.afterFile) decided = await decideDeliverable({ ...decisionOpts, afterFile: false }).catch(() => undefined)
-    if (decided?.redo) {
-        const conversation = artifactConversation ? await artifactConversation() : null
-        return conversation ? { kind: decided.kind, request: redoRequest(conversation, opts.request), redo: true } : { kind: decided.kind, request: opts.request, redo: true, incomplete: true } as DeliverableContract & { redo: true }
-    }
+    if (decided?.redo) return { kind: decided.kind, request: opts.request, redo: true }
     return decided === undefined ? legacy() : decided
 }
 
 const FILE_LINE = /^\[file: /
 const FILE_WINDOW = 16
-const ACK_LINE = /^I am putting the itinerary together\./
-const HOLD_LINE = /^I am already redoing that\./
-
 /** The most recent delivered file in the recent history before the latest user turn, found by position, not by a clock: complaints can come hours later, after errors or other chat. */
 export function deliveredFileContext(history: {role: string; content: string}[]): {line: string; index: number; historyBefore: {role: string; content: string}[]} | null {
     const lastUser = history.map(m => m.role).lastIndexOf('user')
@@ -80,51 +74,15 @@ export function deliveredFileContext(history: {role: string; content: string}[])
     return null
 }
 
-export const ARTIFACT_CONVERSATION_MAX_CHARS = 12_000
-
-/** Fallback for files delivered before the origin marker existed: the turns after the previous delivered file up to this file, minus job acknowledgements and holding lines. Association is by position only and can include unrelated turns, so it is the fallback, not the rule; it is never shortened (too long returns text:null). `boundaryKnown` is false when the history may have been cut off before the start of that exchange. */
-export function artifactConversation(file: {index: number; historyBefore: {role: string; content: string}[]}, historyIsExhaustive: boolean): {text: string | null; boundaryKnown: boolean} {
-    const h = file.historyBefore
-    let start = 0
-    let previousFile = false
-    for (let i = file.index - 1; i >= 0; i--) if (h[i].role === 'assistant' && FILE_LINE.test(h[i].content)) { start = i + 1; previousFile = true; break }
-    const text = h.slice(start, file.index + 1)
-        .filter(m => !(m.role === 'assistant' && (ACK_LINE.test(m.content) || HOLD_LINE.test(m.content))))
-        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content).replace(/\s+/g, ' ').trim()}`)
-        .join('\n')
-    return { text: text.length > ARTIFACT_CONVERSATION_MAX_CHARS ? null : text, boundaryKnown: previousFile || historyIsExhaustive }
-}
-
-/** The request a redo works from, or null when it cannot be rebuilt completely (then no redo starts). Preferred: the exact request stored with the file when it shipped (loadOrigin). Fallback for files that predate that marker: the positional segment, loading a deeper stored history when the loaded one may not reach the start of that exchange. */
-export async function recoverArtifactConversation(opts: {loadOrigin?: (url: string) => Promise<string | null>; full: {role: string; content: string}[]; historyLimit: number; deepLimit: number; loadDeep: (limit: number) => Promise<{role: string; content: string}[]>}): Promise<string | null> {
-    const ctx = deliveredFileContext(opts.full)
-    if (!ctx) return null
-    const url = ctx.line.match(/https?:\/\/[^\s)]+/)?.[0]
-    const origin = url && opts.loadOrigin ? await opts.loadOrigin(url).catch(() => null) : null
-    if (origin) return origin.length <= ARTIFACT_CONVERSATION_MAX_CHARS ? origin : null
-    const first = artifactConversation(ctx, opts.full.length - 1 < opts.historyLimit)
-    if (first.boundaryKnown) return first.text
-    const last = opts.full[opts.full.length - 1]
-    const deep = await opts.loadDeep(opts.deepLimit).catch(() => null)
-    if (!deep) return null
-    const deepFull = [...deep, last]
-    const deepCtx = deliveredFileContext(deepFull)
-    if (!deepCtx || deepCtx.line !== ctx.line) return null
-    const second = artifactConversation(deepCtx, deep.length < opts.deepLimit)
-    return second.boundaryKnown ? second.text : null
-}
-
-export function redoRequest(conversation: string, feedback: string): string {
-    return 'Redo the last file sent in this conversation, from this request and what the user says about it:\n' + conversation + '\n\nLatest user feedback on that file (address it and redo the work, keeping every detail and settled choice): ' + feedback
+/** What a redo job works from: the file's own stored request, verbatim, plus every note the user added about it, oldest first. Nothing else from the chat. */
+export function redoInstruction(origin: string, notes: string[]): string {
+    return 'Redo the file described below. Keep every detail and settled choice from the original request, and apply every note from the user.\n\nOriginal request:\n' + origin + '\n\nNotes from the user about the file, oldest first:\n' + notes.map((n) => '- ' + n.replace(/\s+/g, ' ').trim()).join('\n')
 }
 
 /** After a delivered file, one bounded model judgment (the same call the flag-on path already makes every turn) says whether the latest message asks to redo that file. Only a clear redo with a recoverable original request returns a contract; everything else (venting, question, cancel, don't-redo, unrelated, outage) returns null and the turn is ordinary chat. */
-export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;artifactConversation:()=>Promise<string|null>;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true; incomplete?: true }) | null> {
-    const {artifactConversation: conversation, ...decisionOpts} = opts
-    const decided = await decideDeliverable({...decisionOpts, afterFile: true}).catch(() => null)
-    if (!decided?.redo) return null
-    const text = await conversation()
-    return text ? { kind: decided.kind, request: redoRequest(text, opts.request), redo: true } : { kind: decided.kind, request: opts.request, redo: true, incomplete: true } as DeliverableContract & { redo: true }
+export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true; incomplete?: true }) | null> {
+    const decided = await decideDeliverable({...opts, afterFile: true}).catch(() => null)
+    return decided?.redo ? { kind: decided.kind, request: opts.request, redo: true } : null
 }
 
 export type HeldNoteVerdict = 'repeat' | 'new_instruction' | 'stop'

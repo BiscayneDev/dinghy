@@ -213,12 +213,15 @@ export interface FileRecord {
     markdown: string
     expires_at: string | null
     created_at?: string
+    /** Redo artifacts only: ties the file to the job attempt that made it, and to Google-derived input. */
+    redo_op_id?: string
+    redo_google_derived?: boolean
 }
 
 export async function rememberFile(userId: string, chatGuid: string | null, f: FileRecord): Promise<void> {
     const { error } = await createServerClient()
         .from('dinghy_files')
-        .insert({ user_id: userId, chat_guid: chatGuid, title: f.title.slice(0, 140), kind: f.kind ?? 'file', format: f.format, url: f.url, markdown: f.markdown.slice(0, 60_000), expires_at: f.expires_at })
+        .insert({ user_id: userId, chat_guid: chatGuid, title: f.title.slice(0, 140), kind: f.kind ?? 'file', format: f.format, url: f.url, markdown: f.markdown.slice(0, 60_000), ...(f.redo_op_id ? { redo_op_id: f.redo_op_id, redo_google_derived: Boolean(f.redo_google_derived) } : {}), expires_at: f.expires_at })
     if (error) throw new Error(`remember file failed: ${error.message}`)
 }
 
