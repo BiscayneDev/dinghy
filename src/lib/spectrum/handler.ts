@@ -1034,11 +1034,11 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     const decisionContext = JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
     if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
         // Flag on: the model already judges every turn; after a delivered file the same call also offers "redo" (no extra call).
-        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: afterFile ? JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000) : decisionContext, signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full), afterFile: Boolean(afterFile) })
+        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: afterFile ? JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000) : decisionContext, signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full), afterFile: Boolean(afterFile) && redoJobsEnabled() })
     } else {
         deliverable = selectDeliverable(full)
         // Flag off: when a delivered file is in recent history and the keyword matcher saw nothing, one bounded model call decides whether this is a redo request. Only a redo acts; any other answer leaves the turn as ordinary chat.
-        if (!deliverable && afterFile) {
+        if (!deliverable && afterFile && redoJobsEnabled()) {
             deliverable = await decideFollowUpDeliverable({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000) })
         }
     }
