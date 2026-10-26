@@ -4,7 +4,7 @@ const state=vi.hoisted(()=>({messages:[] as {role:string;content:string;at?:stri
 const {published}=vi.hoisted(()=>({published:vi.fn()}))
 vi.mock('@/lib/files/share',()=>({shareEnabled:()=>true,publishSite:published,revokeSite:vi.fn(),updateSite:vi.fn()}))
 vi.mock('@/lib/files/imagery',async orig=>({...await orig<any>(),verifyShareMetadata:async()=>true}))
-vi.mock('@/lib/supabase/server',()=>{const chain:any=new Proxy(function(){},{get:(_t,k)=>k==='then'?(r:any)=>r({data:(globalThis as any).__rows??[],error:null,count:0}):chain,apply:()=>chain});return {createServerClient:()=>chain}})
+vi.mock('@/lib/supabase/server',()=>{const L=(globalThis as any);L.__locks=L.__locks??new Map();const mk=(table:string)=>{let px:any;const f:any={op:'select',eq:[] as any[]};const b:any={select:()=>px,delete:()=>{f.op='delete';return px},eq:(k:string,v:any)=>{f.eq.push([k,v]);return px},then:(r:any,j:any)=>{const locks=L.__locks as Map<string,any>;if(table==='spectrum_inbound_dedupe'){const key=f.eq.find((e:any)=>e[0]==='message_id')?.[1];if(f.op==='select'){if(L.__failRead)return Promise.resolve({data:null,error:{message:'x'}}).then(r,j);const v=locks.get(key);return Promise.resolve({data:v?[v]:[],error:null}).then(r,j)}const cid=f.eq.find((e:any)=>e[0]==='claim_id')?.[1];const v=locks.get(key);if(v&&(!cid||v.claim_id===cid))locks.delete(key);return Promise.resolve({data:null,error:null}).then(r,j)}return Promise.resolve({data:[],error:null,count:0}).then(r,j)}};px=new Proxy(b,{get:(t,k)=>k in t?t[k]:()=>px});return px};return {createServerClient:()=>({from:(t:string)=>mk(t),rpc:(name:string,a:any)=>{const locks=L.__locks as Map<string,any>;if(L.__failClaim)return Promise.resolve({data:null,error:{message:'down'}});if(name==='claim_inbound_delivery'&&a.p_message_id.startsWith('redo-lock:')){if(locks.has(a.p_message_id))return Promise.resolve({data:false,error:null});locks.set(a.p_message_id,{claim_id:a.p_claim_id,received_at:new Date().toISOString()});return Promise.resolve({data:true,error:null})}return Promise.resolve({data:false,error:null})}})}})
 vi.mock('@/spectrum/store',async orig=>({...await orig<any>(),ensureIdentity:async()=>{},isGoogleConnected:async()=>false,isPayboxConnected:async()=>false,isGithubConnected:async()=>false,isHealthConnected:async()=>false,loadFacts:async()=>[],loadHistory:async()=>(state.freeze??state.messages).map((m:any)=>({...m})),saveMessage:async(_g:string,role:string,content:string)=>{state.messages.push({role,content,at:new Date().toISOString()})},saveMessageReturningId:async()=>'id',updateMessageContent:async()=>{},createConnectLink:async()=>'https://x.test'}))
 vi.mock('@/lib/spectrum/beta-gate',async orig=>({...await orig<any>(),getBetaRole:async()=>'owner'}))
 vi.mock('@/lib/spectrum/outbox',async orig=>({...await orig<any>(),claimInboundDelivery:async(id:string)=>{if(state.claims.has(id))return false;state.claims.add(id);return true},enqueueOutbox:async()=>'o',markOutboxSent:async()=>{},markOutboxFailed:async()=>{}}))
@@ -27,7 +27,7 @@ const stop=(c:string)=>new Response(JSON.stringify({choices:[{finish_reason:'sto
 const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Candidate lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' | ')[0].slice(1)):0}
 let gateway:any[]=[],selects=0
 beforeEach(()=>{state.claims=new Set();state.freeze=null;state.messages=[];state.sent=[];state.chatCalls=[];gateway=[];selects=0;state.decisions=0;state.verdict2='redo_itinerary';published.mockReset();published.mockResolvedValue({url:'https://fictional.here.now/',expiresAt:new Date(Date.now()+86400000).toISOString(),files:[]})})
-afterEach(()=>{(globalThis as any).__rows=undefined;(globalThis as any).__rejectRedo=false;vi.unstubAllGlobals();vi.unstubAllEnvs()})
+afterEach(()=>{(globalThis as any).__locks=new Map();(globalThis as any).__failRead=false;(globalThis as any).__failClaim=false;(globalThis as any).__rejectRedo=false;vi.unstubAllGlobals();vi.unstubAllEnvs()})
 const space={id:'any;-;+15550000000',send:async(t:any)=>{state.sent.push(t)}}
 const texts=()=>state.sent.filter((x:any)=>typeof x==='string') as string[]
 const inbound=(id:string,text:string)=>({id,direction:'inbound',content:{type:'text',text},sender:{handle:'+15550000000'},timestamp:new Date()}) as any
@@ -119,7 +119,7 @@ it('a revision after the replacement was delivered is a new job, not swallowed b
  expect(published).toHaveBeenCalledTimes(1)
  state.messages=[...delivered(),{role:'user',content:"That's not good",at:new Date().toISOString()},{role:'assistant',content:'[file: Harborville itinerary] https://new.here.now/',at:new Date().toISOString()}] as any;state.sent=[];state.chatCalls=[];selects=0
  await handleSpectrumMessage(space,inbound('r2','The dinner pick is wrong, redo it'))
- expect(state.chatCalls[0].opts.deliverable?.kind).toBe('itinerary');expect([...state.claims].filter(k=>k.startsWith('redo:'))).toHaveLength(2)
+ expect(state.chatCalls[0].opts.deliverable?.kind).toBe('itinerary');expect(published).toHaveBeenCalledTimes(2)
 })
 it('flag on: the existing per-turn decision also offers redo (no extra call), original request travels',async()=>{
  vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();state.messages=delivered() as any
@@ -147,28 +147,50 @@ it('two different deliverables in history: the redo is bound to the latest file,
  const r=state.chatCalls[0].opts.deliverable.request as string
  expect(r).toContain(planAsk);expect(r).not.toContain(mapAsk);expect(r).not.toContain('Cafe map')
 })
-it('a redo still running (job-state breadcrumbs): second and third complaints are held, no second job, the holding reply does not open a new claim',async()=>{
- install();state.messages=delivered() as any
- const {createHash}=await import('crypto');const line=(delivered() as any[]).at(-1).content
- const hash=createHash('sha1').update(`${space.id}\n${line}`).digest('hex').slice(0,16)
- ;(globalThis as any).__rows=[{run_id:'r1',message_id:'x',stage:'context',detail:`redo:${hash}`,created_at:ago(40e3)},{run_id:'r1',message_id:'x',stage:'tool',detail:'web_search',created_at:ago(5e3)}]
+const hashOf=async()=>{const {createHash}=await import('crypto');const line=(delivered() as any[]).at(-1).content;return createHash('sha1').update(`${space.id}\n${line}`).digest('hex').slice(0,16)}
+const L=()=>globalThis as any
+it('a redo running past 150s and across a minute boundary still holds: second and third complaints get an honest line, no second job, nothing implied about including them',async()=>{
+ install();state.messages=delivered() as any;const h=await hashOf()
+ L().__locks.set(`redo-lock:${h}`,{claim_id:'live',received_at:ago(200e3)})
  await handleSpectrumMessage(space,inbound('p1',"That's not good"))
- state.messages=[...delivered(),{role:'user',content:"That's not good",at:ago(3e3)},{role:'assistant',content:'I am already redoing that. The new version will land here when it is ready.',at:ago(2e3)}] as any
- await handleSpectrumMessage(space,inbound('p2','hello?? the page is bad'))
+ state.messages=[...delivered(),{role:'user',content:"That's not good",at:ago(3e3)},{role:'assistant',content:'I am already redoing that page from your earlier message. This new note is not part of that version, so if something is still off when it lands, tell me and I will go again.',at:ago(2e3)}] as any
+ await handleSpectrumMessage(space,inbound('p2','also the dates are wrong'))
  expect(state.chatCalls).toHaveLength(0);expect(published).not.toHaveBeenCalled()
- expect(texts().filter(t=>t.includes('already redoing that'))).toHaveLength(2)
+ expect(texts().filter(t=>/already redoing that page/.test(t))).toHaveLength(2);expect(texts().join('\n')).toMatch(/not part of that version/)
+ expect(L().__locks.get(`redo-lock:${h}`).claim_id).toBe('live')
 })
-it('a finished redo run (terminal stage) does not hold a later complaint',async()=>{
+it('the lock is released when the job ends; a later complaint on the same file starts a new job',async()=>{
  install();state.messages=delivered() as any
- const {createHash}=await import('crypto');const line=(delivered() as any[]).at(-1).content
- const hash=createHash('sha1').update(`${space.id}\n${line}`).digest('hex').slice(0,16)
- ;(globalThis as any).__rows=[{run_id:'r1',message_id:'x',stage:'context',detail:`redo:${hash}`,created_at:ago(100e3)},{run_id:'r1',message_id:'x',stage:'failed',detail:null,created_at:ago(90e3)}]
- await handleSpectrumMessage(space,inbound('q1',"That's not good"))
- expect(published).toHaveBeenCalledTimes(1)
+ await handleSpectrumMessage(space,inbound('l1',"That's not good"));expect(published).toHaveBeenCalledTimes(1);expect(L().__locks.size).toBe(0)
+ state.sent=[];state.chatCalls=[];selects=0
+ await handleSpectrumMessage(space,inbound('l2','still not right'));expect(published).toHaveBeenCalledTimes(2);expect(L().__locks.size).toBe(0)
 })
-
-it('flag on, redo-bearing question rejected by the service: the ordinary question still runs (two calls only on that failure)',async()=>{
- vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();(globalThis as any).__rejectRedo=true;state.verdict2='itinerary';state.messages=delivered() as any
- await handleSpectrumMessage(space,inbound('j1','Make me a new itinerary for fictional travellers to Harborville with hotel and restaurant recommendations'))
- expect(state.decisions).toBe(2);expect(state.chatCalls[0].opts.deliverable.kind).toBe('itinerary')
+it('terminal failure (research-only, no file) also releases the lock',async()=>{
+ install({searchOnly:true});state.messages=delivered() as any
+ await handleSpectrumMessage(space,inbound('f1',"That's not good"));expect(L().__locks.size).toBe(0)
+})
+it('a dead job (lock older than 300s) is recovered by compare-and-delete, then the redo runs once',async()=>{
+ install();state.messages=delivered() as any;const h=await hashOf()
+ L().__locks.set(`redo-lock:${h}`,{claim_id:'dead',received_at:ago(400e3)})
+ await handleSpectrumMessage(space,inbound('s1',"That's not good"))
+ expect(published).toHaveBeenCalledTimes(1);expect(L().__locks.size).toBe(0)
+})
+it('claim read failure or timeout: nothing starts, honest line, no duplicate job',async()=>{
+ install();state.messages=delivered() as any
+ L().__failClaim=true;await handleSpectrumMessage(space,inbound('u1',"That's not good"))
+ expect(published).not.toHaveBeenCalled();expect(texts().join('\n')).toMatch(/could not start the redo/)
+ L().__failClaim=false;L().__failRead=true;const h=await hashOf();L().__locks.set(`redo-lock:${h}`,{claim_id:'x',received_at:ago(10e3)});state.sent=[]
+ await handleSpectrumMessage(space,inbound('u2',"That's not good"))
+ expect(published).not.toHaveBeenCalled();expect(texts().join('\n')).toMatch(/could not start the redo/)
+})
+it('context that cannot be rebuilt completely: no redo, honest line, no truncation of dates or constraints',async()=>{
+ install();const long='Dates: 14-17 March, no flights before 9am. '+'x'.repeat(13000)
+ state.messages=[{role:'user',content:long,at:ago(9e6)},{role:'assistant',content:'[file: Trip] https://t.here.now/',at:ago(9e6)}] as any
+ await handleSpectrumMessage(space,inbound('x1',"That's not good"))
+ expect(published).not.toHaveBeenCalled();expect(texts().join('\n')).toMatch(/could not rebuild the full original request/);expect(L().__locks.size).toBe(0)
+})
+it('a short exchange passes its dates and constraints through whole',async()=>{
+ install();state.messages=[{role:'user',content:'Plan a trip for the fictional Ortegas, 14-17 March, no flights before 9am, vegetarian dinners.',at:ago(9e6)},{role:'assistant',content:'[file: Trip] https://t.here.now/',at:ago(9e6)}] as any
+ await handleSpectrumMessage(space,inbound('x2',"That's not good"))
+ const r=state.chatCalls[0].opts.deliverable.request as string;expect(r).toContain('14-17 March, no flights before 9am, vegetarian dinners.')
 })

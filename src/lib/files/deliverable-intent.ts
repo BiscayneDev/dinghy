@@ -33,7 +33,7 @@ export function deliverableChoiceQuestion(afterFile = false) {
 }
 
 /** One bounded Jev judgment; throws on an unavailable or uncertain decision. */
-export async function decideDeliverable(opts: {afterFile?:boolean;gatewayUrl:string;apiKey:string;request:string;context:string;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true }) | null> {
+export async function decideDeliverable(opts: {afterFile?:boolean;gatewayUrl:string;apiKey:string;request:string;context:string;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true; incomplete?: true }) | null> {
     const start = Date.now()
     const res = await (opts.fetch ?? fetch)(`${opts.gatewayUrl}/v1/decisions`, { method: 'POST', signal: opts.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ state: { request: opts.request, context: opts.context }, questions: { deliverable: deliverableChoiceQuestion(opts.afterFile) } }) })
     if (!res.ok) throw new Error('Jev deliverable decision service unavailable')
@@ -51,12 +51,15 @@ export async function decideDeliverable(opts: {afterFile?:boolean;gatewayUrl:str
 /** The ownership policy: Jev decides on every turn when the flag is on. The legacy matcher
  * runs only as the outage fallback when the decision is unavailable or uncertain — a model
  * answer of "none" or a different kind overrides it. */
-export async function selectDeliverableModelOwned(opts: {afterFile?:boolean;artifactConversation?:string;gatewayUrl:string;apiKey:string;request:string;context:string;legacy:()=>DeliverableContract|null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true }) | null> {
+export async function selectDeliverableModelOwned(opts: {afterFile?:boolean;artifactConversation?:()=>Promise<string|null>;gatewayUrl:string;apiKey:string;request:string;context:string;legacy:()=>DeliverableContract|null;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true; incomplete?: true }) | null> {
     const { legacy, artifactConversation, ...decisionOpts } = opts
-    let decided: (DeliverableContract & { redo?: true }) | null | undefined = await decideDeliverable(decisionOpts).catch(() => undefined)
+    let decided: (DeliverableContract & { redo?: true; incomplete?: true }) | null | undefined = await decideDeliverable(decisionOpts).catch(() => undefined)
     // If the redo-bearing question is ever rejected, the ordinary question still runs so a turn after a file never loses model judgment.
     if (decided === undefined && opts.afterFile) decided = await decideDeliverable({ ...decisionOpts, afterFile: false }).catch(() => undefined)
-    if (decided?.redo) return artifactConversation ? { kind: decided.kind, request: redoRequest(artifactConversation, opts.request), redo: true } : null
+    if (decided?.redo) {
+        const conversation = artifactConversation ? await artifactConversation() : null
+        return conversation ? { kind: decided.kind, request: redoRequest(conversation, opts.request), redo: true } : { kind: decided.kind, request: opts.request, redo: true, incomplete: true } as DeliverableContract & { redo: true }
+    }
     return decided === undefined ? legacy() : decided
 }
 
@@ -77,15 +80,35 @@ export function deliveredFileContext(history: {role: string; content: string}[])
     return null
 }
 
-/** The conversation that produced the delivered file: every turn after the previous delivered file (or the start of history) up to and including this one, minus job acknowledgements and holding lines. It carries the full original request, clarifications and settled choices without keyword matching. Complaints and error replies are included as they are part of that exchange. */
-export function artifactConversation(file: {index: number; historyBefore: {role: string; content: string}[]}): string {
+export const ARTIFACT_CONVERSATION_MAX_CHARS = 12_000
+
+/** The conversation between the previous delivered file (or the start of the chat) and this file, with job acknowledgements and holding lines removed. Association is by position: it can include unrelated turns in that interval, and it is never shortened: a long interval returns text:null. `boundaryKnown` is false when the segment reaches the start of a history that may have been cut off, so the original request could be missing. */
+export function artifactConversation(file: {index: number; historyBefore: {role: string; content: string}[]}, historyIsExhaustive: boolean): {text: string | null; boundaryKnown: boolean} {
     const h = file.historyBefore
     let start = 0
-    for (let i = file.index - 1; i >= 0; i--) if (h[i].role === 'assistant' && FILE_LINE.test(h[i].content)) { start = i + 1; break }
-    return h.slice(start, file.index + 1)
+    let previousFile = false
+    for (let i = file.index - 1; i >= 0; i--) if (h[i].role === 'assistant' && FILE_LINE.test(h[i].content)) { start = i + 1; previousFile = true; break }
+    const text = h.slice(start, file.index + 1)
         .filter(m => !(m.role === 'assistant' && (ACK_LINE.test(m.content) || HOLD_LINE.test(m.content))))
-        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content).replace(/\s+/g, ' ').trim().slice(0, 700)}`)
-        .join('\n').slice(-3500)
+        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content).replace(/\s+/g, ' ').trim()}`)
+        .join('\n')
+    return { text: text.length > ARTIFACT_CONVERSATION_MAX_CHARS ? null : text, boundaryKnown: previousFile || historyIsExhaustive }
+}
+
+/** The full conversation for a redo, or null when it cannot be rebuilt completely (then no redo starts). Loads a deeper stored history when the loaded one may not reach the start of this file's exchange. */
+export async function recoverArtifactConversation(opts: {full: {role: string; content: string}[]; historyLimit: number; deepLimit: number; loadDeep: (limit: number) => Promise<{role: string; content: string}[]>}): Promise<string | null> {
+    const ctx = deliveredFileContext(opts.full)
+    if (!ctx) return null
+    const first = artifactConversation(ctx, opts.full.length - 1 < opts.historyLimit)
+    if (first.boundaryKnown) return first.text
+    const last = opts.full[opts.full.length - 1]
+    const deep = await opts.loadDeep(opts.deepLimit).catch(() => null)
+    if (!deep) return null
+    const deepFull = [...deep, last]
+    const deepCtx = deliveredFileContext(deepFull)
+    if (!deepCtx || deepCtx.line !== ctx.line) return null
+    const second = artifactConversation(deepCtx, deep.length < opts.deepLimit)
+    return second.boundaryKnown ? second.text : null
 }
 
 export function redoRequest(conversation: string, feedback: string): string {
@@ -93,9 +116,10 @@ export function redoRequest(conversation: string, feedback: string): string {
 }
 
 /** After a delivered file, one bounded model judgment (the same call the flag-on path already makes every turn) says whether the latest message asks to redo that file. Only a clear redo with a recoverable original request returns a contract; everything else (venting, question, cancel, don't-redo, unrelated, outage) returns null and the turn is ordinary chat. */
-export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;artifactConversation:string;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true }) | null> {
+export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;artifactConversation:()=>Promise<string|null>;signal?:AbortSignal;onUsage?:(u:GatewayUsage)=>void;fetch?:typeof fetch}): Promise<(DeliverableContract & { redo?: true; incomplete?: true }) | null> {
     const {artifactConversation: conversation, ...decisionOpts} = opts
     const decided = await decideDeliverable({...decisionOpts, afterFile: true}).catch(() => null)
     if (!decided?.redo) return null
-    return { kind: decided.kind, request: redoRequest(conversation, opts.request), redo: true }
+    const text = await conversation()
+    return text ? { kind: decided.kind, request: redoRequest(text, opts.request), redo: true } : { kind: decided.kind, request: opts.request, redo: true, incomplete: true } as DeliverableContract & { redo: true }
 }

@@ -42,7 +42,7 @@ import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
 import { CLARIFY_MARK, stripClarifyMark, pendingItineraryClarification, continueAfterClarification, decideClarificationReply, type ReplyVerdict } from '@/lib/files/itinerary-continuation'
-import { decideFollowUpDeliverable, deliverableIntentEnabled, artifactConversation, deliveredFileContext, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
+import { decideFollowUpDeliverable, deliverableIntentEnabled, deliveredFileContext, recoverArtifactConversation, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -70,7 +70,8 @@ import {
     GATE_WELCOME,
     type BetaRole,
 } from './beta-gate'
-import { earlierUserText, loadActiveRuns, redoJobRunning, steerNote } from './active-run'
+import { earlierUserText, loadActiveRuns, steerNote } from './active-run'
+import { acquireRedoLock, type RedoLock } from './redo-lock'
 import { claimInboundDelivery, enqueueOutbox, markOutboxFailed, markOutboxSent, type OutboxKind } from './outbox'
 import { briefableUserId, handleMuteIntent } from './briefing'
 import { chooseCurrentPlace, isPlaceOnlyMessage, placeStatement, travelAck } from './place'
@@ -1026,9 +1027,10 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     // fallback when the decision is unavailable or uncertain; with the flag off it stays the selector.
     let deliverable: (DeliverableContract & { redo?: true }) | null
     let redoFollowUp = false
-    let redoHeldForRunningJob = false
+    let redoLock: RedoLock | null = null
+    let redoRefusal: string | null = null
     const afterFile = deliveredFileContext(full)
-    const conversationOfFile = afterFile ? artifactConversation(afterFile) : ''
+    const conversationOfFile = () => recoverArtifactConversation({ full, historyLimit: MAX_HISTORY, deepLimit: 300, loadDeep: (n) => loadHistory(chatGuid, n) })
     const redoHash = afterFile ? createHash('sha1').update(`${chatGuid}\n${afterFile.line}`).digest('hex').slice(0, 16) : ''
     const decisionContext = JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
     if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
@@ -1042,19 +1044,25 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         }
     }
     if (deliverable?.redo && afterFile) {
-        // One redo job per delivered file. Held when the job-state breadcrumbs show a redo for this file still running (the in-flight evidence), or when another turn wins the atomic claim in the same minute.
-        const running = await redoJobRunning(chatGuid, redoHash)
-        const claimed = !running && (await claimInboundDelivery(`redo:${redoHash}:${Math.floor(Date.now() / 60_000)}`, chatGuid))
-        if (claimed) redoFollowUp = true
-        else {
+        if ((deliverable as { incomplete?: true }).incomplete) {
             deliverable = null
-            redoHeldForRunningJob = true
+            redoRefusal = 'I could not rebuild the full original request for that page from this chat, so I have not redone it. Nothing was changed.'
+        } else {
+            // One redo job per chat and delivered file, held for the whole job (up to its 240s budget) and released on any outcome; a dead job is recovered after 300s.
+            redoLock = await acquireRedoLock(chatGuid, redoHash)
+            if (redoLock.state === 'acquired') redoFollowUp = true
+            else {
+                deliverable = null
+                redoRefusal = redoLock.state === 'held'
+                    ? 'I am already redoing that page from your earlier message. This new note is not part of that version, so if something is still off when it lands, tell me and I will go again.'
+                    : 'I could not start the redo just now, so nothing was changed.'
+                redoLock = null
+            }
         }
     }
-    if (redoHeldForRunningJob) {
-        const holding = 'I am already redoing that. The new version will land here when it is ready.'
-        const delivered = await sendText(space, chatGuid, 'reply', holding)
-        if (delivered) await saveMessage(chatGuid, 'assistant', holding).catch((err) => logErr('redo holding save failed', err))
+    if (redoRefusal) {
+        const delivered = await sendText(space, chatGuid, 'reply', redoRefusal)
+        if (delivered) await saveMessage(chatGuid, 'assistant', redoRefusal).catch((err) => logErr('redo refusal save failed', err))
         return
     }
     // A pending itinerary question carries the original request forward only when the model judges the new message to be its answer.
@@ -1088,7 +1096,6 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         // Read tools only for chats bound to a user with Google/PayBox connected;
         // everyone else gets the plain conversational path.
         await onStage('context', `preflight_ms=${Date.now() - turnStartedAt}`)
-        if (redoFollowUp) await onStage('context', `redo:${redoHash}`)
         const toolCtx = await withinTurn(deadlineAt, () => loadImessageToolContext(chatGuid)).catch((err) => {
             if (err instanceof TurnDeadlineExceeded) throw err
             logErr('tool context load failed', err)
@@ -1355,6 +1362,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             ? 'That one needs a minute on my side. Ask me again shortly.'
             : 'Something went wrong on my end. Try again in a moment.')
     } finally {
+        if (redoLock?.state === 'acquired') await redoLock.release()
         fileTools?.close()
         clearTimeout(eyesTimer)
         stopTypingReTap(space, typingHandle)
