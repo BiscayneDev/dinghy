@@ -244,13 +244,55 @@ it('KICK defers to the cron rescue when the webhook window cannot fit a full bui
  const {kickRedoJobs}=await vi.importActual<any>('@/lib/spectrum/redo-worker-runtime')
  await complain("That's not good");expect(await kickRedoJobs(Date.now()-200_000)).toMatchObject({kicked:false});expect((await jobs())[0].state).toBe('queued')
 })
-it('SCOPE owner mode: only the listed chat can create jobs, others stay ordinary chat; daily cap refuses a seventh new rebuild',async()=>{
+it('SCOPE owner mode (ongoing, not the proof scope): only the listed chat can create jobs',async()=>{
  vi.stubEnv('DINGHY_REDO_JOBS','owner');vi.stubEnv('DINGHY_REDO_OWNER_CHATS','some;-;other');install();await seed()
  await complain("That's not good");expect(await jobs()).toHaveLength(0);expect(hoist.decisions).toBe(0)
- vi.stubEnv('DINGHY_REDO_OWNER_CHATS',CHAT);hoist.sent=[];await complain("That's not good again");expect(await jobs()).toHaveLength(1)
- vi.stubEnv('DINGHY_REDO_JOBS','on')
- await pgq(`update dinghy_redo_jobs set state='done',created_at=now()`);for(let i=0;i<5;i++)await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,origin_request) values ($1,$2,'x','itinerary','page',$3,'r')`,[U,CHAT,'https://x'+i+'.here.now/']),await pgq(`insert into dinghy_redo_jobs(user_id,chat_guid,file_id,lineage_id,state) select $1,$2,id,id,'done' from dinghy_files where url=$3`,[U,CHAT,'https://x'+i+'.here.now/'])
- hoist.sent=[];await complain('still not right');expect(texts().join('\n')).toMatch(/as many page rebuilds as I will run for you today/);expect((await jobs()).filter((j:any)=>j.state==='queued')).toHaveLength(0)
+ vi.stubEnv('DINGHY_REDO_OWNER_CHATS',CHAT);await complain("That's not good again");expect(await jobs()).toHaveLength(1)
+})
+const arm=()=>pgq(`insert into dinghy_redo_authorizations(user_id,chat_guid) values ($1,$2)`,[U,CHAT])
+it('PROOF: no armed authorization means no job, no decision call, no promise',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','proof');vi.stubEnv('DINGHY_REDO_PROOF_CHAT',CHAT);install();await seed();(globalThis as any).__kick=true
+ await complain("That's not good");expect(await jobs()).toHaveLength(0);expect(hoist.decisions).toBe(0);expect(texts().join('\n')).not.toMatch(/rebuilding/);expect(published).not.toHaveBeenCalled()
+})
+it('PROOF: one armed authorization runs one job (kicked), is consumed, and nothing further starts, with no second attempt',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','proof');vi.stubEnv('DINGHY_REDO_PROOF_CHAT',CHAT);install();await seed();await arm();(globalThis as any).__kick=true
+ await complain("That's not good");expect((await jobs())[0]).toMatchObject({state:'done'});expect(published).toHaveBeenCalledTimes(1)
+ expect((await pgq(`select state,job_id from dinghy_redo_authorizations`))[0]).toMatchObject({state:'consumed'})
+ const before=hoist.decisions;hoist.sent=[];await complain("still not right");expect(await jobs()).toHaveLength(1);expect(hoist.decisions).toBe(before);expect((await pgq(`select 1 from dinghy_files where redo_op_id is not null`))).toHaveLength(1);expect(texts().join('\n')).not.toMatch(/rebuilding/)
+ expect(await runOneRedoJob()).toMatchObject({ran:false})
+})
+it('PROOF: another chat or a different user cannot use the armed authorization',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','proof');vi.stubEnv('DINGHY_REDO_PROOF_CHAT','some;-;other');install();await seed();await arm()
+ await complain("That's not good");expect(await jobs()).toHaveLength(0)
+ const r=(await pgq(`select upsert_redo_job('00000000-0000-0000-0000-0000000000b2',$1,gen_random_uuid(),null,true) r`,[CHAT]))[0].r;expect(r.status).toBe('refused')
+ expect((await pgq(`select state from dinghy_redo_authorizations`))[0].state).toBe('armed')
+})
+it('PROOF: a crash before any external step fails the job, it is never resumed or re-claimed; the authorization stays consumed',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','proof');vi.stubEnv('DINGHY_REDO_PROOF_CHAT',CHAT);install();await seed();await arm();(globalThis as any).__kick=false
+ await complain("That's not good");await pgq(`select * from claim_redo_job()`);await pgq(`update dinghy_redo_jobs set lease_until=now()-interval '1 minute'`)
+ expect(await runOneRedoJob()).toMatchObject({ran:false});expect((await jobs())[0]).toMatchObject({state:'failed',failure:'resume_exhausted'})
+ expect(published).not.toHaveBeenCalled();expect((await pgq(`select state from dinghy_redo_authorizations`))[0].state).toBe('consumed')
+ const ob=(await pgq(`select text from spectrum_outbox`)).map((r:any)=>r.text).join('\n');expect(ob).toMatch(/Nothing new was sent/)
+})
+it('TARGET: two different pages in the recent chat and no native reply: ask which page, change and cancel nothing',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();await seed()
+ await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,markdown,origin_request,origin_kind) values ($1,$2,'Other page','itinerary','page','https://other.here.now/','m','Plan a different fictional trip.','itinerary')`,[U,CHAT])
+ await pgq(`insert into spectrum_messages(chat_guid,role,content) values ($1,'assistant','[file: Other page] https://other.here.now/')`,[CHAT])
+ hoist.sent=[];await complain("That's not good")
+ expect(await jobs()).toHaveLength(0);expect(texts().join('\n')).toMatch(/Which page do you mean: "Other page" or "Unverified itinerary"/);expect(published).not.toHaveBeenCalled()
+})
+it('TARGET: a native reply to an earlier page picks exactly that page',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();const a=await seed()
+ await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,markdown,origin_request,origin_kind) values ($1,$2,'Other page','itinerary','page','https://other.here.now/','m','Plan a different fictional trip.','itinerary')`,[U,CHAT])
+ await pgq(`insert into spectrum_messages(chat_guid,role,content) values ($1,'assistant','[file: Other page] https://other.here.now/')`,[CHAT])
+ await handleSpectrumMessage(space,{id:'rp1',direction:'inbound',content:{type:'reply',content:{type:'text',text:"That's not good"},target:{id:'t1',direction:'outbound',content:{type:'text',text:'Here is your page: https://empty.here.now/'}}},sender:{handle:'+15550000000'},timestamp:new Date()} as any)
+ const j=await pgq(`select file_id from dinghy_redo_jobs`);expect(j).toHaveLength(1);expect(j[0].file_id).toBe(a)
+})
+it('TARGET: versions of the same original are not ambiguous; the latest version is the target',async()=>{
+ vi.stubEnv('DINGHY_REDO_JOBS','on');install();const a=await seed()
+ const v=(await pgq(`insert into dinghy_files(user_id,chat_guid,title,kind,format,url,markdown,origin_request,origin_kind,lineage_id) values ($1,$2,'Version 2','itinerary','page','https://v2.here.now/','m','r','itinerary',$3) returning id`,[U,CHAT,a]))[0].id
+ await pgq(`insert into spectrum_messages(chat_guid,role,content) values ($1,'assistant','[file: Version 2] https://v2.here.now/')`,[CHAT])
+ await complain("That's not good");const j=await pgq(`select file_id,lineage_id from dinghy_redo_jobs`);expect(j).toHaveLength(1);expect(j[0]).toMatchObject({file_id:v,lineage_id:a})
 })
 it('LINEAGE: a correction about an unrelated page is its own job, queued behind the running one, never appended; a replacement of the same original joins',async()=>{
  vi.stubEnv('DINGHY_REDO_JOBS','on');install();const a=await seed();await complain("That's not good")
@@ -264,3 +306,4 @@ it('LINEAGE: a correction about an unrelated page is its own job, queued behind 
  const cancel=(await pgq(`select redo_cancel($1,$2,$3) r`,[U,CHAT,rep]))[0].r;expect(cancel.status).not.toBe('none')
  const st=await pgq(`select file_id,state,cancel_requested from dinghy_redo_jobs order by created_at`);expect(st.find((x:any)=>x.file_id===b)).toMatchObject({state:'queued',cancel_requested:false})
 })
+

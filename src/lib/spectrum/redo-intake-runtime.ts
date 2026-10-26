@@ -9,7 +9,7 @@ export function realIntakeDeps(heldVerdict: () => Promise<HeldNoteVerdict | null
     return {
         userId: (chatGuid) => briefableUserId(chatGuid).catch(() => null),
         async file(userId, chatGuid, url) {
-            const { data } = await db.from('dinghy_files').select('id, created_at, origin_request, origin_google_derived, origin_kind, kind, lineage_id')
+            const { data } = await db.from('dinghy_files').select('id, created_at, origin_request, origin_google_derived, origin_kind, kind, lineage_id, title')
                 .eq('user_id', userId).eq('url', url).or(`chat_guid.eq.${chatGuid.replace(/[,()]/g, '')},chat_guid.is.null`).is('deleted_at', null).is('revoked_at', null)
                 .order('created_at', { ascending: false }).limit(1)
             return ((data ?? [])[0] as never) ?? null

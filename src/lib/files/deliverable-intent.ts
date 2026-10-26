@@ -74,6 +74,19 @@ export function deliveredFileContext(history: {role: string; content: string}[])
     return null
 }
 
+/** Distinct hosted-file links delivered in the same recent window, latest first. Used to notice when more than one page could be the one a message is about. */
+export function deliveredFileUrls(history: {role: string; content: string}[]): string[] {
+    const lastUser = history.map(m => m.role).lastIndexOf('user')
+    const before = lastUser < 0 ? history : history.slice(0, lastUser)
+    const urls: string[] = []
+    for (const m of before.slice(-FILE_WINDOW).reverse()) {
+        if (m.role !== 'assistant' || !FILE_LINE.test(m.content)) continue
+        const u = m.content.match(/https?:\/\/[^\s)]+/)?.[0]
+        if (u && !urls.includes(u)) urls.push(u)
+    }
+    return urls
+}
+
 /** What a redo job works from: the file's own stored request, verbatim, plus every note the user added about it, oldest first. Nothing else from the chat. */
 export function redoInstruction(origin: string, notes: string[]): string {
     return 'Redo the file described below. Keep every detail and settled choice from the original request, and apply every note from the user.\n\nOriginal request:\n' + origin + '\n\nNotes from the user about the file, oldest first:\n' + notes.map((n) => '- ' + n.replace(/\s+/g, ' ').trim()).join('\n')

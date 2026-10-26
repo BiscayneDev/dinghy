@@ -6,7 +6,7 @@ import type { UpsertResult } from './redo-jobs'
  * A correction after a delivered file. It never runs the redo here and never waits: it records the work as a durable job
  * (or adds to / cancels the active one) and answers truthfully. The job worker does the rest.
  */
-export interface RedoFileRow { id: string; created_at: string; origin_request: string | null; origin_google_derived: boolean; origin_kind: string | null; kind: string | null; lineage_id?: string | null }
+export interface RedoFileRow { id: string; created_at: string; origin_request: string | null; origin_google_derived: boolean; origin_kind: string | null; kind: string | null; lineage_id?: string | null; title?: string | null }
 export interface IntakeDeps {
     userId(chatGuid: string): Promise<string | null>
     file(userId: string, chatGuid: string, url: string): Promise<RedoFileRow | null>
@@ -19,15 +19,29 @@ export interface IntakeDeps {
     heldVerdict(): Promise<HeldNoteVerdict | null>
 }
 
-const CAP_TEXT = 'I have already started as many page rebuilds as I will run for you today, so I have not started another. Nothing was changed.'
+const CAP_TEXT = 'Automatic page rebuilds are not authorized for you right now, so I have not started one. Nothing was changed.'
 const COULD_NOT_START = 'I could not start the redo just now, so nothing was changed.'
 export const LATE_PHASES = new Set(['publishing', 'published', 'sending', 'sent'])
 
-export async function intakeRedo(chatGuid: string, fileUrl: string | null, text: string, deps: IntakeDeps): Promise<string> {
+/** replied: the page the user natively replied to, when the message carries one. candidates: recently delivered page links, latest first. */
+export interface RedoTarget { replied: string | null; candidates: string[] }
+
+export async function intakeRedo(chatGuid: string, fileUrl: string | null, text: string, deps: IntakeDeps, target?: RedoTarget): Promise<string> {
+    if (target?.replied) fileUrl = target.replied
     if (!fileUrl) return 'I could not find the page you mean, so I have not redone it. Nothing was changed.'
     const userId = await deps.userId(chatGuid).catch(() => null)
     const file = userId ? await deps.file(userId, chatGuid, fileUrl).catch(() => null) : null
     if (!userId || !file) return 'I could not find the page you mean, so I have not redone it. Nothing was changed.'
+    // No native reply to pick the page: if the recent pages are different originals, the latest is not clearly the target. Ask, never repair or cancel the wrong one.
+    if (userId && !target?.replied && (target?.candidates.length ?? 0) > 1) {
+        const rows = (await Promise.all(target!.candidates.slice(0, 4).map((u) => deps.file(userId, chatGuid, u).catch(() => null)))).filter((r): r is RedoFileRow => Boolean(r))
+        const lineages = new Set(rows.map((r) => r.lineage_id ?? r.id))
+        if (lineages.size > 1) {
+            const seen = new Set<string>(); const names: string[] = []
+            for (const r of rows) { const l = r.lineage_id ?? r.id; if (seen.has(l)) continue; seen.add(l); names.push('"' + (r.title?.trim() || 'Untitled page') + '"') }
+            return `Which page do you mean: ${names.slice(0, 3).join(' or ')}? Reply to the one you mean and I will rebuild it. I have not changed anything.`
+        }
+    }
     if (!file.origin_request) {
         const found = await deps.legacy(file, chatGuid).catch(() => null)
         if (!found || !found.origin.ok) return 'I could not tie that page back to the request that made it, so I have not redone it. Nothing was changed.'
@@ -50,14 +64,14 @@ export async function intakeRedo(chatGuid: string, fileUrl: string | null, text:
             return 'Stopping it now. Nothing more will be sent from it.'
         }
         const r = await deps.upsert(userId, chatGuid, file.id, note)
-        if (r.status === 'refused' && r.reason === 'cap') return CAP_TEXT
+        if (r.status === 'refused' && r.reason === 'no_authorization') return CAP_TEXT
         if (r.status !== 'appended' && r.status !== 'created') return 'I could not add that to the redo just now, so it is not in it. Nothing was changed.'
         return r.status === 'appended' && r.phase && LATE_PHASES.has(r.phase)
             ? 'Got it. The version in progress is already on its way out without that, so I will make one more version with your note and send it.'
             : 'Got it. I am adding that to the version I am building now.'
     }
     const r = await deps.upsert(userId, chatGuid, file.id, note)
-    if (r.status === 'refused' && r.reason === 'cap') return CAP_TEXT
+    if (r.status === 'refused' && r.reason === 'no_authorization') return CAP_TEXT
     if (r.status === 'created' || r.status === 'appended') return 'On it. I am rebuilding that page and will send it here when it is ready.'
     return COULD_NOT_START
 }

@@ -6,7 +6,7 @@ import { createServerClient } from '@/lib/supabase/server'
  */
 export type UpsertResult =
     | { status: 'created' | 'appended'; jobId: string; revision: number; phase?: string }
-    | { status: 'refused'; reason: 'file' | 'chat' | 'note' | 'no_origin' | 'race' | 'cap' }
+    | { status: 'refused'; reason: 'file' | 'chat' | 'note' | 'no_origin' | 'race' | 'no_authorization' }
     | { status: 'unknown' }
 export type FenceResult = 'ok' | 'cancelled' | 'stale' | 'lost' | 'unknown'
 export type CloseResult = 'done' | 'requeued' | 'note_unapplied' | 'lost' | 'unknown'
@@ -27,7 +27,7 @@ async function rpc<T>(fn: string, args: Record<string, unknown>): Promise<T | nu
 }
 
 export async function upsertRedoJob(userId: string, chatGuid: string, fileId: string, noteId: string | null): Promise<UpsertResult> {
-    const r = await rpc<{ status?: string; job_id?: string; revision?: number; phase?: string; reason?: string }>('upsert_redo_job', { p_user: userId, p_chat: chatGuid, p_file: fileId, p_note: noteId })
+    const r = await rpc<{ status?: string; job_id?: string; revision?: number; phase?: string; reason?: string }>('upsert_redo_job', { p_user: userId, p_chat: chatGuid, p_file: fileId, p_note: noteId, p_require_auth: redoMode() === 'proof' })
     if (!r?.status) return { status: 'unknown' }
     if ((r.status === 'created' || r.status === 'appended') && r.job_id) return { status: r.status, jobId: r.job_id, revision: r.revision ?? 0, ...(r.phase ? { phase: r.phase } : {}) }
     if (r.status === 'refused') return { status: 'refused', reason: (r.reason as 'file') ?? 'file' }
@@ -66,15 +66,23 @@ export async function activeRedoJobFor(userId: string, lineageId: string): Promi
 }
 
 /** Off by default. While off, no job is ever created (a job nobody runs would be a promise nobody keeps). */
-export const redoMode = (): 'off' | 'owner' | 'on' => (process.env.DINGHY_REDO_JOBS === 'on' ? 'on' : process.env.DINGHY_REDO_JOBS === 'owner' ? 'owner' : 'off')
-/** Worker and cron run in 'owner' and 'on'. */
+export const redoMode = (): 'off' | 'proof' | 'owner' | 'on' => (['on', 'owner', 'proof'].includes(process.env.DINGHY_REDO_JOBS ?? '') ? (process.env.DINGHY_REDO_JOBS as 'on' | 'owner' | 'proof') : 'off')
+/** Worker, kick and cron run in every mode except off. */
 export const redoJobsEnabled = (): boolean => redoMode() !== 'off'
-/** Who may create jobs: 'on' is everyone, 'owner' only the chats listed (comma separated) in DINGHY_REDO_OWNER_CHATS, anything else nobody. */
-export function redoJobsEnabledFor(chatGuid: string): boolean {
+/** Who may create jobs. 'on': everyone. 'owner': the chats in DINGHY_REDO_OWNER_CHATS (ongoing, needs its own approval). 'proof': only DINGHY_REDO_PROOF_CHAT, and only while an armed one-shot authorization or its active job exists. Anything else: nobody. */
+export async function redoJobsAllowed(chatGuid: string): Promise<boolean> {
     const m = redoMode()
     if (m === 'on') return true
-    if (m !== 'owner') return false
-    return (process.env.DINGHY_REDO_OWNER_CHATS ?? '').split(',').map((x) => x.trim()).filter(Boolean).includes(chatGuid)
+    if (m === 'owner') return (process.env.DINGHY_REDO_OWNER_CHATS ?? '').split(',').map((x) => x.trim()).filter(Boolean).includes(chatGuid)
+    if (m !== 'proof' || !chatGuid || process.env.DINGHY_REDO_PROOF_CHAT !== chatGuid) return false
+    try {
+        const db = createServerClient()
+        const armed = await db.from('dinghy_redo_authorizations').select('id').eq('chat_guid', chatGuid).eq('state', 'armed').limit(1)
+        if (armed.error) return false
+        if (armed.data?.length) return true
+        const active = await db.from('dinghy_redo_jobs').select('id').eq('chat_guid', chatGuid).in('state', ['queued', 'running']).limit(1)
+        return !active.error && Boolean(active.data?.length)
+    } catch { return false }
 }
 
 export const TERMINAL_TEXT: Record<string, string> = {

@@ -42,7 +42,7 @@ import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
 import { CLARIFY_MARK, stripClarifyMark, pendingItineraryClarification, continueAfterClarification, decideClarificationReply, type ReplyVerdict } from '@/lib/files/itinerary-continuation'
-import { decideFollowUpDeliverable, deliverableIntentEnabled, decideHeldNote, deliveredFileContext, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
+import { decideFollowUpDeliverable, deliverableIntentEnabled, decideHeldNote, deliveredFileContext, deliveredFileUrls, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -74,7 +74,7 @@ import { earlierUserText, loadActiveRuns, steerNote } from './active-run'
 import { fileUrlOf, saveFileOrigin } from '@/lib/files/origin'
 import { intakeRedo } from './redo-intake'
 import { realIntakeDeps } from './redo-intake-runtime'
-import { redoJobsEnabledFor } from './redo-jobs'
+import { redoJobsAllowed } from './redo-jobs'
 import { claimInboundDelivery, enqueueOutbox, markOutboxFailed, markOutboxSent, type OutboxKind } from './outbox'
 import { briefableUserId, handleMuteIntent } from './briefing'
 import { chooseCurrentPlace, isPlaceOnlyMessage, placeStatement, travelAck } from './place'
@@ -1032,25 +1032,27 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     let deliverable: (DeliverableContract & { redo?: true }) | null
     let redoRefusal: string | null = null
     const afterFile = deliveredFileContext(full)
+    // Whether redo jobs may start for this chat right now (flag mode and, in proof mode, an armed one-shot authorization). Read once, only when a page was recently delivered.
+    const redoAllowed = afterFile ? await redoJobsAllowed(chatGuid) : false
     const decisionContext = JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
     if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
         // Flag on: the model already judges every turn; after a delivered file the same call also offers "redo" (no extra call).
-        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: afterFile ? JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000) : decisionContext, signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full), afterFile: Boolean(afterFile) && redoJobsEnabledFor(chatGuid) })
+        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: afterFile ? JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000) : decisionContext, signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full), afterFile: Boolean(afterFile) && redoAllowed })
     } else {
         deliverable = selectDeliverable(full)
         // Flag off: when a delivered file is in recent history and the keyword matcher saw nothing, one bounded model call decides whether this is a redo request. Only a redo acts; any other answer leaves the turn as ordinary chat.
-        if (!deliverable && afterFile && redoJobsEnabledFor(chatGuid)) {
+        if (!deliverable && afterFile && redoAllowed) {
             deliverable = await decideFollowUpDeliverable({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000) })
         }
     }
     if (deliverable?.redo) {
-        if (!redoJobsEnabledFor(chatGuid)) {
+        if (!redoAllowed) {
             // Redo jobs are not active: a correction is ordinary chat, never a promise nobody runs.
             deliverable = null
         } else {
             const complaint: string = text
             const heldContext = JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
-            redoRefusal = await intakeRedo(chatGuid, afterFile ? fileUrlOf(afterFile.line) : null, complaint, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY ?? "", request: complaint, context: heldContext, signal: AbortSignal.timeout(8000) })))
+            redoRefusal = await intakeRedo(chatGuid, afterFile ? fileUrlOf(afterFile.line) : null, complaint, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY ?? "", request: complaint, context: heldContext, signal: AbortSignal.timeout(8000) })), { replied: replyTo?.text ? fileUrlOf(replyTo.text) : null, candidates: deliveredFileUrls(full) })
             deliverable = null
         }
     }
@@ -1058,7 +1060,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         const delivered = await sendText(space, chatGuid, 'reply', redoRefusal)
         if (delivered) await saveMessage(chatGuid, 'assistant', redoRefusal).catch((err) => logErr('redo reply save failed', err))
         // Start the queued job now, inside this webhook's own execution window, so the user does not wait for a cron tick. The cron route rescues anything this misses.
-        if (redoJobsEnabledFor(chatGuid)) await import('./redo-worker-runtime').then((m) => m.kickRedoJobs(handlerEntryAt)).catch((err) => logErr('redo kick failed', err))
+        if (redoAllowed) await import('./redo-worker-runtime').then((m) => m.kickRedoJobs(handlerEntryAt)).catch((err) => logErr('redo kick failed', err))
         return
     }
     // A pending itinerary question carries the original request forward only when the model judges the new message to be its answer.

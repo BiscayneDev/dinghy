@@ -40,6 +40,23 @@ create table public.dinghy_redo_jobs (
   closed_at timestamptz
 );
 create unique index dinghy_redo_jobs_one_active on public.dinghy_redo_jobs (user_id, lineage_id) where state in ('queued','running');
+-- One-shot authorization for a staged proof. A row is created by an operator after the user approves; it is consumed by exactly one job
+-- creation and never re-armed by code. Without an armed row, proof mode creates no job.
+create table public.dinghy_redo_authorizations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  chat_guid text not null,
+  scope text not null default 'single_proof' check (scope = 'single_proof'),
+  state text not null default 'armed' check (state in ('armed','consumed','revoked')),
+  job_id uuid,
+  created_at timestamptz not null default now(),
+  consumed_at timestamptz
+);
+create unique index dinghy_redo_authorizations_one_armed on public.dinghy_redo_authorizations (user_id, chat_guid) where state = 'armed';
+alter table public.dinghy_redo_authorizations enable row level security;
+revoke all on public.dinghy_redo_authorizations from anon, authenticated, public;
+grant select, insert, update on public.dinghy_redo_authorizations to service_role;
+alter table public.dinghy_redo_jobs add column authorization_id uuid references public.dinghy_redo_authorizations(id);
 create index dinghy_redo_jobs_claimable on public.dinghy_redo_jobs (state, lease_until);
 alter table public.dinghy_redo_jobs enable row level security;
 revoke all on public.dinghy_redo_jobs from anon, authenticated, public;
@@ -47,9 +64,9 @@ grant select, insert, update, delete on public.dinghy_redo_jobs to service_role;
 comment on table public.dinghy_redo_jobs is 'Ids and states only. No message text, no request text.';
 
 -- Create the job or add a note to the active one. Ownership: the file and the note must belong to this user and chat.
-create or replace function public.upsert_redo_job(p_user uuid, p_chat text, p_file uuid, p_note text default null)
+create or replace function public.upsert_redo_job(p_user uuid, p_chat text, p_file uuid, p_note text default null, p_require_auth boolean default false)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare f record; j public.dinghy_redo_jobs; lin uuid;
+declare f record; j public.dinghy_redo_jobs; lin uuid; aid uuid;
 begin
   select * into f from public.dinghy_files
    where id = p_file and user_id = p_user and deleted_at is null and revoked_at is null
@@ -64,15 +81,16 @@ begin
     return jsonb_build_object('status','refused','reason','note');
   end if;
   lin := coalesce(f.lineage_id, f.id);
-  -- Bounded cost: a few new rebuilds per user per day. Notes on an active job are never refused by this.
-  if not exists (select 1 from public.dinghy_redo_jobs where user_id = p_user and lineage_id = lin and state in ('queued','running'))
-     and (select count(*) from public.dinghy_redo_jobs where user_id = p_user and created_at > now() - interval '24 hours') >= 6 then
-    return jsonb_build_object('status','refused','reason','cap');
+  -- A new job (not a note on an active one) needs an armed one-shot authorization in proof mode. It is consumed here, atomically.
+  if p_require_auth and not exists (select 1 from public.dinghy_redo_jobs where user_id = p_user and lineage_id = lin and state in ('queued','running')) then
+    select id into aid from public.dinghy_redo_authorizations where user_id = p_user and chat_guid = p_chat and state = 'armed' order by created_at limit 1 for update skip locked;
+    if aid is null then return jsonb_build_object('status','refused','reason','no_authorization'); end if;
   end if;
   begin
-    insert into public.dinghy_redo_jobs (user_id, chat_guid, file_id, lineage_id, note_ids, note_revision)
-    values (p_user, p_chat, p_file, lin, case when p_note is null then '{}' else array[p_note] end, case when p_note is null then 0 else 1 end)
+    insert into public.dinghy_redo_jobs (user_id, chat_guid, file_id, lineage_id, authorization_id, note_ids, note_revision)
+    values (p_user, p_chat, p_file, lin, aid, case when p_note is null then '{}' else array[p_note] end, case when p_note is null then 0 else 1 end)
     returning * into j;
+    if aid is not null then update public.dinghy_redo_authorizations set state = 'consumed', job_id = j.id, consumed_at = now() where id = aid; end if;
     return jsonb_build_object('status','created','job_id',j.id,'revision',j.note_revision);
   exception when unique_violation then
     update public.dinghy_redo_jobs
@@ -95,9 +113,9 @@ begin
   update public.dinghy_redo_jobs set state = 'blocked', failure = 'outcome_unknown', closed_at = now(), updated_at = now()
    where state = 'running' and lease_until < now() and phase in ('publishing','published','sending');
   update public.dinghy_redo_jobs set state = 'failed', failure = 'resume_exhausted', closed_at = now(), updated_at = now()
-   where state = 'running' and lease_until < now() and phase in ('queued','building') and resumes >= 1;
+   where state = 'running' and lease_until < now() and phase in ('queued','building') and (resumes >= 1 or authorization_id is not null);
   select * into j from public.dinghy_redo_jobs
-   where (state = 'queued' or (state = 'running' and lease_until < now() and phase in ('queued','building') and resumes < 1))
+   where (state = 'queued' or (state = 'running' and lease_until < now() and phase in ('queued','building') and resumes < 1 and authorization_id is null))
      -- One job at a time per chat: a queued job waits behind a live one, it is never merged into it.
      and not exists (select 1 from public.dinghy_redo_jobs r where r.chat_guid = dinghy_redo_jobs.chat_guid and r.id <> dinghy_redo_jobs.id and r.state = 'running' and r.lease_until >= now())
    order by created_at limit 1 for update skip locked;
@@ -221,7 +239,7 @@ begin
   return jsonb_build_object('messages', m, 'facts', f, 'summaries', s, 'origins', o, 'redo_documents', d);
 end $$;
 
-revoke all on function public.upsert_redo_job(uuid,text,uuid,text) from public, anon, authenticated;
+revoke all on function public.upsert_redo_job(uuid,text,uuid,text,boolean) from public, anon, authenticated;
 revoke all on function public.claim_redo_job(int) from public, anon, authenticated;
 revoke all on function public.redo_advance(uuid,uuid,text,int) from public, anon, authenticated;
 revoke all on function public.redo_close(uuid,uuid) from public, anon, authenticated;
@@ -230,6 +248,6 @@ revoke all on function public.redo_fail(uuid,uuid,text) from public, anon, authe
 revoke all on function public.redo_notify(uuid,text) from public, anon, authenticated;
 revoke all on function public.redo_file_for_op(uuid,uuid) from public, anon, authenticated;
 revoke all on function public.expire_google_derived(int) from public, anon, authenticated;
-grant execute on function public.upsert_redo_job(uuid,text,uuid,text), public.claim_redo_job(int), public.redo_advance(uuid,uuid,text,int),
+grant execute on function public.upsert_redo_job(uuid,text,uuid,text,boolean), public.claim_redo_job(int), public.redo_advance(uuid,uuid,text,int),
   public.redo_close(uuid,uuid), public.redo_cancel(uuid,text,uuid), public.redo_fail(uuid,uuid,text), public.redo_notify(uuid,text), public.redo_file_for_op(uuid,uuid), public.expire_google_derived(int) to service_role;
 notify pgrst, 'reload schema';
