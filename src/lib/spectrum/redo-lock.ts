@@ -70,7 +70,7 @@ export async function peekRedoLock(chatGuid: string, hash: string, now: () => nu
 /** Wait (bounded) for the running redo to release. */
 const redoWaitMs = () => Number(process.env.DINGHY_REDO_WAIT_MS) || 110_000
 
-export async function waitForRedoRelease(chatGuid: string, hash: string, maxMs: number = REDO_WAIT_MS, pollMs = Math.min(3000, Math.max(10, Math.floor(maxMs / 4)))): Promise<'released' | 'timeout' | 'unknown'> {
+export async function waitForRedoRelease(chatGuid: string, hash: string, maxMs: number = redoWaitMs(), pollMs = Math.min(3000, Math.max(10, Math.floor(maxMs / 4)))): Promise<'released' | 'timeout' | 'unknown'> {
     const until = Date.now() + maxMs
     for (;;) {
         const s = await peekRedoLock(chatGuid, hash)
