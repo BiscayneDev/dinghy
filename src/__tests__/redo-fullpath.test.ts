@@ -377,6 +377,7 @@ for(const legacy of [true,false])it(`NATIVE reply "This one" to a ${legacy?'LEGA
  expect(hoist.chatCalls[0].opts.deliverable.request).toContain(ORIGINAL);expect(hoist.chatCalls[0].opts.deliverable.request).toContain('This one')
  expect(published).toHaveBeenCalledTimes(1)
  const html=published.mock.calls[0][0].find((f:any)=>f.path==='index.html').bytes.toString()
+ if(process.env.DUMP_HTML&&legacy)(await import('fs')).writeFileSync(process.env.DUMP_HTML,html)
  expect(html).toContain('Harborville Inn');expect(html).toContain('Harborville Cafe');expect(html).not.toContain('Recommendations not verified')
  if(legacy)expect((await pgq(`select origin_request from dinghy_files where url='https://empty.here.now/'`))[0].origin_request).toBe(ORIGINAL)
 })
