@@ -42,7 +42,7 @@ import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
 import { CLARIFY_MARK, stripClarifyMark, pendingItineraryClarification, continueAfterClarification, decideClarificationReply, type ReplyVerdict } from '@/lib/files/itinerary-continuation'
-import { decideFollowUpDeliverable, deliverableIntentEnabled, followsDeliveredFile, lastDeliveredFileLine, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
+import { decideFollowUpDeliverable, deliverableIntentEnabled, deliveredFileContext, originalContract, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -1024,19 +1024,36 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     // Model-owned deliverable intent: with the flag on, one bounded Jev judgment decides
     // what (if any) deliverable every turn asks for. The keyword matcher is only the outage
     // fallback when the decision is unavailable or uncertain; with the flag off it stays the selector.
-    let deliverable: DeliverableContract | null
+    let deliverable: (DeliverableContract & { redo?: true }) | null
     let redoFollowUp = false
+    let redoHeldForRunningJob = false
+    const afterFile = deliveredFileContext(full)
+    const previousContract = afterFile ? originalContract(full, selectDeliverable) : null
+    const decisionContext = JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
     if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
-        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full) })
+        // Flag on: the model already judges every turn; after a delivered file the same call also offers "redo" (no extra call).
+        deliverable = await selectDeliverableModelOwned({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: afterFile ? JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000) : decisionContext, signal: AbortSignal.timeout(8000), legacy: () => selectDeliverable(full), afterFile: Boolean(afterFile), previous: previousContract })
     } else {
         deliverable = selectDeliverable(full)
-        // A file was just delivered and the keyword matcher saw nothing in this message (e.g. "that's not good"): let one bounded model judgment decide whether it asks for more work on that file.
-        if (!deliverable && followsDeliveredFile(full)) {
-            deliverable = await decideFollowUpDeliverable({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), previous: selectDeliverable(full.slice(0, -1)), signal: AbortSignal.timeout(8000) })
-            // One redo job per delivered file per 10 minutes: a second complaint while it runs does not start a second job; a later one after a failed redo can.
-            if (deliverable && !(await claimInboundDelivery(`redo:${createHash('sha256').update(`${chatGuid}\n${lastDeliveredFileLine(full)}\n${Math.floor(Date.now() / 600_000)}`).digest('hex')}`, chatGuid))) deliverable = null
-            else if (deliverable) redoFollowUp = true
+        // Flag off: when a delivered file is in recent history and the keyword matcher saw nothing, one bounded model call decides whether this is a redo request. Only a redo acts; any other answer leaves the turn as ordinary chat.
+        if (!deliverable && afterFile) {
+            deliverable = await decideFollowUpDeliverable({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), previous: previousContract, signal: AbortSignal.timeout(8000) })
         }
+    }
+    if (deliverable?.redo && afterFile) {
+        // One redo job per delivered file and reply generation: a second complaint during a running job is held, a retry after a failed redo (a new reply) or a revision after a new file is a new claim.
+        const key = `redo:${createHash('sha256').update(`${chatGuid}\n${afterFile.line}\n${afterFile.generation}`).digest('hex')}`
+        if (await claimInboundDelivery(key, chatGuid)) redoFollowUp = true
+        else {
+            deliverable = null
+            redoHeldForRunningJob = true
+        }
+    }
+    if (redoHeldForRunningJob) {
+        const holding = 'I am already redoing that. The new version will land here when it is ready.'
+        const delivered = await sendText(space, chatGuid, 'reply', holding)
+        if (delivered) await saveMessage(chatGuid, 'assistant', holding).catch((err) => logErr('redo holding save failed', err))
+        return
     }
     // A pending itinerary question carries the original request forward only when the model judges the new message to be its answer.
     let replyVerdict: ReplyVerdict | null = null

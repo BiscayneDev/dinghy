@@ -26,7 +26,7 @@ const call=(name:string,args:unknown)=>new Response(JSON.stringify({choices:[{fi
 const stop=(c:string)=>new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:c}}]}))
 const lineOf=(req:any,nm:string)=>{const sys=req.messages.find((m:any)=>m.role==='system'&&String(m.content).startsWith('Candidate lines'));const l=String(sys?.content).split('\n').find((x:string)=>/^L\d+ \| /.test(x)&&x.split(' | ')[1]===nm);return l?Number(l.split(' | ')[0].slice(1)):0}
 let gateway:any[]=[],selects=0
-beforeEach(()=>{state.claims=new Set();state.freeze=null;state.messages=[];state.sent=[];state.chatCalls=[];gateway=[];selects=0;state.decisions=0;state.verdict2='itinerary';published.mockReset();published.mockResolvedValue({url:'https://fictional.here.now/',expiresAt:new Date(Date.now()+86400000).toISOString(),files:[]})})
+beforeEach(()=>{state.claims=new Set();state.freeze=null;state.messages=[];state.sent=[];state.chatCalls=[];gateway=[];selects=0;state.decisions=0;state.verdict2='redo';published.mockReset();published.mockResolvedValue({url:'https://fictional.here.now/',expiresAt:new Date(Date.now()+86400000).toISOString(),files:[]})})
 afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs()})
 const space={id:'any;-;+15550000000',send:async(t:any)=>{state.sent.push(t)}}
 const texts=()=>state.sent.filter((x:any)=>typeof x==='string') as string[]
@@ -90,8 +90,9 @@ it('keyword matcher already found a deliverable: no follow-up decision, no redo 
 it('two complaints at once start exactly one redo job',async()=>{
  install();state.messages=delivered() as any;state.freeze=[...state.messages]
  await Promise.all([handleSpectrumMessage(space,inbound('d1',"That's not good")),handleSpectrumMessage(space,inbound('d2','What you sent me is bad'))])
- expect(state.decisions).toBe(2);expect(state.chatCalls).toHaveLength(2)
+ expect(state.decisions).toBe(2);expect(state.chatCalls).toHaveLength(1)
  expect(state.chatCalls.filter(c=>c.opts.deliverable?.kind==='itinerary')).toHaveLength(1)
+ expect(texts().filter(t=>t.includes('already redoing that'))).toHaveLength(1)
  expect(published).toHaveBeenCalledTimes(1);expect(texts().filter(t=>t.includes('putting the itinerary together'))).toHaveLength(1)
 })
 
@@ -102,4 +103,30 @@ it('redo that never gets a file (research only, or blank completions): honest re
   expect(published).not.toHaveBeenCalled();expect(texts().length).toBeGreaterThan(0);expect(texts().every(t=>t.trim().length>0)).toBe(true)
   expect(texts().join('\n')).not.toMatch(/Ask me again|couldn.t make that file/)
  }
+})
+
+const hoursLater=()=>{const m=delivered() as any[];const ago=(h:number)=>new Date(Date.now()-h*36e5).toISOString();m.forEach((x,i)=>x.at=ago(5-i*0.01));return [...m,{role:'user',content:"That's not good",at:ago(1)},{role:'assistant',content:'I couldn\'t make that file just now. Ask me again in a moment.',at:ago(1)}]}
+it('screenshot shape: complaint hours after the file and after an earlier failed complaint still redoes the original request, once',async()=>{
+ install();state.messages=hoursLater() as any
+ await handleSpectrumMessage(space,inbound('h1','What you sent me is bad'))
+ expect(state.decisions).toBe(1);expect(state.chatCalls[0].opts.deliverable.request).toContain(original)
+ expect(published).toHaveBeenCalledTimes(1);expect(texts().join('\n')).not.toMatch(/Ask me again/)
+})
+it('a revision after the replacement was delivered is a new job, not swallowed by the earlier claim',async()=>{
+ install();state.messages=delivered() as any
+ await handleSpectrumMessage(space,inbound('r1',"That's not good"))
+ expect(published).toHaveBeenCalledTimes(1)
+ state.messages=[...delivered(),{role:'user',content:"That's not good",at:new Date().toISOString()},{role:'assistant',content:'[file: Harborville itinerary] https://new.here.now/',at:new Date().toISOString()}] as any;state.sent=[];state.chatCalls=[];selects=0
+ await handleSpectrumMessage(space,inbound('r2','The dinner pick is wrong, redo it'))
+ expect(state.chatCalls[0].opts.deliverable?.kind).toBe('itinerary');expect([...state.claims].filter(k=>k.startsWith('redo:'))).toHaveLength(2)
+})
+it('flag on: the existing per-turn decision also offers redo (no extra call), original request travels',async()=>{
+ vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();state.messages=delivered() as any
+ await handleSpectrumMessage(space,inbound('f1',"That's not good"))
+ expect(state.decisions).toBe(1);expect(state.chatCalls[0].opts.deliverable.request).toContain(original);expect(published).toHaveBeenCalledTimes(1)
+})
+it('flag on: venting is none, ordinary turn',async()=>{
+ vi.stubEnv('DINGHY_JEV_DELIVERABLE','on');install();state.verdict2='none';state.messages=delivered() as any
+ await handleSpectrumMessage(space,inbound('f2','ugh'))
+ expect(state.decisions).toBe(1);expect(state.chatCalls[0]?.opts.deliverable??null).toBeNull();expect(published).not.toHaveBeenCalled()
 })
