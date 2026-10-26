@@ -35,7 +35,7 @@ import {
 import { verifiedWaitlistBackground } from './background-context'
 import { firstReplyBundleDecision, isGoogleReconnectIntent, FIRST_USE_SUGGESTIONS, FIRST_USE_SUGGESTIONS_NO_GOOGLE, GOOGLE_CONNECT_ASK } from './connect-lines'
 import { wantsPlaces } from '@/lib/places/intent'
-import { chat, chatWithTools, productFactsFor, wantsGoogle, wantsAnotherGoogle, wantsGithub, wantsHealth, wantsWallet, isContactCardRequest, MAX_HISTORY, type Message } from './dinghy'
+import { RedoCancelled, chat, chatWithTools, productFactsFor, wantsGoogle, wantsAnotherGoogle, wantsGithub, wantsHealth, wantsWallet, isContactCardRequest, MAX_HISTORY, type Message } from './dinghy'
 import { recordUsage, spendToolFor, type GatewayUsage } from './metering'
 import { allowanceUsedUpMessage, claimLimitNotice, isOverDailyAllowance } from '@/lib/allowance'
 import { provisionSpectrumIdentity } from './provision'
@@ -71,7 +71,8 @@ import {
     type BetaRole,
 } from './beta-gate'
 import { earlierUserText, loadActiveRuns, steerNote } from './active-run'
-import { acquireRedoLock, peekRedoLock, waitForRedoRelease, type RedoLock } from './redo-lock'
+import { loadFileOrigin, originMarker } from '@/lib/files/origin'
+import { acquireRedoLock, contentHash, markRedoClosed, peekRedoLockInfo, readRedoSignals, recordRedoSignal, waitForRedoRelease, type RedoLock } from './redo-lock'
 import { claimInboundDelivery, enqueueOutbox, markOutboxFailed, markOutboxSent, type OutboxKind } from './outbox'
 import { briefableUserId, handleMuteIntent } from './briefing'
 import { chooseCurrentPlace, isPlaceOnlyMessage, placeStatement, travelAck } from './place'
@@ -1031,7 +1032,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     let redoRefusal: string | null = null
     let afterFile = deliveredFileContext(full)
     let redoWaitedUntil = 0
-    const conversationOfFile = () => recoverArtifactConversation({ full, historyLimit: MAX_HISTORY, deepLimit: 300, loadDeep: (n) => loadHistory(chatGuid, n) })
+    const conversationOfFile = () => recoverArtifactConversation({ loadOrigin: (u) => loadFileOrigin(chatGuid, u), full, historyLimit: MAX_HISTORY, deepLimit: 300, loadDeep: (n) => loadHistory(chatGuid, n) })
     let redoHash = afterFile ? createHash('sha1').update(`${chatGuid}\n${afterFile.line}`).digest('hex').slice(0, 16) : ''
     const decisionContext = JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
     if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
@@ -1049,19 +1050,30 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             deliverable = null
             redoRefusal = 'I could not rebuild the full original request for that page from this chat, so I have not redone it. Nothing was changed.'
         } else {
-            const lockState = await peekRedoLock(chatGuid, redoHash)
+            const lockInfo = await peekRedoLockInfo(chatGuid, redoHash)
+            const lockState = lockInfo.state
             if (lockState === 'unknown') {
                 deliverable = null
                 redoRefusal = 'I could not start the redo just now, so nothing was changed.'
             } else if (lockState === 'held') {
                 // A redo of this file is running. A repeated complaint is covered by it; a cancel is honest about what cannot be pulled back; a changed or added instruction is kept (it is already in the stored chat) and applied in a fresh redo once the running one finishes.
                 const verdict = (await decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000) })) ?? 'new_instruction'
+                const signals = lockInfo.claimId ? await readRedoSignals(lockInfo.claimId) : null
                 if (verdict === 'repeat') {
                     deliverable = null
                     redoRefusal = 'Still on it. That is already covered by the redo I am running.'
+                } else if (verdict === 'stop' && lockInfo.claimId) {
+                    // The running redo checks this before every loop turn, before it publishes, and before it sends.
+                    await recordRedoSignal(chatGuid, lockInfo.claimId, 'cancel', text)
+                    deliverable = null
+                    redoRefusal = 'Stopping that redo now. Nothing more will be sent from it. If it already landed, I cannot unsend it.'
                 } else if (verdict === 'stop') {
                     deliverable = null
-                    redoRefusal = 'A redo is already running and I cannot pull it back. I will not start another one.'
+                    redoRefusal = 'I could not stop that redo just now, so it may still arrive.'
+                } else if (lockInfo.claimId && signals && !signals.closed && (await recordRedoSignal(chatGuid, lockInfo.claimId, 'note', text))) {
+                    // The running redo picks this up (it is already in the stored chat) before it publishes.
+                    deliverable = null
+                    redoRefusal = 'Adding that to the redo that is running now.'
                 } else {
                     const waited = await waitForRedoRelease(chatGuid, redoHash)
                     const stored = waited === 'released' ? await loadHistory(chatGuid, 300).catch(() => null) : null
@@ -1239,7 +1251,33 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
                 },
                 ...(wantsPlaces(text) && tools.some((t) => t.name === 'find_places') ? { forceTool: 'find_places' } : {}),
             }
-            const r = await chatWithTools(full, toolOpts, tools, runCtx)
+            // A running redo watches for later notes and a cancel (signals keyed to this job's lock): it applies notes before it publishes, stops new work on cancel, and sends nothing after a cancel.
+            const ownLock = redoLock?.state === 'acquired' ? redoLock : null
+            const consumedNotes = new Set<string>()
+            const redoGate = ownLock
+                ? async (close: boolean) => {
+                    const sig = await readRedoSignals(ownLock.claimId)
+                    if (sig.cancelled) return { notes: [] as string[], cancelled: true }
+                    const fresh = sig.noteHashes.filter((h) => !consumedNotes.has(h))
+                    const notes: string[] = []
+                    if (fresh.length) {
+                        const recent = await loadHistory(chatGuid, 60).catch(() => [] as HistoryMessage[])
+                        for (const h of fresh) {
+                            const m = recent.find((x) => x.role === 'user' && contentHash(String(x.content)) === h)
+                            if (m) { notes.push(String(m.content)); consumedNotes.add(h) }
+                        }
+                    }
+                    if (close && notes.length === 0) await markRedoClosed(chatGuid, ownLock.claimId)
+                    return { notes, cancelled: false }
+                }
+                : undefined
+            const r = await chatWithTools(full, { ...toolOpts, ...(redoGate ? { redoGate } : {}) }, tools, runCtx)
+            if (ownLock) {
+                const after = await readRedoSignals(ownLock.claimId)
+                if (after.cancelled) throw new RedoCancelled()
+                const late = after.noteHashes.filter((h) => !consumedNotes.has(h)).length
+                if (late) r.reply = `${r.reply}\n\nA note you sent while I was finishing arrived after this version was built, so it is not in it.`
+            }
             if (r.deliverable) await onStage('reply_ready', `deliverable:${r.deliverable.kind}:${r.deliverable.state}`)
             reply = stripClarifyMark(r.reply)
             askedQuestion = Boolean(r.clarification)
@@ -1315,6 +1353,8 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         }
         // Files made this turn go out after the text: a file link, or an attachment.
         for (const file of fileTools?.files() ?? []) await sendFile(space, chatGuid, file)
+        // Remember the exact request each shipped page was made from (hidden marker row), so a later complaint redoes that request, not a guess from the chat.
+        if (deliverable) for (const file of fileTools?.files() ?? []) if (file.hosted?.url) await saveMessage(chatGuid, 'assistant', originMarker(file.hosted.url, deliverable.request)).catch((err) => logErr('file origin save failed', err))
         // All useful links go first. No detached work after the response lifecycle.
         for (const file of fileTools?.files() ?? []) {
             await file.enrichImagery?.().catch((err)=>logErr('page enrichment failed',err))
@@ -1401,6 +1441,12 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         }
         await onStage('failed')
         if (photoHistory) await photoHistory
+        if (err instanceof RedoCancelled) {
+            const stopped = 'Stopped that redo. Nothing new was sent from it.'
+            const delivered = await sendText(space, chatGuid, 'reply', stopped)
+            if (delivered) await saveMessage(chatGuid, 'assistant', stopped).catch((e) => logErr('redo stop save failed', e))
+            return
+        }
         logErr('gateway call failed', err)
         // Fail closed: Google data never falls back to the normal route.
         await sendText(space, chatGuid, 'error_notice', err instanceof PrivateRouteUnavailable

@@ -82,26 +82,26 @@ export function deliveredFileContext(history: {role: string; content: string}[])
 
 export const ARTIFACT_CONVERSATION_MAX_CHARS = 12_000
 
-/** Everything said in the chat up to and including the delivered file, minus job acknowledgements and holding lines, so a redo keeps the original request, clarifications, settled choices and every later correction, including corrections made after earlier redos. It can include unrelated earlier requests (the redo request tells the model to ignore them); the chat model already receives the loaded history every turn. Only whole earlier file-segments are ever dropped when it is too long, never part of a turn; if even the segment nearest the file is too long, text is null. `boundaryKnown` is false when the history may have been cut off before the start of the chat. */
+/** Fallback for files delivered before the origin marker existed: the turns after the previous delivered file up to this file, minus job acknowledgements and holding lines. Association is by position only and can include unrelated turns, so it is the fallback, not the rule; it is never shortened (too long returns text:null). `boundaryKnown` is false when the history may have been cut off before the start of that exchange. */
 export function artifactConversation(file: {index: number; historyBefore: {role: string; content: string}[]}, historyIsExhaustive: boolean): {text: string | null; boundaryKnown: boolean} {
-    const h = file.historyBefore.slice(0, file.index + 1).filter(m => !(m.role === 'assistant' && (ACK_LINE.test(m.content) || HOLD_LINE.test(m.content))))
-    const segments: string[][] = [[]]
-    for (const m of h) {
-        segments[segments.length - 1].push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content).replace(/\s+/g, ' ').trim()}`)
-        if (m.role === 'assistant' && FILE_LINE.test(m.content)) segments.push([])
-    }
-    const parts = segments.filter(x => x.length).map(x => x.join('\n'))
-    if (parts.length === 0) return { text: null, boundaryKnown: historyIsExhaustive }
-    if (parts[parts.length - 1].length > ARTIFACT_CONVERSATION_MAX_CHARS) return { text: null, boundaryKnown: historyIsExhaustive }
-    let dropped = false
-    while (parts.join('\n').length > ARTIFACT_CONVERSATION_MAX_CHARS) { parts.shift(); dropped = true }
-    return { text: parts.join('\n'), boundaryKnown: historyIsExhaustive || dropped }
+    const h = file.historyBefore
+    let start = 0
+    let previousFile = false
+    for (let i = file.index - 1; i >= 0; i--) if (h[i].role === 'assistant' && FILE_LINE.test(h[i].content)) { start = i + 1; previousFile = true; break }
+    const text = h.slice(start, file.index + 1)
+        .filter(m => !(m.role === 'assistant' && (ACK_LINE.test(m.content) || HOLD_LINE.test(m.content))))
+        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content).replace(/\s+/g, ' ').trim()}`)
+        .join('\n')
+    return { text: text.length > ARTIFACT_CONVERSATION_MAX_CHARS ? null : text, boundaryKnown: previousFile || historyIsExhaustive }
 }
 
-/** The full conversation for a redo, or null when it cannot be rebuilt completely (then no redo starts). Loads a deeper stored history when the loaded one may not reach the start of this file's exchange. */
-export async function recoverArtifactConversation(opts: {full: {role: string; content: string}[]; historyLimit: number; deepLimit: number; loadDeep: (limit: number) => Promise<{role: string; content: string}[]>}): Promise<string | null> {
+/** The request a redo works from, or null when it cannot be rebuilt completely (then no redo starts). Preferred: the exact request stored with the file when it shipped (loadOrigin). Fallback for files that predate that marker: the positional segment, loading a deeper stored history when the loaded one may not reach the start of that exchange. */
+export async function recoverArtifactConversation(opts: {loadOrigin?: (url: string) => Promise<string | null>; full: {role: string; content: string}[]; historyLimit: number; deepLimit: number; loadDeep: (limit: number) => Promise<{role: string; content: string}[]>}): Promise<string | null> {
     const ctx = deliveredFileContext(opts.full)
     if (!ctx) return null
+    const url = ctx.line.match(/https?:\/\/[^\s)]+/)?.[0]
+    const origin = url && opts.loadOrigin ? await opts.loadOrigin(url).catch(() => null) : null
+    if (origin) return origin.length <= ARTIFACT_CONVERSATION_MAX_CHARS ? origin : null
     const first = artifactConversation(ctx, opts.full.length - 1 < opts.historyLimit)
     if (first.boundaryKnown) return first.text
     const last = opts.full[opts.full.length - 1]
@@ -115,7 +115,7 @@ export async function recoverArtifactConversation(opts: {full: {role: string; co
 }
 
 export function redoRequest(conversation: string, feedback: string): string {
-    return 'Redo the last file sent in this conversation. Earlier turns may include other, unrelated requests: ignore those. Keep every request detail, clarification, settled choice and later correction that belongs to that file.\n\nConversation:\n' + conversation + '\n\nLatest user feedback on that file (address it and redo the work): ' + feedback
+    return 'Redo the last file sent in this conversation, from this request and what the user says about it:\n' + conversation + '\n\nLatest user feedback on that file (address it and redo the work, keeping every detail and settled choice): ' + feedback
 }
 
 /** After a delivered file, one bounded model judgment (the same call the flag-on path already makes every turn) says whether the latest message asks to redo that file. Only a clear redo with a recoverable original request returns a contract; everything else (venting, question, cancel, don't-redo, unrelated, outage) returns null and the turn is ordinary chat. */

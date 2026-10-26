@@ -1,11 +1,11 @@
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { createServerClient } from '@/lib/supabase/server'
 
 /** Itinerary jobs run up to 240s (handler deadline); a lock older than this is a dead job, not a running one. */
 export const REDO_LOCK_STALE_MS = 300_000
 
 export type RedoLock =
-    | { state: 'acquired'; release: () => Promise<void> }
+    | { state: 'acquired'; claimId: string; release: () => Promise<void> }
     | { state: 'held' }
     /** The database could not tell us whether a redo is running: start nothing, say so. */
     | { state: 'unknown' }
@@ -35,7 +35,7 @@ export async function acquireRedoLock(chatGuid: string, hash: string, now: () =>
     }
     const first = await tryClaim()
     if (first === null) return { state: 'unknown' }
-    if (first) return { state: 'acquired', release }
+    if (first) return { state: 'acquired', claimId, release }
     try {
         const { data, error } = await supabase.from('spectrum_inbound_dedupe').select('received_at,claim_id').eq('message_id', key).limit(1)
         const row = (data as { received_at?: string; claim_id?: string }[] | null)?.[0]
@@ -46,7 +46,7 @@ export async function acquireRedoLock(chatGuid: string, hash: string, now: () =>
         await supabase.from('spectrum_inbound_dedupe').delete().eq('message_id', key).eq('claim_id', row.claim_id)
         const second = await tryClaim()
         if (second === null) return { state: 'unknown' }
-        return second ? { state: 'acquired', release } : { state: 'held' }
+        return second ? { state: 'acquired', claimId, release } : { state: 'held' }
     } catch {
         return { state: 'unknown' }
     }
@@ -54,16 +54,20 @@ export async function acquireRedoLock(chatGuid: string, hash: string, now: () =>
 
 /** Read-only: is a live redo holding this file's lock? A stale lock counts as free (acquire recovers it). */
 export async function peekRedoLock(chatGuid: string, hash: string, now: () => number = Date.now): Promise<'free' | 'held' | 'unknown'> {
+    return (await peekRedoLockInfo(chatGuid, hash, now)).state
+}
+
+export async function peekRedoLockInfo(chatGuid: string, hash: string, now: () => number = Date.now): Promise<{ state: 'free' | 'held' | 'unknown'; claimId?: string }> {
     try {
         const { data, error } = await createServerClient().from('spectrum_inbound_dedupe').select('received_at,claim_id').eq('message_id', `redo-lock:${hash}`).limit(1)
-        if (error) return 'unknown'
-        const row = (data as { received_at?: string }[] | null)?.[0]
-        if (!row) return 'free'
+        if (error) return { state: 'unknown' }
+        const row = (data as { received_at?: string; claim_id?: string }[] | null)?.[0]
+        if (!row) return { state: 'free' }
         const age = now() - Date.parse(row.received_at ?? '')
-        if (!Number.isFinite(age)) return 'unknown'
-        return age <= REDO_LOCK_STALE_MS ? 'held' : 'free'
+        if (!Number.isFinite(age)) return { state: 'unknown' }
+        return age <= REDO_LOCK_STALE_MS ? { state: 'held', claimId: row.claim_id } : { state: 'free' }
     } catch {
-        return 'unknown'
+        return { state: 'unknown' }
     }
 }
 
@@ -78,5 +82,37 @@ export async function waitForRedoRelease(chatGuid: string, hash: string, maxMs: 
         if (s === 'unknown') return 'unknown'
         if (Date.now() + pollMs > until) return 'timeout'
         await new Promise((r) => setTimeout(r, pollMs))
+    }
+}
+
+/**
+ * Signals from later messages to the running redo, on the same atomic facility: one row per signal, keyed by the running job's own claim id so they can never leak into a later job. Rows hold only a content hash; the text stays in the stored chat. The owning job reads them at its gates (each loop turn, before it publishes) and again before it sends.
+ */
+const sha = (t: string) => createHash('sha1').update(t).digest('hex').slice(0, 16)
+export const contentHash = sha
+export async function recordRedoSignal(chatGuid: string, jobClaimId: string, kind: 'note' | 'cancel', text: string): Promise<boolean> {
+    try {
+        const { data, error } = await createServerClient().rpc('claim_inbound_delivery', { p_message_id: `redo-${kind}:${jobClaimId}:${sha(text)}`, p_chat_guid: chatGuid, p_claim_id: randomUUID() })
+        return !error && (data === true || data === false)
+    } catch {
+        return false
+    }
+}
+export async function markRedoClosed(chatGuid: string, jobClaimId: string): Promise<void> {
+    await recordRedoSignal(chatGuid, jobClaimId, 'note', `closed:${jobClaimId}`).catch(() => false)
+}
+export async function readRedoSignals(jobClaimId: string): Promise<{ noteHashes: string[]; cancelled: boolean; closed: boolean }> {
+    try {
+        const db = createServerClient()
+        const { data } = await db.from('spectrum_inbound_dedupe').select('message_id').like('message_id', `redo-%:${jobClaimId}:%`)
+        const ids = ((data as { message_id: string }[] | null) ?? []).map((r) => r.message_id)
+        const closedHash = sha(`closed:${jobClaimId}`)
+        return {
+            noteHashes: ids.filter((i) => i.startsWith('redo-note:') && !i.endsWith(`:${closedHash}`)).map((i) => i.split(':')[2]),
+            cancelled: ids.some((i) => i.startsWith('redo-cancel:')),
+            closed: ids.some((i) => i.endsWith(`:${closedHash}`)),
+        }
+    } catch {
+        return { noteHashes: [], cancelled: false, closed: false }
     }
 }

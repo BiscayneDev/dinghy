@@ -54,6 +54,9 @@ export interface DinghyFact {
 
 export const MAX_HISTORY = 20
 
+/** A redo was cancelled by the user while it ran: stop new work and send nothing from it. */
+export class RedoCancelled extends Error {}
+
 /** Dinghy's own site. Search engines barely know it yet, and "dinghy" search hits are other companies. */
 export const SITE_LINE =
     "Your own website is getdinghy.sh: the landing page for you, with the beta waitlist, 'join the beta', and a sign-in " +
@@ -405,6 +408,8 @@ export function wantsWallet(text: string): boolean {
 export async function chat(
     history: Message[],
     opts: {
+        /** Gate for a running redo: read later notes and cancellation. close=true is the last look before publishing. */
+        redoGate?: (close: boolean) => Promise<{ notes: string[]; cancelled: boolean }>
         gatewayUrl: string
         apiKey: string
         model: string
@@ -810,6 +815,11 @@ export async function chatWithTools(
         }
     }
     toolLoop: for (let iteration = 1; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
+        if (opts.redoGate) {
+            const gate = await opts.redoGate(false)
+            if (gate.cancelled) throw new RedoCancelled()
+            if (gate.notes.length) messages.push({ role: 'system', content: 'The user added this while you were working. Apply it to the result, together with the original request: ' + gate.notes.join(' | ') })
+        }
         await opts.onStage?.('gateway', String(iteration))
         const remaining = opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now()
         // The production miss spent ~70s on gateway turns and ~8s searching.
@@ -1217,6 +1227,11 @@ export async function chatWithTools(
                 messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,selected:selectedCandidates.length,next:'Recommendations are attached server-side. Now call create_file with title, body (agenda and day headings only), format and kind itinerary. Do not include candidates, stay, options or sources blocks. Do not name any hotel, restaurant or attraction other than the selected ones.'})});continue
             }
             if(call.function.name==='create_file'&&deliverableCompleted){await opts.onStage?.('tool','create_file:duplicate_ignored');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:true,note:'The file was already created and queued. No second file was made.'})});continue}
+            if (call.function.name === 'create_file' && opts.redoGate) {
+                const gate = await opts.redoGate(true)
+                if (gate.cancelled) throw new RedoCancelled()
+                if (gate.notes.length) { messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: 'The user added a note before this file was made. The file was not made. Apply it with the original request, then call create_file again: ' + gate.notes.join(' | ') }) }); continue }
+            }
             const tool = tools.find((t) => t.name === call.function.name)
             let content: string
             if ((fileRepairAttempted&&pageAttempted&&call.function.name==='create_file') || completionMode && (call.function.name === 'web_search' || (pageAttempted && call.function.name === 'create_file'))) {
