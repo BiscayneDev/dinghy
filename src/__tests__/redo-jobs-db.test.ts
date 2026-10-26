@@ -20,6 +20,7 @@ beforeAll(async () => {
       create table public.spectrum_identities(user_id uuid, chat_guid text);
       create table public.spectrum_messages(id bigint generated always as identity primary key, chat_guid text, role text, content text, google_derived boolean default false, created_at timestamptz default now());
       create table public.dinghy_files(id uuid primary key default gen_random_uuid(), user_id uuid references users(id), chat_guid text, title text, markdown text default '', created_at timestamptz default now(), deleted_at timestamptz, revoked_at timestamptz);
+      create table public.spectrum_outbox(id uuid primary key default gen_random_uuid(), chat_guid text not null, kind text not null, text text not null, status text default 'pending');
       create table public.memories(google_derived boolean, source_channel text, created_at timestamptz);
       create table public.conversation_summaries(google_derived boolean, embedding_model text, created_at timestamptz);
     `)
@@ -27,7 +28,7 @@ beforeAll(async () => {
 })
 afterAll(async () => { await db.close() })
 beforeEach(async () => {
-    await db.exec(`truncate dinghy_redo_jobs, spectrum_messages, memories, conversation_summaries, spectrum_identities, users cascade;
+    await db.exec(`truncate dinghy_redo_jobs, spectrum_outbox, spectrum_messages, memories, conversation_summaries, spectrum_identities, users cascade;
       insert into users values ('${A}'),('${B}');
       insert into spectrum_identities values ('${A}','chat-a'),('${B}','chat-b');`)
 })
@@ -122,9 +123,41 @@ describe('redo jobs, DB semantics', () => {
         await db.exec(`update dinghy_files set created_at = now() - interval '40 days'`)
         await db.exec(`insert into spectrum_messages(chat_guid,role,content,google_derived,created_at) values ('chat-a','user','g',true, now() - interval '40 days'),('chat-a','user','k',false, now() - interval '40 days')`)
         const r = (await one<any>(`select expire_google_derived(30) r`)).r
-        expect(r).toMatchObject({ messages: 1, facts: 0, summaries: 0, origins: 1 })
+        expect(r).toMatchObject({ messages: 1, facts: 0, summaries: 0, origins: 1, redo_documents: 0 })
         expect((await one<any>(`select origin_request from dinghy_files where id=$1`, [g])).origin_request).toBeNull()
         expect((await one<any>(`select origin_request from dinghy_files where id=$1`, [p])).origin_request).toBe('PLAIN')
         expect((await one<{ c: number }>(`select count(*)::int c from dinghy_redo_jobs`)).c).toBe(1)
+    })
+    it('only the redo artifact bound to this job attempt counts as published; another file in the chat does not', async () => {
+        const f = await file(); await upsert(A, 'chat-a', f, null)
+        const j = await one<any>(`select * from claim_redo_job()`)
+        const other = await file()
+        expect((await one<any>(`select redo_file_for_op($1,$2) r`, [A, j.id])).r).toBeNull()
+        const mine = await file(); await db.query(`update dinghy_files set redo_op_id=$1 where id=$2`, [j.op_id, mine])
+        expect((await one<any>(`select redo_file_for_op($1,$2) r`, [A, j.id])).r).toBe(mine)
+        expect((await one<any>(`select redo_file_for_op($1,$2) r`, [B, j.id])).r).toBeNull()
+        expect(other).not.toBe(mine)
+    })
+    it('one truthful status per outcome, deduped; none while active', async () => {
+        const f = await file(); await upsert(A, 'chat-a', f, null)
+        const j = await one<any>(`select * from claim_redo_job()`)
+        expect((await one<any>(`select redo_notify($1,'x') r`, [j.id])).r).toBe(false)
+        await one(`select redo_advance($1,$2,'sending',0)`, [j.id, j.claim_id])
+        await db.query(`update dinghy_redo_jobs set lease_until = now() - interval '1 minute'`)
+        await one<any>(`select * from claim_redo_job()`)
+        expect((await one<any>(`select redo_notify($1,'status') r`, [j.id])).r).toBe(true)
+        expect((await one<any>(`select redo_notify($1,'status') r`, [j.id])).r).toBe(false)
+        expect((await one<{ c: number }>(`select count(*)::int c from spectrum_outbox`)).c).toBe(1)
+    })
+    it('Google-derived redo artifacts lose their document after the TTL; older and non-Google files are untouched', async () => {
+        const g = await file(), p = await file(), old = await file()
+        await db.query(`update dinghy_files set markdown='DOC', redo_op_id=gen_random_uuid(), redo_google_derived=true where id=$1`, [g])
+        await db.query(`update dinghy_files set markdown='DOC', redo_op_id=gen_random_uuid() where id=$1`, [p])
+        await db.query(`update dinghy_files set markdown='DOC' where id=$1`, [old])
+        await db.exec(`update dinghy_files set created_at = now() - interval '40 days'`)
+        expect((await one<any>(`select expire_google_derived(30) r`)).r.redo_documents).toBe(1)
+        expect((await one<any>(`select markdown from dinghy_files where id=$1`, [g])).markdown).toBe('')
+        expect((await one<any>(`select markdown from dinghy_files where id=$1`, [p])).markdown).toBe('DOC')
+        expect((await one<any>(`select markdown from dinghy_files where id=$1`, [old])).markdown).toBe('DOC')
     })
 })

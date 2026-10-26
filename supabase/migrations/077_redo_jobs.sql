@@ -7,7 +7,11 @@ alter table public.dinghy_files
   add column if not exists origin_request text check (origin_request is null or char_length(origin_request) <= 12000),
   add column if not exists origin_google_derived boolean not null default false,
   add column if not exists origin_run_id uuid,
-  add column if not exists origin_message_id text;
+  add column if not exists origin_message_id text,
+  -- New redo artifacts only: which job attempt made this file, and whether it was built from Google-derived input.
+  add column if not exists redo_op_id uuid,
+  add column if not exists redo_google_derived boolean not null default false;
+create index if not exists dinghy_files_redo_op on public.dinghy_files (redo_op_id) where redo_op_id is not null;
 
 create table public.dinghy_redo_jobs (
   id uuid primary key default gen_random_uuid(),
@@ -25,6 +29,7 @@ create table public.dinghy_redo_jobs (
   resumes int not null default 0,
   passes int not null default 1,
   op_id uuid,
+  notified_key text,
   failure text check (failure is null or char_length(failure) <= 200),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -149,10 +154,32 @@ begin
   return jsonb_build_object('status', j.state, 'phase', j.phase);
 end $$;
 
+-- One truthful status per job outcome, deduped inside the same statement that records it, then queued on the existing
+-- outbox (lease-based sender). Delivery is still at-least-once at the transport: there is no read-back to prove a send.
+create or replace function public.redo_notify(p_job uuid, p_text text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare j public.dinghy_redo_jobs; k text;
+begin
+  select * into j from public.dinghy_redo_jobs where id = p_job for update;
+  if not found or j.state in ('queued','running') then return false; end if;
+  k := j.state || ':' || j.passes;
+  if j.notified_key is not distinct from k then return false; end if;
+  update public.dinghy_redo_jobs set notified_key = k, updated_at = now() where id = p_job;
+  insert into public.spectrum_outbox (chat_guid, kind, text) values (j.chat_guid, 'reply', left(p_text, 600));
+  return true;
+end $$;
+
+-- Positive proof that a file belongs to THIS job attempt, not just this chat.
+create or replace function public.redo_file_for_op(p_user uuid, p_job uuid)
+returns uuid language sql security definer set search_path = public as $$
+  select f.id from public.dinghy_files f join public.dinghy_redo_jobs j on j.id = p_job and j.user_id = p_user
+   where f.user_id = p_user and f.redo_op_id = j.op_id and j.op_id is not null order by f.created_at desc limit 1
+$$;
+
 -- Google retention: the previous body, unchanged, plus origin text and its jobs.
 create or replace function public.expire_google_derived(p_days int default 30)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare m int; f int; s int; o int;
+declare m int; f int; s int; o int; d int;
 begin
   if p_days < 1 then raise exception 'p_days must be >= 1'; end if;
   delete from public.spectrum_messages where google_derived and created_at < now() - make_interval(days => p_days);
@@ -165,7 +192,11 @@ begin
   update public.dinghy_files set origin_request = null
    where origin_google_derived and origin_request is not null and created_at < now() - make_interval(days => p_days);
   get diagnostics o = row_count;
-  return jsonb_build_object('messages', m, 'facts', f, 'summaries', s, 'origins', o);
+  -- New redo artifacts built from Google-derived input: blank the stored document. Older files are untouched.
+  update public.dinghy_files set markdown = '', deleted_at = coalesce(deleted_at, now())
+   where redo_op_id is not null and redo_google_derived and created_at < now() - make_interval(days => p_days) and (markdown <> '' or deleted_at is null);
+  get diagnostics d = row_count;
+  return jsonb_build_object('messages', m, 'facts', f, 'summaries', s, 'origins', o, 'redo_documents', d);
 end $$;
 
 revoke all on function public.upsert_redo_job(uuid,text,uuid,text) from public, anon, authenticated;
@@ -173,7 +204,9 @@ revoke all on function public.claim_redo_job(int) from public, anon, authenticat
 revoke all on function public.redo_advance(uuid,uuid,text,int) from public, anon, authenticated;
 revoke all on function public.redo_close(uuid,uuid) from public, anon, authenticated;
 revoke all on function public.redo_cancel(uuid,text,uuid) from public, anon, authenticated;
+revoke all on function public.redo_notify(uuid,text) from public, anon, authenticated;
+revoke all on function public.redo_file_for_op(uuid,uuid) from public, anon, authenticated;
 revoke all on function public.expire_google_derived(int) from public, anon, authenticated;
 grant execute on function public.upsert_redo_job(uuid,text,uuid,text), public.claim_redo_job(int), public.redo_advance(uuid,uuid,text,int),
-  public.redo_close(uuid,uuid), public.redo_cancel(uuid,text,uuid), public.expire_google_derived(int) to service_role;
+  public.redo_close(uuid,uuid), public.redo_cancel(uuid,text,uuid), public.redo_notify(uuid,text), public.redo_file_for_op(uuid,uuid), public.expire_google_derived(int) to service_role;
 notify pgrst, 'reload schema';
