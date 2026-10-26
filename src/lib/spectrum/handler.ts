@@ -1049,7 +1049,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         } else {
             const complaint: string = text
             const heldContext = JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
-            redoRefusal = await intakeRedo(chatGuid, afterFile ? fileUrlOf(afterFile.line) : null, complaint, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: complaint, context: heldContext, signal: AbortSignal.timeout(8000) })))
+            redoRefusal = await intakeRedo(chatGuid, afterFile ? fileUrlOf(afterFile.line) : null, complaint, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY ?? "", request: complaint, context: heldContext, signal: AbortSignal.timeout(8000) })))
             deliverable = null
         }
     }
