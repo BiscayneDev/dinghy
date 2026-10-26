@@ -16,3 +16,9 @@ create table if not exists photon_v2_chats (
 -- No anon access: bindings are server-only, like spectrum_outbox.
 revoke all on photon_v2_chats from anon, authenticated;
 alter table photon_v2_chats enable row level security;
+
+-- Supabase default-privileges change enforced 2026-10-30: new tables in public no longer
+-- receive automatic Data API grants. The server runtime reaches this table through the
+-- service role only (src/lib/photon-v2/store.ts: select + upsert), so grant exactly that.
+-- Idempotent and a no-op where the table already exists with default grants.
+grant select, insert, update on public.photon_v2_chats to service_role;
