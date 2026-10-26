@@ -1047,7 +1047,9 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             // Redo jobs are not active: a correction is ordinary chat, never a promise nobody runs.
             deliverable = null
         } else {
-            redoRefusal = await intakeRedo(chatGuid, afterFile ? fileUrlOf(afterFile.line) : null, text, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000) })))
+            const complaint: string = text
+            const heldContext = JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
+            redoRefusal = await intakeRedo(chatGuid, afterFile ? fileUrlOf(afterFile.line) : null, complaint, realIntakeDeps(() => decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: complaint, context: heldContext, signal: AbortSignal.timeout(8000) })))
             deliverable = null
         }
     }
