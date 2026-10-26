@@ -42,7 +42,7 @@ import { provisionSpectrumIdentity } from './provision'
 import { classifyUserTurn } from './turn-class'
 import { selectDeliverable, type DeliverableContract } from '@/lib/files/deliverable-contract'
 import { CLARIFY_MARK, stripClarifyMark, pendingItineraryClarification, continueAfterClarification, decideClarificationReply, type ReplyVerdict } from '@/lib/files/itinerary-continuation'
-import { decideFollowUpDeliverable, deliverableIntentEnabled, deliveredFileContext, recoverArtifactConversation, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
+import { decideFollowUpDeliverable, deliverableIntentEnabled, decideHeldNote, deliveredFileContext, recoverArtifactConversation, redoRequest, selectDeliverableModelOwned } from '@/lib/files/deliverable-intent'
 import { gateTools } from './tool-gating'
 import { capabilitiesFor, guestCapabilities, guestToolContext, liveInfoTools, loadImessageToolContext, toolsFor } from './imessage-tools'
 import { reminderToolsFor } from './reminders'
@@ -71,7 +71,7 @@ import {
     type BetaRole,
 } from './beta-gate'
 import { earlierUserText, loadActiveRuns, steerNote } from './active-run'
-import { acquireRedoLock, type RedoLock } from './redo-lock'
+import { acquireRedoLock, peekRedoLock, waitForRedoRelease, type RedoLock } from './redo-lock'
 import { claimInboundDelivery, enqueueOutbox, markOutboxFailed, markOutboxSent, type OutboxKind } from './outbox'
 import { briefableUserId, handleMuteIntent } from './briefing'
 import { chooseCurrentPlace, isPlaceOnlyMessage, placeStatement, travelAck } from './place'
@@ -1029,9 +1029,10 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     let redoFollowUp = false
     let redoLock: RedoLock | null = null
     let redoRefusal: string | null = null
-    const afterFile = deliveredFileContext(full)
+    let afterFile = deliveredFileContext(full)
+    let redoWaitedUntil = 0
     const conversationOfFile = () => recoverArtifactConversation({ full, historyLimit: MAX_HISTORY, deepLimit: 300, loadDeep: (n) => loadHistory(chatGuid, n) })
-    const redoHash = afterFile ? createHash('sha1').update(`${chatGuid}\n${afterFile.line}`).digest('hex').slice(0, 16) : ''
+    let redoHash = afterFile ? createHash('sha1').update(`${chatGuid}\n${afterFile.line}`).digest('hex').slice(0, 16) : ''
     const decisionContext = JSON.stringify(full.slice(-4).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000)
     if (deliverableIntentEnabled(senderAddress(message.sender) ?? undefined)) {
         // Flag on: the model already judges every turn; after a delivered file the same call also offers "redo" (no extra call).
@@ -1048,15 +1049,42 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             deliverable = null
             redoRefusal = 'I could not rebuild the full original request for that page from this chat, so I have not redone it. Nothing was changed.'
         } else {
-            // One redo job per chat and delivered file, held for the whole job (up to its 240s budget) and released on any outcome; a dead job is recovered after 300s.
-            redoLock = await acquireRedoLock(chatGuid, redoHash)
-            if (redoLock.state === 'acquired') redoFollowUp = true
-            else {
+            const lockState = await peekRedoLock(chatGuid, redoHash)
+            if (lockState === 'unknown') {
                 deliverable = null
-                redoRefusal = redoLock.state === 'held'
-                    ? 'I am already redoing that page from your earlier message. This new note is not part of that version, so if something is still off when it lands, tell me and I will go again.'
-                    : 'I could not start the redo just now, so nothing was changed.'
-                redoLock = null
+                redoRefusal = 'I could not start the redo just now, so nothing was changed.'
+            } else if (lockState === 'held') {
+                // A redo of this file is running. A repeated complaint is covered by it; a cancel is honest about what cannot be pulled back; a changed or added instruction is kept (it is already in the stored chat) and applied in a fresh redo once the running one finishes.
+                const verdict = (await decideHeldNote({ gatewayUrl: GATEWAY_URL, apiKey: SHIPYARD_API_KEY, request: text, context: JSON.stringify(full.slice(-8).map((m) => ({ role: m.role, content: m.content }))).slice(0, 10000), signal: AbortSignal.timeout(8000) })) ?? 'new_instruction'
+                if (verdict === 'repeat') {
+                    deliverable = null
+                    redoRefusal = 'Still on it. That is already covered by the redo I am running.'
+                } else if (verdict === 'stop') {
+                    deliverable = null
+                    redoRefusal = 'A redo is already running and I cannot pull it back. I will not start another one.'
+                } else {
+                    const waited = await waitForRedoRelease(chatGuid, redoHash)
+                    const stored = waited === 'released' ? await loadHistory(chatGuid, 300).catch(() => null) : null
+                    if (stored) {
+                        const lastMessage = full[full.length - 1]
+                        let end = stored.length
+                        while (end > 0 && stored[end - 1].role === 'user') end--
+                        full.splice(0, full.length, ...stored.slice(0, end), lastMessage)
+                        afterFile = deliveredFileContext(full)
+                        const conversation = afterFile ? await conversationOfFile() : null
+                        if (afterFile && conversation) {
+                            redoHash = createHash('sha1').update(`${chatGuid}\n${afterFile.line}`).digest('hex').slice(0, 16)
+                            deliverable = { kind: deliverable.kind, request: redoRequest(conversation, text), redo: true }
+                            redoWaitedUntil = Date.now()
+                        } else {
+                            deliverable = null
+                            redoRefusal = 'I could not rebuild the full original request for that page from this chat, so I have not redone it. Nothing was changed.'
+                        }
+                    } else {
+                        deliverable = null
+                        redoRefusal = 'A redo is still running and I could not wait for it. Your note is saved in this chat and will be part of the next redo.'
+                    }
+                }
             }
         }
     }
@@ -1080,7 +1108,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
         const delivered = await sendText(space, chatGuid, 'reply', acknowledgement)
         if(delivered)await saveMessage(chatGuid, 'assistant', acknowledgement).catch((err)=>logErr('itinerary acknowledgement save failed',err))
     }
-    const deadlineAt = turnStartedAt + (itineraryJob ? 240_000 : TURN_WORK_MS)
+    const deadlineAt = redoWaitedUntil ? Math.min(redoWaitedUntil + 200_000, turnStartedAt + 285_000) : turnStartedAt + (itineraryJob ? 240_000 : TURN_WORK_MS)
     const onStage = runStageRecorder(chatGuid, message.id)
     const tChatStart = Date.now()
     const typingHandle = startTypingReTap(space)
@@ -1093,6 +1121,21 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
     eyesTimer.unref?.()
     let fileTools: ReturnType<typeof fileToolsFor> | null = null
     try {
+        // Guaranteed cleanup scope: the redo lock is taken here and released in the finally below, whatever happens after.
+        if (deliverable?.redo && afterFile) {
+            const lock = await acquireRedoLock(chatGuid, redoHash)
+            if (lock.state === 'acquired') {
+                redoLock = lock
+                redoFollowUp = true
+            } else {
+                const line = lock.state === 'held'
+                    ? 'A redo of that page just started from another message. Your note is saved in this chat and will be part of the next redo.'
+                    : 'I could not start the redo just now, so nothing was changed.'
+                const delivered = await sendText(space, chatGuid, 'reply', line)
+                if (delivered) await saveMessage(chatGuid, 'assistant', line).catch((err) => logErr('redo refusal save failed', err))
+                return
+            }
+        }
         // Read tools only for chats bound to a user with Google/PayBox connected;
         // everyone else gets the plain conversational path.
         await onStage('context', `preflight_ms=${Date.now() - turnStartedAt}`)

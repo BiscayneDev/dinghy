@@ -51,3 +51,32 @@ export async function acquireRedoLock(chatGuid: string, hash: string, now: () =>
         return { state: 'unknown' }
     }
 }
+
+/** Read-only: is a live redo holding this file's lock? A stale lock counts as free (acquire recovers it). */
+export async function peekRedoLock(chatGuid: string, hash: string, now: () => number = Date.now): Promise<'free' | 'held' | 'unknown'> {
+    try {
+        const { data, error } = await createServerClient().from('spectrum_inbound_dedupe').select('received_at,claim_id').eq('message_id', `redo-lock:${hash}`).limit(1)
+        if (error) return 'unknown'
+        const row = (data as { received_at?: string }[] | null)?.[0]
+        if (!row) return 'free'
+        const age = now() - Date.parse(row.received_at ?? '')
+        if (!Number.isFinite(age)) return 'unknown'
+        return age <= REDO_LOCK_STALE_MS ? 'held' : 'free'
+    } catch {
+        return 'unknown'
+    }
+}
+
+/** Wait (bounded) for the running redo to release. */
+export const REDO_WAIT_MS = Number(process.env.DINGHY_REDO_WAIT_MS) || 110_000
+
+export async function waitForRedoRelease(chatGuid: string, hash: string, maxMs: number = REDO_WAIT_MS, pollMs = Math.min(3000, Math.max(10, Math.floor(maxMs / 4)))): Promise<'released' | 'timeout' | 'unknown'> {
+    const until = Date.now() + maxMs
+    for (;;) {
+        const s = await peekRedoLock(chatGuid, hash)
+        if (s === 'free') return 'released'
+        if (s === 'unknown') return 'unknown'
+        if (Date.now() + pollMs > until) return 'timeout'
+        await new Promise((r) => setTimeout(r, pollMs))
+    }
+}

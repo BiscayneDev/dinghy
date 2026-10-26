@@ -82,17 +82,20 @@ export function deliveredFileContext(history: {role: string; content: string}[])
 
 export const ARTIFACT_CONVERSATION_MAX_CHARS = 12_000
 
-/** The conversation between the previous delivered file (or the start of the chat) and this file, with job acknowledgements and holding lines removed. Association is by position: it can include unrelated turns in that interval, and it is never shortened: a long interval returns text:null. `boundaryKnown` is false when the segment reaches the start of a history that may have been cut off, so the original request could be missing. */
+/** Everything said in the chat up to and including the delivered file, minus job acknowledgements and holding lines, so a redo keeps the original request, clarifications, settled choices and every later correction, including corrections made after earlier redos. It can include unrelated earlier requests (the redo request tells the model to ignore them); the chat model already receives the loaded history every turn. Only whole earlier file-segments are ever dropped when it is too long, never part of a turn; if even the segment nearest the file is too long, text is null. `boundaryKnown` is false when the history may have been cut off before the start of the chat. */
 export function artifactConversation(file: {index: number; historyBefore: {role: string; content: string}[]}, historyIsExhaustive: boolean): {text: string | null; boundaryKnown: boolean} {
-    const h = file.historyBefore
-    let start = 0
-    let previousFile = false
-    for (let i = file.index - 1; i >= 0; i--) if (h[i].role === 'assistant' && FILE_LINE.test(h[i].content)) { start = i + 1; previousFile = true; break }
-    const text = h.slice(start, file.index + 1)
-        .filter(m => !(m.role === 'assistant' && (ACK_LINE.test(m.content) || HOLD_LINE.test(m.content))))
-        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content).replace(/\s+/g, ' ').trim()}`)
-        .join('\n')
-    return { text: text.length > ARTIFACT_CONVERSATION_MAX_CHARS ? null : text, boundaryKnown: previousFile || historyIsExhaustive }
+    const h = file.historyBefore.slice(0, file.index + 1).filter(m => !(m.role === 'assistant' && (ACK_LINE.test(m.content) || HOLD_LINE.test(m.content))))
+    const segments: string[][] = [[]]
+    for (const m of h) {
+        segments[segments.length - 1].push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content).replace(/\s+/g, ' ').trim()}`)
+        if (m.role === 'assistant' && FILE_LINE.test(m.content)) segments.push([])
+    }
+    const parts = segments.filter(x => x.length).map(x => x.join('\n'))
+    if (parts.length === 0) return { text: null, boundaryKnown: historyIsExhaustive }
+    if (parts[parts.length - 1].length > ARTIFACT_CONVERSATION_MAX_CHARS) return { text: null, boundaryKnown: historyIsExhaustive }
+    let dropped = false
+    while (parts.join('\n').length > ARTIFACT_CONVERSATION_MAX_CHARS) { parts.shift(); dropped = true }
+    return { text: parts.join('\n'), boundaryKnown: historyIsExhaustive || dropped }
 }
 
 /** The full conversation for a redo, or null when it cannot be rebuilt completely (then no redo starts). Loads a deeper stored history when the loaded one may not reach the start of this file's exchange. */
@@ -112,7 +115,7 @@ export async function recoverArtifactConversation(opts: {full: {role: string; co
 }
 
 export function redoRequest(conversation: string, feedback: string): string {
-    return 'Conversation that produced the file already sent:\n' + conversation + '\n\nLatest user feedback on that file (address it and redo the work, keeping every request detail and settled choice above): ' + feedback
+    return 'Redo the last file sent in this conversation. Earlier turns may include other, unrelated requests: ignore those. Keep every request detail, clarification, settled choice and later correction that belongs to that file.\n\nConversation:\n' + conversation + '\n\nLatest user feedback on that file (address it and redo the work): ' + feedback
 }
 
 /** After a delivered file, one bounded model judgment (the same call the flag-on path already makes every turn) says whether the latest message asks to redo that file. Only a clear redo with a recoverable original request returns a contract; everything else (venting, question, cancel, don't-redo, unrelated, outage) returns null and the turn is ordinary chat. */
@@ -122,4 +125,24 @@ export async function decideFollowUpDeliverable(opts: {gatewayUrl:string;apiKey:
     if (!decided?.redo) return null
     const text = await conversation()
     return text ? { kind: decided.kind, request: redoRequest(text, opts.request), redo: true } : { kind: decided.kind, request: opts.request, redo: true, incomplete: true } as DeliverableContract & { redo: true }
+}
+
+export type HeldNoteVerdict = 'repeat' | 'new_instruction' | 'stop'
+
+/** A redo is already running and the user wrote again. One bounded judgment: the same complaint again, a changed or added instruction (must survive into the next result), or a cancel / do-not-redo. Unavailable or uncertain returns null and the caller keeps the note (never drops a possible correction). */
+export async function decideHeldNote(opts: {gatewayUrl:string;apiKey:string;request:string;context:string;signal?:AbortSignal;fetch?:typeof fetch}): Promise<HeldNoteVerdict | null> {
+    try {
+        const res = await (opts.fetch ?? fetch)(`${opts.gatewayUrl}/v1/decisions`, { method: 'POST', signal: opts.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ state: { request: opts.request, context: opts.context }, questions: { heldNote: { type: 'choice', instructions: 'A redo of a delivered file is already running. Decide what the latest user message adds.', criteria: {
+            repeat: 'Only repeats or rephrases the complaint already made; no new instruction, detail or constraint.',
+            new_instruction: 'Adds or changes an instruction, detail, date, constraint or preference that the running redo may not have.',
+            stop: 'Cancels the redo or asks not to redo or change the file.',
+        } } } }) })
+        if (!res.ok) return null
+        const r = (await res.json()) as { provider?: string; model?: string; answers?: { heldNote?: { type?: string; choice?: string; confidence?: number; probabilities?: Record<string, number> } } }
+        const a = r?.answers?.heldNote
+        if (/stub/i.test(r?.provider ?? '') || /stub/i.test(r?.model ?? '') || a?.type !== 'choice' || !a.choice || !Number.isFinite(a.confidence) || a.confidence! < 0.6 || !a.probabilities || !(a.probabilities[a.choice] >= 0.6)) return null
+        return a.choice === 'repeat' || a.choice === 'new_instruction' || a.choice === 'stop' ? a.choice : null
+    } catch {
+        return null
+    }
 }
