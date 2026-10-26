@@ -678,7 +678,7 @@ export async function chatWithTools(
             if(!/^\s*-\s+\S/m.test(agendaPart)){
                 await opts.onStage?.('tool','itinerary:no_agenda_content')
                 const links=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
-                                return finish({reply:`I couldn't finish researching this trip: the research step timed out, so I haven't planned or recommended anything yet. Nothing was booked.${links?`\n\nSources found, not verified recommendations:\n${links}`:''}`,toolCalls:toolCallCount,iterations:iteration,tainted})
+                                return finish({reply:`I couldn't finish researching this trip: the research did not produce a usable plan, and there was no agenda from you to keep on a page, so I haven't planned or recommended anything yet. Nothing was booked.${links?`\n\nSources found, not verified recommendations:\n${links}`:''}`,toolCalls:toolCallCount,iterations:iteration,tainted})
             }
             if(!inputSchemaError(input,file.inputSchema)){
                 pageAttempted=true;toolCallCount++

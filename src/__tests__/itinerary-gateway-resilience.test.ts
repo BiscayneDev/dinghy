@@ -55,7 +55,17 @@ describe('itinerary contract gateway resilience',()=>{
   expect(f.execute).not.toHaveBeenCalled()
   expect(r.deliverable?.state).toBe('unfulfilled')
   expect(r.reply).toContain("I couldn't finish researching this trip")
-  expect(r.reply).not.toContain(emptyAsk);expect(r.reply).not.toMatch(/try again|say /i);expect(r.reply).toContain('timed out')
+  expect(r.reply).not.toContain(emptyAsk);expect(r.reply).not.toMatch(/try again|say /i);expect(r.reply).toContain('did not produce a usable plan');expect(r.reply).not.toContain('timed out')
+ })
+ it('a bare reply with the recovered original request keeps the agenda; the bare words alone have none and publish nothing',async()=>{
+  const bare:string[]=[],full:string[]=[];const fb=file(),ff=file()
+  gateway([err500(),err500()])
+  const rb=await chatWithTools([{role:'user',content:'This one'}],{...opts(bare),deliverable:{kind:'itinerary',request:'This one'}},[fb],ctx)
+  gateway([err500(),err500()])
+  const rf=await chatWithTools([{role:'user',content:'This one'}],{...opts(full),deliverable:{kind:'itinerary',request:ask+'\n\nLatest message from the user about that page: This one'}},[ff],ctx)
+  expect(bare).toContain('itinerary:no_agenda_content');expect(fb.execute).not.toHaveBeenCalled();expect(rb.deliverable?.state).toBe('unfulfilled')
+  expect(full).toContain('itinerary:agenda_only_fallback');expect(ff.execute).toHaveBeenCalledTimes(1)
+  const body=((ff.execute.mock.calls[0] as unknown[])[0] as {body:string}).body;expect(body).toContain('9am');expect(body).toContain('Recommendations not verified')
  })
  it('no third attempt: after one retry the fallback owns the outcome',async()=>{
   const stages:string[]=[];const f=file()
