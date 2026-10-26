@@ -510,6 +510,7 @@ function reportUsage(
 
 // Research takes several rounds: search, re-search, check dates.
 const MAX_TOOL_ITERATIONS = 8
+const EMPTY_REPLY_NOTE = 'Your last turn produced no text. Answer now in plain text from what you have already read or recalled: say plainly what was wrong with the earlier result if you can tell, what you found, and what is still unverified. If you can build the corrected document, call create_file instead. Keep any reasoning short.'
 const TOOL_TIMEOUT_MS = 15_000
 /** Keep single tool results small enough for the model + the latency budget. */
 const TOOL_RESULT_CHAR_CAP = 4000
@@ -730,6 +731,7 @@ export async function chatWithTools(
     let pageRetry = false
     let gatewayRetried = false
     let completionMode = false
+    let emptyRetried = false
     let tainted = Boolean(opts.startTainted) || history.some((m) => m.googleDerived)
     // Enforced + tainted: private allowlist only, fail closed (throws, never falls back).
     // Shadow: log once per turn what would have gone private, route as before.
@@ -903,7 +905,7 @@ export async function chatWithTools(
                 Authorization: `Bearer ${opts.apiKey}`,
                 ...hintHeaders(opts.taskClass && classForIteration(opts.taskClass, iteration), true),
             },
-            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), ...(clarifying ? { tool_choice: clarifyRetry ? { type: 'function', function: { name: CLARIFY_TOOL } } : 'required' } : {}), stream: false, ...(completionMode ? { max_tokens: 1200 } : {}) }),
+            body: JSON.stringify({ ...modelFields(opts.model, routingNow()), messages, tools: offered, ...(completionMode && offered.length === 0 ? { tool_choice: 'none' } : (iteration === 1 || itineraryResearch || mapArtifact || pageRetry || Boolean(recoveryTool) || fileValidationPending || (contextualResearch&&!mapResearchRead)) && forceTool && !(tainted && egressPolicy() === 'block' && isHardBlockTool(forceTool)) && offered.some((t) => t.function.name === forceTool) ? { tool_choice: { type: 'function', function: { name: forceTool } } } : {}), ...(clarifying ? { tool_choice: clarifyRetry ? { type: 'function', function: { name: CLARIFY_TOOL } } : 'required' } : {}), stream: false, ...(completionMode ? { max_tokens: emptyRetried ? 2500 : 1200 } : {}) }),
           }))
         } catch (err) {
           await logGatewayCall(buildCallRow(loopCtx(iteration, offered.length), err instanceof TurnDeadlineExceeded ? 'deadline' : 'error', t0))
@@ -968,6 +970,15 @@ export async function chatWithTools(
             if(selecting&&selectionFailures<3){
                 selectionFailures++;await opts.onStage?.('tool','invalid:selection:no_call')
                 messages.push({role:'assistant',content:msg?.content??''},{role:'system',content:'Call select_itinerary_candidates now with {kind,line} using the candidate line numbers. Do not answer in text.'});continue
+            }
+            // A reasoning model can spend the whole completion budget before writing any text. Blank is not an answer: one bounded retry with room, then an honest line that never talks about a file.
+            if(!selecting&&!clarifying&&!msg?.content?.trim()){
+                if(!emptyRetried&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=15000)){
+                    emptyRetried=true;await opts.onStage?.('tool','repair:empty_reply');messages.push({role:'system',content:EMPTY_REPLY_NOTE});continue
+                }
+                await opts.onStage?.('reply_ready','empty:honest_fallback')
+                const leads=foundSources.slice(0,3).map(x=>`${x.title||'Source'}: ${x.url}`).join('\n')
+                return finish({reply:leads?`I found pages on this but ran out of time before I could write it up properly. Nothing here is checked yet:\n${leads}`:'I ran out of time before I had an answer I would stand behind.',toolCalls:toolCallCount,iterations:iteration,tainted})
             }
             const reply = (!independentTool ? placesMismatch : null) ?? msg?.content ?? '(no response)'
             if(contextualResearch&&!recoveryUsed&&(!mapResearchRead||prematureResearchReply(reply))&&iteration<MAX_TOOL_ITERATIONS&&(opts.deadlineAt===undefined||opts.deadlineAt-Date.now()>=20000)){

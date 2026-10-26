@@ -1171,6 +1171,7 @@ export async function handleSpectrumMessage(space: InboundSpace, message: Inboun
             const made = fileTools?.files().length ?? 0
             reply = cleaned.text || (made > 0 ? 'here you go.' : "I couldn't make that file just now. Ask me again in a moment.")
             if (cleaned.hadMarker && made === 0) reply = "I couldn't make that file just now. Ask me again in a moment."
+            else if (!cleaned.text && made === 0) reply = 'I ran out of time before I had an answer I would stand behind.'
         } else {
             replyTainted = full.some((m) => m.googleDerived)
             reply = await chat(full, {
