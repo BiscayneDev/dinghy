@@ -1,3 +1,4 @@
+import { publicHttpsFetch } from '@/lib/security/public-https'
 import { createServerClient } from '@/lib/supabase/server'
 import { encryptTokenForDb, decryptTokenFromDb } from '@/lib/crypto'
 import { logger } from '@/lib/logger'
@@ -64,11 +65,11 @@ async function mcpRequest(
     params,
   }
 
-  const response = await fetch(serverUrl, {
+  const response = await publicHttpsFetch(serverUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-  })
+  }, { allowHttp: true })
 
   if (!response.ok) {
     throw new Error(`MCP request failed: ${response.status} ${response.statusText}`)
@@ -159,14 +160,14 @@ export async function discoverTools(
   }
 
   // Send initialized notification
-  await fetch(serverUrl, {
+  await publicHttpsFetch(serverUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({
       jsonrpc: '2.0',
       method: 'notifications/initialized',
     }),
-  }).catch(() => {
+  }, { allowHttp: true }).catch(() => {
     // Notification failures are non-critical
   })
 

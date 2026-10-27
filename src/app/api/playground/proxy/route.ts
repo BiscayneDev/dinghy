@@ -2,25 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth/session'
 
-// SSRF prevention — block private/internal addresses
-const BLOCKED_HOSTS = ['localhost', '127.', '10.', '0.0.0.0', '169.254.', '::1', 'fc00:', 'fe80:']
-const BLOCKED_RANGES = [/^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./]
-
-function isBlockedUrl(urlStr: string): boolean {
-  try {
-    const url = new URL(urlStr)
-    if (url.protocol !== 'https:') return true
-    const hostname = url.hostname.replace(/^\[|\]$/g, '')
-    if (BLOCKED_HOSTS.some((h) => hostname.startsWith(h) || hostname === h)) return true
-    if (BLOCKED_RANGES.some((r) => r.test(hostname))) return true
-    return false
-  } catch {
-    return true
-  }
-}
+import { publicHttpsFetch, publicHttpsUrl } from '@/lib/security/public-https'
 
 const ProxyBody = z.object({
-  url: z.string().url().refine((url) => !isBlockedUrl(url), { message: 'URL must use HTTPS and cannot target private addresses' }),
+  url: z.string().url().refine((url) => (() => { try { publicHttpsUrl(url); return true } catch { return false } })(), { message: 'URL must use HTTPS and cannot target private addresses' }),
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
   headers: z.record(z.string(), z.string()).optional(),
   body: z.string().optional(),
@@ -69,7 +54,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const startTime = Date.now()
 
   try {
-    const response = await fetch(url, {
+    const response = await publicHttpsFetch(url, {
       method,
       headers: {
         'User-Agent': 'Dinghy-Playground/1.0',
@@ -78,7 +63,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       },
       body: ['POST', 'PUT', 'PATCH'].includes(method) ? reqBody : undefined,
       signal: controller.signal,
-      redirect: 'follow',
     })
 
     const responseBody = await response.text()

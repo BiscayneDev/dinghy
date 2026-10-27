@@ -1,3 +1,4 @@
+import { beginWebOAuth, webOAuthCookie, webOAuthCookieOptions } from '@/lib/auth/web-oauth-state'
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
 import { getOuraAuthUrl } from '@/lib/integrations/oura'
@@ -19,5 +20,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(`${appUrl}/login`)
   }
 
-  return NextResponse.redirect(getOuraAuthUrl())
+  const state = await beginWebOAuth('oura', session.userId, request.cookies.get('dock_session')?.value ?? '')
+  const response = NextResponse.redirect(getOuraAuthUrl(state))
+  response.cookies.set(webOAuthCookie('oura'), state, webOAuthCookieOptions)
+  return response
 }
