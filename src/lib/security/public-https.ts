@@ -42,10 +42,22 @@ export async function resolvePublicTarget(url: URL) {
   return addresses[0]
 }
 
-const MAX_BYTES = 5 * 1024 * 1024
+// Finite resource bounds are necessary for buffered JSON/SSE responses from
+// untrusted servers. Operators can raise them for known large/slow MCP use.
+export function publicNetworkLimits() {
+  const configured = (name: string, fallback: number, minimum: number, maximum: number) => {
+    const value = Number(process.env[name])
+    return Number.isSafeInteger(value) && value >= minimum && value <= maximum ? value : fallback
+  }
+  return {
+    maxBytes: configured('PUBLIC_NETWORK_MAX_RESPONSE_BYTES', 5 * 1024 * 1024, 1024, 100 * 1024 * 1024),
+    timeoutMs: configured('PUBLIC_NETWORK_TIMEOUT_MS', 30_000, 1000, 300_000),
+  }
+}
 const HOP_HEADERS = ['host', 'connection', 'transfer-encoding', 'content-length', 'upgrade', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'keep-alive', 'accept-encoding']
 
 async function requestOnce(url: URL, init: RequestInit): Promise<Response> {
+  const { maxBytes, timeoutMs } = publicNetworkLimits()
   const target = await resolvePublicTarget(url)
   if (init.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
   const headers = new Headers(init.headers)
@@ -69,7 +81,7 @@ async function requestOnce(url: URL, init: RequestInit): Promise<Response> {
       let size = 0
       res.on('data', (chunk: Buffer) => {
         size += chunk.length
-        if (size > MAX_BYTES) { res.destroy(new Error('Response exceeds 5 MiB limit')); return }
+        if (size > maxBytes) { res.destroy(new Error('Response exceeds configured size limit')); return }
         chunks.push(chunk)
       })
       res.on('error', reject)
@@ -82,7 +94,7 @@ async function requestOnce(url: URL, init: RequestInit): Promise<Response> {
         let body = Buffer.concat(chunks)
         try {
           const encoding = responseHeaders.get('content-encoding')
-          const opts = { maxOutputLength: MAX_BYTES }
+          const opts = { maxOutputLength: maxBytes }
           if (encoding === 'gzip') body = gunzipSync(body, opts)
           else if (encoding === 'deflate') body = inflateSync(body, opts)
           else if (encoding === 'br') body = brotliDecompressSync(body, opts)
@@ -96,7 +108,7 @@ async function requestOnce(url: URL, init: RequestInit): Promise<Response> {
       })
     })
     req.on('error', reject)
-    req.setTimeout(30_000, () => req.destroy(new Error('Request timed out')))
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('Request timed out')))
     if (init.body) req.write(init.body)
     req.end()
   })
@@ -106,7 +118,7 @@ async function requestOnce(url: URL, init: RequestInit): Promise<Response> {
  * every hop, cap time/size, and never forward credentials across origins. */
 export async function publicHttpsFetch(input: string | URL, init: RequestInit = {}, policy: { allowHttp?: boolean } = {}): Promise<Response> {
   let url = publicHttpsUrl(input, policy.allowHttp)
-  let options = { ...init, signal: AbortSignal.any([AbortSignal.timeout(30_000), ...(init.signal ? [init.signal] : [])]) }
+  let options = { ...init, signal: AbortSignal.any([AbortSignal.timeout(publicNetworkLimits().timeoutMs), ...(init.signal ? [init.signal] : [])]) }
   for (let hop = 0; hop <= 5; hop++) {
     const response = await requestOnce(url, options)
     if (![301, 302, 303, 307, 308].includes(response.status) || !response.headers.has('location')) return response

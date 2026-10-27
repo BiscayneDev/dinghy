@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ lookup: vi.fn(), request: vi.fn(), httpRequest
 vi.mock('node:dns/promises', () => ({ lookup: mocks.lookup }))
 vi.mock('node:http', () => ({ request: mocks.httpRequest }))
 vi.mock('node:https', () => ({ request: mocks.request }))
-import { isPublicAddress, publicHttpsUrl, publicHttpsFetch } from './public-https'
+import { isPublicAddress, publicHttpsUrl, publicHttpsFetch, publicNetworkLimits } from './public-https'
 
 beforeEach(() => { vi.clearAllMocks(); mocks.lookup.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]) })
 function respond(status: number, headers: Record<string, string> = {}, text: string | Buffer = 'ok') {
@@ -83,4 +83,14 @@ describe('public HTTPS transport', () => {
     await expect(publicHttpsFetch('https://first.test')).rejects.toThrow('Too many')
     expect(mocks.request).toHaveBeenCalledTimes(6)
   })
+})
+
+it('resource limits can be raised for known MCP use, but malformed/unbounded overrides fail safe', () => {
+  vi.stubEnv('PUBLIC_NETWORK_MAX_RESPONSE_BYTES', '10485760')
+  vi.stubEnv('PUBLIC_NETWORK_TIMEOUT_MS', '60000')
+  expect(publicNetworkLimits()).toEqual({ maxBytes: 10485760, timeoutMs: 60000 })
+  vi.stubEnv('PUBLIC_NETWORK_MAX_RESPONSE_BYTES', 'Infinity')
+  vi.stubEnv('PUBLIC_NETWORK_TIMEOUT_MS', '-1')
+  expect(publicNetworkLimits()).toEqual({ maxBytes: 5242880, timeoutMs: 30000 })
+  vi.unstubAllEnvs()
 })
