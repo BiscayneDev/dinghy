@@ -1,3 +1,4 @@
+import { beginWebOAuth, webOAuthCookie, webOAuthCookieOptions } from '@/lib/auth/web-oauth-state'
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
 import { getAuthUrl } from '@/lib/integrations/github'
@@ -19,5 +20,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(`${appUrl}/login`)
   }
 
-  return NextResponse.redirect(getAuthUrl())
+  const state = await beginWebOAuth('github', session.userId, request.cookies.get('dock_session')?.value ?? '')
+  const response = NextResponse.redirect(getAuthUrl(['repo', 'notifications'], state))
+  response.cookies.set(webOAuthCookie('github'), state, webOAuthCookieOptions)
+  return response
 }

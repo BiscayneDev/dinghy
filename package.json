@@ -35,7 +35,7 @@
     "googleapis": "^171.4.0",
     "heic-convert": "^2.1.0",
     "marked": "^18.0.14",
-    "next": "15.5.14",
+    "next": "15.5.28",
     "openai": "^6.32.0",
     "pdfkit": "^0.20.2",
     "react": "19.1.0",
@@ -54,11 +54,15 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.5.14",
+    "eslint-config-next": "15.5.28",
     "tailwindcss": "^4",
     "tsx": "^4.22.2",
     "typescript": "^5",
     "vite": "^7.3.6",
     "vitest": "^5.0.1"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "postcss": "8.5.28"
   }
 }
