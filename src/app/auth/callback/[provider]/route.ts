@@ -1,3 +1,4 @@
+import { consumeWebOAuth, webOAuthCookie } from '@/lib/auth/web-oauth-state'
 import { NextRequest, NextResponse } from 'next/server'
 import { START_CONNECT_REQUEST, startReadyPath } from '@/lib/spectrum/start-link'
 import { phoneFromChatGuid, markFirstLookPending } from '@/lib/spectrum/first-look'
@@ -73,14 +74,14 @@ export async function GET(
   if (provider === 'paybox' && state && state !== 'paybox' && !request.cookies.get('paybox_cv')) {
     return handlePayboxConnectCallback(code, state, appUrl)
   }
-  // GitHub in-thread flow: the web session flow sends no state, so a state
-  // here always means a connect-token round trip.
-  if (provider === 'github' && state) {
+  // Web state has a reserved prefix. All other random states retain the
+  // provider-bound in-thread connect-token dispatch.
+  if (provider === 'github' && state && !state.startsWith('web_')) {
     return handleGithubConnectCallback(code, state, appUrl)
   }
   // Oura / WHOOP in-thread flow: the web session flow uses fixed states
   // ('oura' / 'whoop_dock_auth'); a random state means a connect token.
-  if ((provider === 'oura' && state && state !== 'oura') || (provider === 'whoop' && state && state !== 'whoop_dock_auth')) {
+  if ((provider === 'oura' && state && state !== 'oura' && !state.startsWith('web_')) || (provider === 'whoop' && state && state !== 'whoop_dock_auth' && !state.startsWith('web_'))) {
     return handleHealthConnectCallback(provider, code, state, appUrl)
   }
 
@@ -99,6 +100,16 @@ export async function GET(
 
   if (!code) {
     return NextResponse.redirect(`${appUrl}/onboarding?error=no_code`)
+  }
+
+  if (provider === 'github' || provider === 'oura' || provider === 'whoop') {
+    const { cookies } = await import('next/headers')
+    const cookieStore = await cookies()
+    const cookie = request.cookies.get(webOAuthCookie(provider))?.value
+    cookieStore.delete(webOAuthCookie(provider))
+    if (!(await consumeWebOAuth(provider, session.userId, state, cookie, request.cookies.get('dock_session')?.value ?? ''))) {
+      return NextResponse.redirect(`${appUrl}/onboarding?error=oauth_state_mismatch`)
+    }
   }
 
   try {

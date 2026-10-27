@@ -1,3 +1,4 @@
+import { beginWebOAuth, webOAuthCookie, webOAuthCookieOptions } from '@/lib/auth/web-oauth-state'
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
 import { getWhoopAuthUrl } from '@/lib/integrations/whoop'
@@ -19,5 +20,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(`${appUrl}/login`)
   }
 
-  return NextResponse.redirect(getWhoopAuthUrl())
+  const state = await beginWebOAuth('whoop', session.userId, request.cookies.get('dock_session')?.value ?? '')
+  const response = NextResponse.redirect(getWhoopAuthUrl(state))
+  response.cookies.set(webOAuthCookie('whoop'), state, webOAuthCookieOptions)
+  return response
 }
